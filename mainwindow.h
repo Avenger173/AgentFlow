@@ -231,6 +231,7 @@ private:
     void updateDocumentAgentSelectionUi();
     QStringList selectedDocumentAgentReferences() const;
     void openPresentationStudio();
+    void openPresentationStudioForPrompt(const QString &prompt);
     void beginDocumentPresentationDraft();
     QString selectedDocumentForReview(const QString &dialogTitle, const QString &prompt);
     void runDocumentAgent();
@@ -765,6 +766,9 @@ private:
     // 旧版数据工作台仅能引导交接。D5.4 之后这个标记仍用于兼容历史 dry-run；新的单份
     // 数据委派会进入真实只读子任务，不会落到该分支。
     bool currentDispatchGuidedHandoff = false;
+    // “从主题直接制作 PPT”是 UI 引导，不是文档读取或 Runtime 执行；单独保存，避免它
+    // 被旧的数据工作台引导按钮与状态机混淆。
+    bool currentDispatchPresentationHandoff = false;
     bool currentDispatchExecutionInProgress = false;
     bool currentDispatchExecutionSubmitted = false;
     // 直接问答仍完整记录 dry-run、Runtime、子任务与来源，但聊天区只消费已验证的最终回答。

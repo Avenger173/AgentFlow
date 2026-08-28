@@ -97,6 +97,16 @@ ACTION_ADMISSIONS: dict[tuple[str, str], AgentActionAdmission] = {
         verification_scope="受控 workspace 搜索、材料范围校验和工具审计。",
         recovery_hint="修改搜索词、补充材料范围或转为文档理解任务。",
     ),
+    ("document_agent", "open_presentation_studio"): AgentActionAdmission(
+        agent_id="document_agent",
+        action="open_presentation_studio",
+        execution_mode="guided_handoff",
+        requires_runtime_ready=False,
+        material_kind=None,
+        expected_output="已带入客户主题的智能制作 PPT 工作台入口。",
+        verification_scope="只传递客户本轮主题，不读取文档、不调用模型、不创建或导出文件。",
+        recovery_hint="在智能制作 PPT 工作台确认创作计划；导出 PPTX 时仍单独确认文件写入与可选外部素材。",
+    ),
     ("knowledge_agent", "answer_question"): AgentActionAdmission(
         agent_id="knowledge_agent",
         action="answer_question",

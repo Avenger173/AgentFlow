@@ -206,6 +206,19 @@ PresentationStudioDialog::~PresentationStudioDialog()
     delete ui;
 }
 
+void PresentationStudioDialog::setInitialGoal(const QString &goal)
+{
+    const QString normalizedGoal = goal.trimmed();
+    if (normalizedGoal.isEmpty() || planning || exporting) {
+        return;
+    }
+
+    // 预填只减少客户重复输入；客户仍可在生成计划前修改主题和数据补充选项。
+    ui->intentEdit->setPlainText(normalizedGoal);
+    ui->intentEdit->setFocus();
+    ui->intentEdit->moveCursor(QTextCursor::End);
+}
+
 void PresentationStudioDialog::startPlanning()
 {
     const QString intent = ui->intentEdit->toPlainText().trimmed();

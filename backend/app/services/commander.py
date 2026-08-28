@@ -40,6 +40,9 @@ DOCUMENT_ROUTE_KEYWORDS = (
 DATA_ROUTE_KEYWORDS = (
     "数据", "表格", "csv", "excel", "xlsx", "趋势", "图表", "字段", "数据集",
 )
+PRESENTATION_ROUTE_KEYWORDS = (
+    "ppt", "pptx", "演示文稿", "幻灯片", "幻灯",
+)
 KNOWLEDGE_ROUTE_KEYWORDS = (
     "知识库", "资料库", "根据资料", "查资料", "问资料", "引用来源",
 )
@@ -129,6 +132,7 @@ def create_commander_plan(
         if has_explicit_agent_hints
         else bool(dataset_refs) or _matches_any(lowered, DATA_ROUTE_KEYWORDS)
     )
+    presentation_requested = _matches_any(lowered, PRESENTATION_ROUTE_KEYWORDS)
     needs_document_understanding = _needs_document_understanding(message)
     clarifying_questions: list[str] = []
     steps: list[WorkflowStep] = [
@@ -198,7 +202,29 @@ def create_commander_plan(
                 clarifying_questions.append("知识库当前未通过总指挥动作准入，请检查资料库索引状态或后端健康状态。")
 
     if document_requested:
-        if not document_refs:
+        if presentation_requested and not document_refs:
+            # 从一句主题开始创作 PPT 不等于“分析一份文档”。它先打开已有的独立工作台，
+            # 由客户查看创作计划；模型调用、图片生成和文件写入仍留在该工作台的明确流程中。
+            specialist_step_id = f"step_{next_index}"
+            decision = _append_admitted_step(
+                steps=steps,
+                step_id=specialist_step_id,
+                agent_id="document_agent",
+                action="open_presentation_studio",
+                title="打开智能制作 PPT 工作台",
+                depends_on=["step_1"],
+                step_input={"task_goal": message},
+                reason="客户提供的是创作主题而非待读取材料；直接进入可预填主题的 PPT 工作台，避免错误要求选择文档。",
+                agents=available_agent_list,
+                materials=material_bindings,
+                timeout_ms=30_000,
+            )
+            if decision is not None:
+                specialist_step_ids.append(specialist_step_id)
+                next_index += 1
+            else:
+                clarifying_questions.append("智能制作 PPT 当前不可用，请在文档助手页面检查工作台状态后重试。")
+        elif not document_refs:
             clarifying_questions.append("已点名 @文档助手，但尚未选择文档；请先导入并选择 TXT、Markdown、PDF 或 DOCX 材料。")
         elif search_query and not needs_document_understanding:
             specialist_step_id = f"step_{next_index}"
@@ -346,6 +372,10 @@ def create_commander_plan(
     clarifying_questions.extend(_build_clarifying_questions(message, steps, material_bindings))
     clarifying_questions = list(dict.fromkeys(clarifying_questions))[:3]
     has_guided_handoff = any(step.execution_mode == "guided_handoff" for step in steps)
+    guided_handoff_action = next(
+        (step.action for step in steps if step.execution_mode == "guided_handoff"),
+        "",
+    )
     requires_composition_runtime = len(specialist_step_ids) > 1 and not native_composition_supported
     plan = WorkflowPlan(
         workflow_name="commander_manager_plan",
@@ -379,6 +409,7 @@ def create_commander_plan(
             requires_confirmation=requires_confirmation,
             clarifying_questions=clarifying_questions,
             has_guided_handoff=has_guided_handoff,
+            guided_handoff_action=guided_handoff_action,
             requires_composition_runtime=requires_composition_runtime,
         ),
     )
@@ -967,6 +998,8 @@ def _success_criteria_for_step(agent_id: str, action: str) -> list[str]:
         return ["完成受控 workspace 精确搜索", "返回命中文档、行号和短上下文"]
     if agent_id == "document_agent" and action == "analyze_document":
         return ["仅分析用户明确选择的受控文档", "输出可验证来源", "保留完整 Agent 运行轨迹"]
+    if agent_id == "document_agent" and action == "open_presentation_studio":
+        return ["已带入客户本轮 PPT 主题", "不读取材料或调用模型", "导出前仍由工作台明确确认"]
     if agent_id == "knowledge_agent" and action == "answer_question":
         return ["仅读取客户明确选择的资料库", "关键结论通过 claim/source_id 闭合校验", "保留关联子任务与来源轨迹"]
     if agent_id == "knowledge_agent" and action == "deep_summary":
@@ -1143,6 +1176,7 @@ def _next_action(
     requires_confirmation: bool,
     clarifying_questions: list[str],
     has_guided_handoff: bool,
+    guided_handoff_action: str,
     requires_composition_runtime: bool,
 ) -> str:
     if clarifying_questions:
@@ -1150,6 +1184,8 @@ def _next_action(
     if requires_composition_runtime:
         return "review_combination_plan"
     if has_guided_handoff:
+        if guided_handoff_action == "open_presentation_studio":
+            return "open_presentation_studio"
         return "open_data_workspace"
     if requires_confirmation:
         return "review_plan_and_confirm_permissions"

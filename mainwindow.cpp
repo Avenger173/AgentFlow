@@ -1935,6 +1935,7 @@ void MainWindow::selectDispatchConversation(const QString &conversationId)
     currentDispatchPlannedStepCount = 0;
     currentDispatchNeedsClarification = false;
     currentDispatchGuidedHandoff = false;
+    currentDispatchPresentationHandoff = false;
     currentDispatchRuntimeMode.clear();
     currentDispatchRuntimeStatus.clear();
     currentDispatchExecutionInProgress = false;
@@ -6169,10 +6170,16 @@ QStringList MainWindow::selectedDocumentAgentReferences() const
 
 void MainWindow::openPresentationStudio()
 {
+    openPresentationStudioForPrompt({});
+}
+
+void MainWindow::openPresentationStudioForPrompt(const QString &prompt)
+{
     // V2 从一句需求起步，不依赖当前材料选择。独立对话框承载较长的逐页计划，主工作台
     // 因而仍能专注于“已有材料的交付与审查”，也不会在窄窗口里挤压可阅读区域。
     auto *dialog = new PresentationStudioDialog(backendClient, this);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setInitialGoal(prompt);
     connect(dialog,
             &PresentationStudioDialog::openTaskHistoryRequested,
             this,
@@ -10273,6 +10280,7 @@ void MainWindow::updateDispatchActionButtons()
     const bool directKnowledgeAnswer = currentDispatchDirectKnowledgeAnswer;
     const bool autoReadOnlyTask = isCurrentDispatchAutoReadOnlyTask();
     const bool directConversation = isCurrentDispatchDirectConversation();
+    const bool presentationHandoff = currentDispatchPresentationHandoff;
     const bool compositionRuntimeRequired = currentDispatchPlanSummary.executionReadiness
         == QStringLiteral("requires_composition_runtime");
     if (ui->dispatchPlanButton) {
@@ -10316,6 +10324,8 @@ void MainWindow::updateDispatchActionButtons()
                            ? (currentDispatchDirectDataAnalysis ? QStringLiteral("分析已完成")
                                                                 : QStringLiteral("回答已完成"))
                            : currentDispatchAutoReadOnlyActivityText()));
+        } else if (presentationHandoff) {
+            ui->dispatchExecuteButton->setText(QStringLiteral("已打开智能制作 PPT"));
         } else if (directConversation) {
             ui->dispatchExecuteButton->setText(QStringLiteral("回答已完成"));
         } else if (currentDispatchGuidedHandoff) {
@@ -10339,6 +10349,7 @@ void MainWindow::updateDispatchActionButtons()
         }
 
         ui->dispatchExecuteButton->setEnabled(!autoReadOnlyTask
+                                             && !presentationHandoff
                                              && !directConversation
                                              && hasTask
                                              && !runtimeTask
@@ -10357,6 +10368,9 @@ void MainWindow::updateDispatchActionButtons()
         } else if (directConversation) {
             ui->dispatchExecuteButton->setToolTip(
                 QStringLiteral("这是普通对话，回答已经直接显示；不需要启动 Runtime。"));
+        } else if (presentationHandoff) {
+            ui->dispatchExecuteButton->setToolTip(
+                QStringLiteral("已打开智能制作 PPT 并带入主题；生成计划和导出由该工作台分别确认。"));
         } else if (currentDispatchNeedsClarification) {
             ui->dispatchExecuteButton->setToolTip(QStringLiteral("当前计划需要补充信息，暂不适合执行。"));
         } else if (compositionRuntimeRequired) {
@@ -10749,6 +10763,8 @@ void MainWindow::handleDispatchPlanRevisionCompleted(const WorkflowPlanRevisionR
     currentDispatchNeedsClarification = result.planSummary.nextAction
         == QStringLiteral("ask_clarifying_questions");
     currentDispatchGuidedHandoff = result.planSummary.nextAction == QStringLiteral("open_data_workspace");
+    currentDispatchPresentationHandoff = result.planSummary.nextAction
+        == QStringLiteral("open_presentation_studio");
     currentDispatchRuntimeMode = QStringLiteral("dry_run");
     currentDispatchRuntimeStatus = currentDispatchNeedsClarification
         ? QStringLiteral("blocked")
@@ -10989,7 +11005,8 @@ QString MainWindow::currentDispatchKnowledgeAnswerTaskId() const
 
 void MainWindow::requestCurrentDispatchKnowledgeAnswerResult()
 {
-    if (!currentDispatchDirectKnowledgeAnswer || currentDispatchKnowledgeAnswerResultRequested || !backendClient) {
+    if (!currentDispatchDirectKnowledgeAnswer || currentDispatchKnowledgeAnswerDelivered
+        || currentDispatchKnowledgeAnswerResultRequested || !backendClient) {
         return;
     }
     const QString delegatedTaskId = currentDispatchKnowledgeAnswerTaskId();
@@ -18898,6 +18915,7 @@ void MainWindow::submitDispatchMessage(const QString &message,
     currentDispatchUpdates.clear();
     currentDispatchNeedsClarification = false;
     currentDispatchGuidedHandoff = false;
+    currentDispatchPresentationHandoff = false;
     currentDispatchExecutionInProgress = false;
     currentDispatchExecutionSubmitted = false;
     currentDispatchDirectKnowledgeAnswer = false;
@@ -18968,6 +18986,7 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
     currentDispatchExecutionSubmitted = false;
     currentDispatchNeedsClarification = result.planSummary.nextAction == QStringLiteral("ask_clarifying_questions");
     currentDispatchGuidedHandoff = result.planSummary.nextAction == QStringLiteral("open_data_workspace");
+    currentDispatchPresentationHandoff = result.planSummary.nextAction == QStringLiteral("open_presentation_studio");
     // /api/chat 当前生成的是 dry-run 任务；先记录模式，后续日志结束时才能正确区分“预演完成”和“执行完成”。
     currentDispatchRuntimeMode = QStringLiteral("dry_run");
     currentDispatchRuntimeStatus = currentDispatchNeedsClarification
@@ -18988,13 +19007,17 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
     ui->summaryVal0->setText(result.taskId);
     ui->summaryVal1->setText(chatModeSummary(result));
     ui->summaryVal2->setText(QStringLiteral("¥0.00"));
-    ui->summaryVal3->setText(currentDispatchNeedsClarification
-                                  ? QStringLiteral("需要补充信息")
-                                  : (currentDispatchGuidedHandoff
-                                         ? QStringLiteral("待转入数据工作台")
-                                         : (currentDispatchDirectDataAnalysis
-                                                ? QStringLiteral("正在准备数据分析")
-                                                : agentSummary(result.steps))));
+    QString taskSummary = agentSummary(result.steps);
+    if (currentDispatchNeedsClarification) {
+        taskSummary = QStringLiteral("需要补充信息");
+    } else if (currentDispatchPresentationHandoff) {
+        taskSummary = QStringLiteral("已打开智能制作 PPT");
+    } else if (currentDispatchGuidedHandoff) {
+        taskSummary = QStringLiteral("待转入数据工作台");
+    } else if (currentDispatchDirectDataAnalysis) {
+        taskSummary = QStringLiteral("正在准备数据分析");
+    }
+    ui->summaryVal3->setText(taskSummary);
 
     // 规划、预演和日志是 Harness 的审计面，不是客户需要阅读的“回答”。聊天区只保留
     // 一句当前状态；计划、节点契约、预算与日志继续通过既有详情入口按需查看。
@@ -19012,6 +19035,9 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
     } else if (currentDispatchDirectDataAnalysis) {
         appendConversationHtml(
             QStringLiteral("<hr/><h3>AI 调度台</h3><p>正在分析已选数据，完成后会直接给出主要趋势、差异和图表建议。</p>"));
+    } else if (currentDispatchPresentationHandoff) {
+        appendConversationHtml(
+            QStringLiteral("<hr/><h3>AI 调度台</h3><p>已打开“智能制作 PPT”，并带入你的主题。你可以先查看或调整创作计划，再确认导出 PPTX。</p>"));
     } else if (currentDispatchGuidedHandoff) {
         appendConversationHtml(
             QStringLiteral("<hr/><h3>AI 调度台</h3><p>已识别到需要在数据工作台继续处理。选择数据文件后，我会基于该文件给出可执行分析。</p>"));
@@ -19030,39 +19056,69 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
     }
 
     const bool needsClarification = currentDispatchNeedsClarification;
-    ui->dispatchChatStatus->setText(needsClarification
-                                        ? QStringLiteral("待补充")
-                                        : (isCurrentDispatchAutoReadOnlyTask() ? currentDispatchAutoReadOnlyActivityText()
-                                        : (currentDispatchGuidedHandoff ? QStringLiteral("待转入工作台")
-                                        : (isCurrentDispatchDirectConversation() ? QStringLiteral("回答完成")
-                                                                                  : QStringLiteral("预演中")))));
-    setDispatchActivityRunning(isCurrentDispatchAutoReadOnlyTask());
+    const bool autoReadOnlyTask = isCurrentDispatchAutoReadOnlyTask();
+    const bool directConversation = isCurrentDispatchDirectConversation();
+    QString dispatchStatus = QStringLiteral("预演中");
+    if (needsClarification) {
+        dispatchStatus = QStringLiteral("待补充");
+    } else if (autoReadOnlyTask) {
+        dispatchStatus = currentDispatchAutoReadOnlyActivityText();
+    } else if (currentDispatchPresentationHandoff) {
+        dispatchStatus = QStringLiteral("已打开智能制作 PPT");
+    } else if (currentDispatchGuidedHandoff) {
+        dispatchStatus = QStringLiteral("待转入工作台");
+    } else if (directConversation) {
+        dispatchStatus = QStringLiteral("回答完成");
+    }
+    ui->dispatchChatStatus->setText(dispatchStatus);
+    setDispatchActivityRunning(autoReadOnlyTask);
     setProgressStep(1, QStringLiteral("1 任务提交 · 已收到任务"), QStringLiteral("badgeGreen"));
     setProgressStep(2,
                     QStringLiteral("2 Commander 规划 · 已生成 %1 个步骤").arg(currentDispatchPlannedStepCount),
                     QStringLiteral("badgeGreen"));
-    setProgressStep(3,
-                    needsClarification ? QStringLiteral("3 Workflow 推进 · 等待补充信息")
-                    : (currentDispatchDirectKnowledgeAnswer ? QStringLiteral("3 知识库检索 · 正在准备")
-                    : (currentDispatchDirectDataAnalysis ? QStringLiteral("3 数据分析 · 正在准备")
-                    : (currentDispatchGuidedHandoff ? QStringLiteral("3 工作台交接 · 等待你选择数据")
-                    : (isCurrentDispatchDirectConversation() ? QStringLiteral("3 Workflow 推进 · 无需执行")
-                                                              : QStringLiteral("3 Workflow 推进 · 等待日志"))))),
-                    needsClarification ? QStringLiteral("badgeOrange") : QStringLiteral("badgeBlue"));
-    setProgressStep(4,
-                    needsClarification ? QStringLiteral("4 权限 / 产物 · 暂不执行")
-                    : (currentDispatchGuidedHandoff ? QStringLiteral("4 权限 / 产物 · 尚未创建数据任务")
-                    : (isCurrentDispatchAutoReadOnlyTask() ? QStringLiteral("4 权限 / 产物 · 无需额外确认")
-                    : (isCurrentDispatchDirectConversation() ? QStringLiteral("4 权限 / 产物 · 无 Runtime 副作用")
-                                                              : QStringLiteral("4 权限 / 产物 · 等待确认")))),
-                    QStringLiteral("badgeGray"));
-    setProgressStep(5,
-                    needsClarification ? QStringLiteral("5 当前结论 · 需要补充信息")
-                    : (currentDispatchGuidedHandoff ? QStringLiteral("5 当前结论 · 请前往数据工作台")
-                    : (isCurrentDispatchDirectConversation() ? QStringLiteral("5 当前结论 · 已直接回答")
-                                                              : QStringLiteral("5 当前结论 · 等待更新"))),
-                    needsClarification ? QStringLiteral("badgeOrange") : QStringLiteral("badgeGray"));
+    QString stageThree = QStringLiteral("3 Workflow 推进 · 等待日志");
+    QString stageFour = QStringLiteral("4 权限 / 产物 · 等待确认");
+    QString stageFive = QStringLiteral("5 当前结论 · 等待更新");
+    QString stageThreeBadge = QStringLiteral("badgeBlue");
+    QString stageFiveBadge = QStringLiteral("badgeGray");
+    if (needsClarification) {
+        stageThree = QStringLiteral("3 Workflow 推进 · 等待补充信息");
+        stageFour = QStringLiteral("4 权限 / 产物 · 暂不执行");
+        stageFive = QStringLiteral("5 当前结论 · 需要补充信息");
+        stageThreeBadge = QStringLiteral("badgeOrange");
+        stageFiveBadge = QStringLiteral("badgeOrange");
+    } else if (currentDispatchDirectKnowledgeAnswer) {
+        stageThree = QStringLiteral("3 知识库检索 · 正在准备");
+        stageFour = QStringLiteral("4 权限 / 产物 · 无需额外确认");
+    } else if (currentDispatchDirectDataAnalysis) {
+        stageThree = QStringLiteral("3 数据分析 · 正在准备");
+        stageFour = QStringLiteral("4 权限 / 产物 · 无需额外确认");
+    } else if (currentDispatchPresentationHandoff) {
+        stageThree = QStringLiteral("3 智能制作 PPT · 已带入主题");
+        stageFour = QStringLiteral("4 权限 / 产物 · 导出前单独确认");
+        stageFive = QStringLiteral("5 当前结论 · 创作主题已带入");
+    } else if (currentDispatchGuidedHandoff) {
+        stageThree = QStringLiteral("3 工作台交接 · 等待你选择数据");
+        stageFour = QStringLiteral("4 权限 / 产物 · 尚未创建数据任务");
+        stageFive = QStringLiteral("5 当前结论 · 请前往数据工作台");
+    } else if (directConversation) {
+        stageThree = QStringLiteral("3 Workflow 推进 · 无需执行");
+        stageFour = QStringLiteral("4 权限 / 产物 · 无 Runtime 副作用");
+        stageFive = QStringLiteral("5 当前结论 · 已直接回答");
+    }
+    setProgressStep(3, stageThree, stageThreeBadge);
+    setProgressStep(4, stageFour, QStringLiteral("badgeGray"));
+    setProgressStep(5, stageFive, stageFiveBadge);
     updateDispatchActionButtons();
+    if (currentDispatchPresentationHandoff) {
+        const QString prompt = currentDispatchUserGoal;
+        // 用户已明确请求创作 PPT；只打开并预填现有工作台，不替客户点击“生成计划”或“导出”。
+        QTimer::singleShot(0, this, [this, prompt]() {
+            if (currentDispatchPresentationHandoff) {
+                openPresentationStudioForPrompt(prompt);
+            }
+        });
+    }
     backendClient->connectTaskLog(result.taskId);
     refreshCurrentDispatchUpdates();
 }
@@ -19476,7 +19532,8 @@ void MainWindow::applyDispatchTaskUpdates(const WorkflowTaskUpdateListResult &re
         ui->summaryVal3->setText(QStringLiteral("已登记 %1 个产物").arg(currentDispatchArtifactCount));
     }
 
-    if (currentDispatchDirectKnowledgeAnswer && latestState) {
+    if (currentDispatchDirectKnowledgeAnswer && latestState
+        && currentDispatchRuntimeMode == QStringLiteral("runtime")) {
         if (latestState->status == QStringLiteral("completed")) {
             // 父任务完成不等于聊天答案已读回。先按关联子任务 ID 读取 K3 的已验证正文，
             // 防止将父任务的短摘要误当成客户答案或把日志拼成回答。
@@ -19498,7 +19555,8 @@ void MainWindow::applyDispatchTaskUpdates(const WorkflowTaskUpdateListResult &re
             }
             setDispatchActivityRunning(false);
         }
-    } else if (currentDispatchDirectDataAnalysis && latestState) {
+    } else if (currentDispatchDirectDataAnalysis && latestState
+               && currentDispatchRuntimeMode == QStringLiteral("runtime")) {
         if (latestState->status == QStringLiteral("completed")) {
             if (!currentDispatchDataAnalysisDelivered) {
                 const QJsonObject retrospective = latestState->payload
@@ -19654,6 +19712,7 @@ void MainWindow::handleChatFailed(const QString &message)
     currentDispatchUpdateWatermark = 0;
     currentDispatchUpdates.clear();
     currentDispatchNeedsClarification = false;
+    currentDispatchPresentationHandoff = false;
     currentDispatchExecutionInProgress = false;
     currentDispatchExecutionSubmitted = false;
     currentDispatchDirectKnowledgeAnswer = false;

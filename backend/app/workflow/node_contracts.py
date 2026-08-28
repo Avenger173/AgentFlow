@@ -182,6 +182,17 @@ NODE_CONTRACTS: dict[tuple[str, str], NodeContract] = {
         ),
         evaluation_signals=("source_coverage", "tool_call_total", "turn_total", "output_valid"),
     ),
+    ("document_agent", "open_presentation_studio"): NodeContract(
+        agent_id="document_agent",
+        action="open_presentation_studio",
+        tool_name="ui.presentation_studio.open",
+        node_type="ui",
+        input_schema={"task_goal": "customer presentation topic, maximum 1200 characters"},
+        output_schema={"next_action": "open_presentation_studio", "message": "string"},
+        state_writes=("routing.presentation_studio",),
+        failure_codes=("presentation_studio_unavailable",),
+        evaluation_signals=("guided_handoff_presented", "prompt_prefilled"),
+    ),
     ("knowledge_agent", "answer_question"): NodeContract(
         agent_id="knowledge_agent",
         action="answer_question",

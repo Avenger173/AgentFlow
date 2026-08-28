@@ -44,6 +44,19 @@ def _dataset_material(ref: str) -> WorkflowMaterialBinding:
     )
 
 
+def _document_material(ref: str) -> WorkflowMaterialBinding:
+    """构造文档助手已明确选中的相对引用，验证同会话的正常续聊。"""
+
+    return WorkflowMaterialBinding(
+        binding_id="verify_document",
+        kind="document",
+        ref=ref,
+        display_name="调度台续聊验收材料.md",
+        origin="client_selected",
+        usage="客户在调度台明确选择后，继续让文档助手处理同一份材料。",
+    )
+
+
 def _encoded_sample() -> str:
     """准备带日期、类别和数值的最小 CSV，覆盖趋势与对比的本地计划。"""
 
@@ -104,6 +117,20 @@ def main() -> None:
         # 计划协议保持 `execute_after_confirm` 兼容，但桌面端和聊天 API 只会把这个极窄的
         # 单数据集只读 action 识别为可自动受理；写入、联网和组合任务不能复用该判断。
         assert _automatic_read_only_activity(plan) == "data"
+
+        # 一句主题式 PPT 创作不需要伪装成“文档分析”。总指挥只应引导到已有的智能制作
+        # PPT 工作台，不能要求客户先随便选择一份无关文档，也不能提前调用模型或写文件。
+        presentation_plan = create_commander_plan(
+            "@文档助手 帮我生成内马尔生涯数据 PPT，要有至少 4 种图表。",
+            agents,
+        )
+        assert presentation_plan.validation_errors == []
+        assert presentation_plan.clarifying_questions == []
+        assert presentation_plan.next_action == "open_presentation_studio"
+        assert any(
+            step.agent == "document_agent" and step.action == "open_presentation_studio"
+            for step in presentation_plan.steps
+        )
 
         admissions = client.get("/api/agents/action-admissions")
         assert admissions.status_code == 200, admissions.text
@@ -176,6 +203,56 @@ def main() -> None:
             item["content"] for item in transcript.json()["messages"] if item["role"] == "assistant"
         ]
         assert any("数据分析结果" in item for item in assistant_messages)
+
+        # “选择了”是客户确认沿用刚刚材料的正常说法。会话层应只复用同一会话的已绑定
+        # 数据引用，而不是要求再次导入或退化成没有上下文的普通问答。
+        reused = client.post(
+            "/api/chat",
+            json={
+                "message": "选择了，就按刚才这份数据继续分析。",
+                "conversation_id": chat_payload["conversation_id"],
+            },
+        )
+        assert reused.status_code == 200, reused.text
+        reused_plan = reused.json()["workflow_plan"]
+        assert any(
+            step["agent"] == "data_agent" and step["action"] == "analyze_dataset"
+            for step in reused_plan["steps"]
+        )
+
+        # 文档材料也遵循同一会话边界。“选择了”不应抹掉刚刚明确选择的文档，
+        # 更不能退化为“你希望完成什么”的无上下文澄清。
+        imported_document = client.post(
+            "/api/workspace/documents",
+            json={
+                "filename": "调度台续聊验收材料.md",
+                "content": "# 验收材料\n\n交付前必须保留来源和明确的验收标准。\n",
+            },
+        )
+        assert imported_document.status_code == 200, imported_document.text
+        document_material = _document_material(imported_document.json()["relative_path"])
+        document_chat = client.post(
+            "/api/chat",
+            json={
+                "message": "@文档助手 请提取这份材料的关键交付要求。",
+                "materials": [document_material.model_dump(mode="json")],
+            },
+        )
+        assert document_chat.status_code == 200, document_chat.text
+        document_reused = client.post(
+            "/api/chat",
+            json={
+                "message": "选择了，就按刚才这份文档继续提取约束。",
+                "conversation_id": document_chat.json()["conversation_id"],
+            },
+        )
+        assert document_reused.status_code == 200, document_reused.text
+        document_reused_plan = document_reused.json()["workflow_plan"]
+        assert document_reused_plan["clarifying_questions"] == []
+        assert any(
+            step["agent"] == "document_agent" and step["action"] == "analyze_document"
+            for step in document_reused_plan["steps"]
+        )
 
     assert not (VERIFY_DATA_DIR / "outputs").exists()
     print("Commander D5.4 data delegation verification passed: one-dataset read-only child task audited.")

@@ -24,6 +24,8 @@ class PresentationStudioDialog : public QDialog
 public:
     explicit PresentationStudioDialog(BackendClient *backendClient, QWidget *parent = nullptr);
     ~PresentationStudioDialog() override;
+    // 调度台的主题创作引导只预填客户已经发送的文本，不自动发起模型请求或导出文件。
+    void setInitialGoal(const QString &goal);
 
 signals:
     void openTaskHistoryRequested(const QString &taskId);

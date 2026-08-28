@@ -21,7 +21,8 @@ class ConversationSafetyError(ValueError):
 _CONVERSATION_ID_PATTERN = re.compile(r"^conv_[a-z0-9]{12,32}$")
 _SESSION_REFERENCE_PATTERN = re.compile(
     r"(?:刚才|刚刚|上一(?:步|轮|次)|上一步|上述|此前|这份|那份|该(?:资料库|文档|数据)|"
-    r"这个(?:资料库|文档|数据)|按.*(?:计划|结论)|继续)",
+    r"这个(?:资料库|文档|数据)|按.*(?:计划|结论)|继续|选择了|选好了|就用(?:它|这个|这份)|"
+    r"用(?:它|这个|这份))",
     re.IGNORECASE,
 )
 _SECRET_VALUE_PATTERN = re.compile(
