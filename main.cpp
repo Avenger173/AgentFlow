@@ -15,7 +15,9 @@ int main(int argc, char *argv[])
     // CRT heap corruption。MainWindow::closeEvent 会先停止本窗口启动的后端并触发 app quit；
     // 主窗口本身交给进程退出时由操作系统回收，优先保证用户关闭程序时不弹运行时错误。
     auto *window = new MainWindow();
-    window->show();
+    // 调度台、资料库和数据看板都是信息密度较高的工作界面。默认最大化保留 Windows
+    // 标题栏与常规窗口行为，同时避免用户每次启动都先手动放大才看得完整页面。
+    window->showMaximized();
 
     return app.exec();
 }

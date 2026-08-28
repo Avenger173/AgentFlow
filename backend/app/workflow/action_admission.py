@@ -148,6 +148,17 @@ ACTION_ADMISSIONS: dict[tuple[str, str], AgentActionAdmission] = {
         verification_scope="数据集显式绑定、D1 画像、D2 白名单计算、L1/L2 脱敏结论和父子任务审计。",
         recovery_hint="回到数据工作台确认当前数据文件、字段画像和分析目标后重新委派；不会重放或修改历史数据。",
     ),
+    ("data_agent", "export_chart_dashboard"): AgentActionAdmission(
+        agent_id="data_agent",
+        action="export_chart_dashboard",
+        execution_mode="execute",
+        requires_runtime_ready=True,
+        material_kind="dataset",
+        expected_output="基于一份已导入数据生成并像素回读验证的 PNG 图表交付物。",
+        verification_scope="数据版本哈希、D2 白名单聚合、PNG 像素回读、受控 outputs 路径与任务 artifact 审计。",
+        recovery_hint="确认数据文件和目标后重新规划；任何失败都不会修改原始 CSV/XLSX 或覆盖已有图表。",
+        additional_permissions=("file_write",),
+    ),
 }
 
 

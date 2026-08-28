@@ -386,10 +386,10 @@ QString dispatchNextActionText(const QString &action)
         return QStringLiteral("需要补充信息");
     }
     if (action == QStringLiteral("review_plan_and_confirm_permissions")) {
-        return QStringLiteral("查看计划并确认权限");
+        return QStringLiteral("确认范围后回复“开始执行”");
     }
     if (action == QStringLiteral("execute_after_confirm")) {
-        return QStringLiteral("确认后可预演/执行");
+        return QStringLiteral("低风险任务会自动执行");
     }
     if (action == QStringLiteral("open_data_workspace")) {
         return QStringLiteral("前往数据工作台继续");
@@ -930,6 +930,11 @@ MainWindow::MainWindow(QWidget *parent)
     ui->dispatchPageLayout->setStretch(1, 1);
     ui->dispatchBodyLayout->setStretch(0, 1);
     ui->dispatchChatLayout->setStretch(1, 1);
+    // 调度台的低风险只读任务会自动执行；写入型任务则由客户在对话中回复“开始执行”
+    // 触发。隐藏旧的固定主按钮，避免客户误以为每句话都要走“计划 -> 点击按钮”的流程。
+    ui->dispatchExecuteButton->setVisible(false);
+    // 过程面板可按需展开；默认让对话和最终结果占用主工作区，避免固定侧栏长期挤压内容。
+    ui->dispatchProgressPanel->setVisible(false);
     // Designer 历史页面曾把“新建资料库”误标为次级按钮。它是资料库空状态的唯一主操作，
     // 在对象树完成后统一更正语义并刷新 QSS，避免客户看到无色或与主流程相同的弱按钮。
     ui->knowledgeCreateButton->setObjectName(QStringLiteral("primaryButton"));
@@ -1542,6 +1547,10 @@ void MainWindow::setupDispatchChat()
     ui->dispatchPlanButton->setToolTip(
         QStringLiteral("查看当前任务的计划版本；真实执行前可修改目标并生成新计划。"));
     ui->dispatchPlanButton->setIcon(style()->standardIcon(QStyle::SP_FileDialogDetailedView));
+    ui->dispatchProgressToggleButton->setCheckable(true);
+    ui->dispatchProgressToggleButton->setChecked(false);
+    ui->dispatchProgressToggleButton->setToolTip(
+        QStringLiteral("按需展开阶段状态；完整事件和产物仍可在任务历史查看。"));
     ui->dispatchProjectScopeButton->setIcon(style()->standardIcon(QStyle::SP_DirIcon));
     ui->dispatchNewConversationButton->setIcon(style()->standardIcon(QStyle::SP_FileDialogNewFolder));
     ui->dispatchNewConversationButton->setText(QString());
@@ -1580,6 +1589,12 @@ void MainWindow::setupDispatchChat()
     connect(importMaterialAction, &QAction::triggered, this, &MainWindow::importWorkspaceDocumentFromFile);
     connect(selectMaterialAction, &QAction::triggered, this, &MainWindow::openDispatchMaterialDialog);
     connect(ui->dispatchProjectScopeButton, &QToolButton::clicked, this, &MainWindow::configureDispatchProjectScope);
+    connect(ui->dispatchProgressToggleButton, &QToolButton::toggled, this, [this](bool visible) {
+        // 仅改变调度台的信息密度，不会影响后台执行、状态轮询或任务历史审计。
+        ui->dispatchProgressPanel->setVisible(visible);
+        ui->dispatchProgressToggleButton->setText(
+            visible ? QStringLiteral("收起过程") : QStringLiteral("查看过程"));
+    });
     connect(ui->dispatchModelRouteButton, &QToolButton::clicked, this, [this]() {
         openModelRouteDialogForRoute(QStringLiteral("commander_planning"));
     });
@@ -11463,7 +11478,7 @@ void MainWindow::beginCurrentDispatchRuntime(bool automaticallyApproved)
                     QStringLiteral("badgeBlue"));
     if (!automaticallyApproved) {
         appendConversationHtml(
-            QStringLiteral("<p style=\"color:#2563EB;\"><b>AI调度台</b> · 已提交执行请求，正在等待真实结果。</p>"));
+            QStringLiteral("<p style=\"color:#2563EB;\"><b>AI调度台</b> · 已收到执行确认，正在进入真实 Runtime。</p>"));
     }
     backendClient->requestTaskExecute(currentDispatchTaskId);
 }
@@ -18753,6 +18768,29 @@ void MainWindow::sendDispatchMessage()
         return;
     }
 
+    // 对话式确认只匹配完整、短小的指令，避免把“开始执行后帮我补一份图表”这类新任务
+    // 误判为对上一轮计划的确认。真正的权限策略仍在 Runtime 内二次执行，不因这条便利
+    // 入口跳过文件写入、联网或命令确认。
+    const QString executionCommand = message.toLower().simplified();
+    const bool asksToExecute = executionCommand == QStringLiteral("开始执行")
+        || executionCommand == QStringLiteral("确认执行")
+        || executionCommand == QStringLiteral("开始做")
+        || executionCommand == QStringLiteral("继续执行");
+    const bool canExecuteCurrentPlan = !currentDispatchTaskId.isEmpty()
+        && !currentDispatchNeedsClarification
+        && !currentDispatchGuidedHandoff
+        && !currentDispatchPresentationHandoff
+        && !isCurrentDispatchDirectConversation()
+        && currentDispatchRuntimeMode != QStringLiteral("runtime")
+        && !currentDispatchExecutionInProgress
+        && currentDispatchPlanSummary.executionReadiness != QStringLiteral("requires_composition_runtime");
+    if (asksToExecute && canExecuteCurrentPlan) {
+        appendConversationHtml(formatDispatchUserMessageHtml(message));
+        ui->dispatchInputEdit->clear();
+        beginCurrentDispatchRuntime(false);
+        return;
+    }
+
     const QJsonArray materials = buildDispatchMaterialBindings();
     const QJsonArray agentHints = buildDispatchAgentHints();
     const QString projectScope = currentDispatchProjectScope;
@@ -19210,13 +19248,15 @@ QString MainWindow::formatDispatchChatPlanCardHtml(
     const QString involvedAgents = agentNames.isEmpty()
         ? QStringLiteral("总指挥")
         : agentNames.mid(0, 3).join(QStringLiteral("、"));
-    QString nextAction = QStringLiteral("查看计划后，再决定是否开始执行。");
+    QString nextAction = QStringLiteral("低风险只读任务会自动处理；涉及写入时回复“开始执行”。");
     if (plan.nextAction == QStringLiteral("ask_clarifying_questions")) {
         nextAction = QStringLiteral("请补充必要信息后，我会据此更新计划。");
     } else if (plan.nextAction == QStringLiteral("open_data_workspace")) {
         nextAction = QStringLiteral("请前往数据工作台选择数据文件后继续。");
     } else if (plan.nextAction == QStringLiteral("review_combination_plan")) {
         nextAction = QStringLiteral("组合依赖已建立；真实并发与最终汇总将在组合 Runtime 可用后开放。");
+    } else if (plan.nextAction == QStringLiteral("review_plan_and_confirm_permissions")) {
+        nextAction = QStringLiteral("将写入新的受控产物；确认范围后回复“开始执行”。");
     }
     return QStringLiteral(
                "<div style=\"margin:10px 0 2px 0;padding:10px 12px;border:1px solid #D7E5FF;"

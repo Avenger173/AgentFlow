@@ -23,7 +23,7 @@ from app.database.task_repository import (
     set_runtime_execution_control,
 )
 from app.schemas.chat import WorkflowPlan, WorkflowStep
-from app.schemas.data_agent import DataAnalysisPreviewRequest
+from app.schemas.data_agent import DataAnalysisPreviewRequest, DataChartExportRequest
 from app.schemas.document_agent import DocumentAgentRunRequest
 from app.schemas.knowledge import KnowledgeAnswerRequest, KnowledgeDeepTaskRequest
 from app.schemas.events import TaskLogEvent, TaskLogLevel
@@ -49,6 +49,11 @@ from app.services.data_analysis_delegate import (
     create_data_analysis_preview_queued_run,
     run_data_analysis_preview_task,
 )
+from app.services.data_chart_delivery import (
+    create_data_chart_queued_run,
+    run_data_chart_export_task,
+)
+from app.services.data_workspace import get_data_dataset_profile
 from app.services.knowledge_answer import (
     create_knowledge_answer_queued_run,
     get_knowledge_answer_task_result,
@@ -99,6 +104,7 @@ _NON_RETRYABLE_ERROR_CODES = {
     "unsupported_file_type",
     "file_not_found",
     "file_too_large",
+    "data_chart_export_failed",
 }
 
 RuntimeEventReporter = Callable[[TaskLogEvent], None]
@@ -1769,6 +1775,12 @@ def _execute_safe_step(
             step=step,
             attempt=attempt,
         )
+    if step.agent == "data_agent" and step.action == "export_chart_dashboard":
+        return _execute_data_chart_export_handoff(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            attempt=attempt,
+        )
     if step.agent == "document_agent" and step.action in {"extract_requirements", "summarize_document"}:
         return _execute_document_memory_tool(
             runtime_task_id=runtime_task_id,
@@ -2060,6 +2072,147 @@ def _execute_data_analysis_handoff(
         action=step.action,
         status="completed",
         message="数据工作台已完成只读分析；结论可在关联子任务复盘，正式交付仍需客户确认。",
+        requires_confirmation=step.requires_confirmation,
+        risk_level=step.risk_level,
+        output={"runtime": True, "tool_name": _tool_name_for_step(step), "result": result},
+    )
+    tool_call = _completed_tool_call(
+        runtime_task_id=runtime_task_id,
+        step=step,
+        attempt=attempt,
+        timeout_ms=timeout_ms,
+        started_at=started_at,
+        finished_at=finished_at,
+        request={"action": step.action, "dataset_name": dataset_name, "goal_length": len(request.goal.strip())},
+        result=result,
+    )
+    return step_run, tool_call, [_delegated_agent_artifact(runtime_task_id, step, result)]
+
+
+def _execute_data_chart_export_handoff(
+    *,
+    runtime_task_id: str,
+    step: WorkflowStep,
+    attempt: int,
+) -> tuple[WorkflowStepRun, WorkflowToolCall, list[WorkflowArtifact]]:
+    """委派已确认的数据图表交付，并只回传脱敏 artifact 摘要。
+
+    分析与交付分成两个节点：前一个节点仍是只读 D2 预览，当前节点才在独立的
+    ``data_charts`` 输出目录写 PNG。图表服务会重新计算白名单聚合、对比源哈希并做
+    像素回读，因此 Commander 不需要也不能携带 CSV 原始行或客户自定义脚本。
+    """
+
+    started_at = datetime.now(UTC)
+    timeout_ms = step.timeout_ms or 150_000
+    raw_refs = step.input.get("dataset_refs")
+    dataset_refs = [str(item).strip() for item in raw_refs] if isinstance(raw_refs, list) else []
+    dataset_name = str(step.input.get("dataset_name", "")).strip()
+    if len(dataset_refs) != 1 or not dataset_name or dataset_refs[0] != dataset_name:
+        return _data_delegate_failure(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            started_at=started_at,
+            timeout_ms=timeout_ms,
+            attempt=attempt,
+            delegated_task_id="",
+            error_code="invalid_parameters",
+            message="图表交付必须绑定一份与步骤一致的已导入数据文件。",
+        )
+
+    try:
+        # 交付前从本地受控副本重新取得版本哈希，不能相信父计划或模型传来的摘要。
+        profile = get_data_dataset_profile(dataset_name)
+        request = DataChartExportRequest.model_validate(
+            {
+                "dataset_name": dataset_name,
+                "source_sha256": profile.source_sha256,
+                "goal": step.input.get("task_goal", ""),
+                "cleaning_policy": step.input.get("cleaning_policy", "safe"),
+                "max_chart_count": step.input.get("max_chart_count", 4),
+                "confirmed": True,
+            }
+        )
+    except Exception as exc:
+        return _data_delegate_failure(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            started_at=started_at,
+            timeout_ms=timeout_ms,
+            attempt=attempt,
+            delegated_task_id="",
+            error_code="invalid_parameters",
+            message="图表交付参数或当前数据版本不符合受控输入契约。",
+            result={"reply": "图表交付未开始。", "read_only": False},
+        )
+
+    delegated_task_id = f"task_data_chart_{uuid4().hex[:12]}"
+    create_data_chart_queued_run(task_id=delegated_task_id, request=request)
+
+    async def _run_with_timeout():
+        return await asyncio.wait_for(
+            run_data_chart_export_task(task_id=delegated_task_id, request=request),
+            timeout=timeout_ms / 1000,
+        )
+
+    try:
+        response = asyncio.run(_run_with_timeout())
+    except TimeoutError:
+        return _data_delegate_failure(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            started_at=started_at,
+            timeout_ms=timeout_ms,
+            attempt=attempt,
+            delegated_task_id=delegated_task_id,
+            error_code="tool_timeout",
+            message="图表 PNG 在允许时间内没有完成；未修改源数据文件。",
+        )
+    except Exception:
+        return _data_delegate_failure(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            started_at=started_at,
+            timeout_ms=timeout_ms,
+            attempt=attempt,
+            delegated_task_id=delegated_task_id,
+            error_code="data_chart_export_failed",
+            message="图表交付过程发生未预期错误；未修改源数据文件。",
+        )
+
+    artifact_summaries = [
+        {"name": artifact.name, "uri": artifact.uri, "chart_type": artifact.chart_type}
+        for artifact in response.artifacts
+    ]
+    result = {
+        "delegated_task_id": response.task_id,
+        "agent_status": response.status,
+        "stop_reason": "completed" if response.status == "completed" else "data_chart_export_failed",
+        "reply": response.message,
+        "chart_count": len(response.artifacts),
+        "artifacts": artifact_summaries,
+        "source_sha256": request.source_sha256,
+        "read_only": False,
+    }
+    if response.status != "completed" or response.verification is None or not response.verification.passed:
+        return _data_delegate_failure(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            started_at=started_at,
+            timeout_ms=timeout_ms,
+            attempt=attempt,
+            delegated_task_id=response.task_id,
+            error_code="data_chart_export_failed",
+            message=response.message or "图表 PNG 未通过交付验证。",
+            result=result,
+        )
+
+    finished_at = datetime.now(UTC)
+    step_run = WorkflowStepRun(
+        step_id=step.id,
+        agent=step.agent,
+        action=step.action,
+        status="completed",
+        message=f"数据工作台已生成 {len(response.artifacts)} 张经像素回读验证的 PNG 图表。",
         requires_confirmation=step.requires_confirmation,
         risk_level=step.risk_level,
         output={"runtime": True, "tool_name": _tool_name_for_step(step), "result": result},

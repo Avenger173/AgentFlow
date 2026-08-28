@@ -1247,6 +1247,12 @@ QPushButton#navGroupButton:hover {
 <property name="text"><string>运行中</string></property>
 
 
+</widget></item><item><widget class="QToolButton" name="dispatchProgressToggleButton">
+<property name="objectName"><string>ghostButton</string></property>
+<property name="minimumSize"><size><width>72</width><height>36</height></size></property>
+<property name="toolTip"><string>展开或收起任务过程面板</string></property>
+<property name="accessibleName"><string>任务过程</string></property>
+<property name="text"><string>查看过程</string></property>
 </widget></item><item><widget class="QToolButton" name="dispatchNewConversationButton">
 <property name="objectName"><string>ghostButton</string></property>
 <property name="minimumSize"><size><width>36</width><height>36</height></size></property>
@@ -1302,7 +1308,7 @@ QPushButton#navGroupButton:hover {
 </widget></item><item><widget class="QLineEdit" name="dispatchInputEdit">
 <property name="minimumSize"><size><width>0</width><height>50</height></size></property>
 
-<property name="placeholderText"><string>输入任务需求，或 @ 选择应用 / 智能体</string></property>
+<property name="placeholderText"><string>告诉我想完成什么；我会选择合适能力，必要时提示你回复“开始执行”</string></property>
 </widget></item><item><widget class="QPushButton" name="sendTaskButton">
 <property name="objectName"><string>primaryButton</string></property>
 

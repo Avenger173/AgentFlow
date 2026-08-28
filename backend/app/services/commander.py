@@ -39,6 +39,14 @@ DOCUMENT_ROUTE_KEYWORDS = (
 )
 DATA_ROUTE_KEYWORDS = (
     "数据", "表格", "csv", "excel", "xlsx", "趋势", "图表", "字段", "数据集",
+    "折线图", "柱状图", "饼图", "环形图", "散点图", "仪表盘", "看板",
+)
+DATA_CHART_DELIVERY_KEYWORDS = (
+    "生成图表", "制作图表", "导出图表", "保存图表", "图表看板", "图表png", "图表 png",
+    "生成折线图", "制作折线图", "导出折线图",
+    "生成柱状图", "制作柱状图", "导出柱状图",
+    "生成饼图", "制作饼图", "导出饼图",
+    "生成环形图", "制作环形图", "导出环形图",
 )
 PRESENTATION_ROUTE_KEYWORDS = (
     "ppt", "pptx", "演示文稿", "幻灯片", "幻灯",
@@ -93,46 +101,86 @@ def create_commander_plan(
     supplied_material_bindings = _normalize_material_bindings(message, materials or ())
     normalized_agent_hints = _normalize_agent_hints(message, agent_hints or ())
     hinted_agent_ids = {hint.agent_id for hint in normalized_agent_hints}
-    # 只要客户点名过一个已实现专业能力，本轮就不再把其它已绑定材料自动扩展成委派。
-    # 这让“@知识库 回答这份资料”不会意外读取同时挂着的数据集或文档。
-    has_explicit_agent_hints = bool(hinted_agent_ids)
-    material_bindings = _filter_materials_for_agent_hints(
-        supplied_material_bindings,
-        hinted_agent_ids,
-    )
+    # `@` 是路由偏好，而不是“本轮只能使用这个页面”的强制开关。客户常会先从某个
+    # 工作台带入材料、再提出另一种目标，例如挂着 CSV 后要求制作 PPT；这时任务意图
+    # 必须优先于残留标签和材料。真正进入哪个 Agent 仍由下面的受控规则与动作准入决定。
+    material_bindings = list(supplied_material_bindings)
     document_refs = _material_refs(material_bindings, kind="document")
     dataset_refs = _material_refs(material_bindings, kind="dataset")
     knowledge_base_refs = _material_refs(material_bindings, kind="knowledge_base")
     lowered = message.lower()
     search_query = _extract_workspace_search_query(message)
     knowledge_deep_requested = _matches_any(lowered, KNOWLEDGE_DEEP_ROUTE_KEYWORDS)
-    knowledge_requested = (
-        "knowledge_agent" in hinted_agent_ids
-        if has_explicit_agent_hints
-        else (
+    # PPT 创作拥有最高的显式意图优先级。即使调度台仍挂着上一次的数据集或资料库，
+    # “帮我做 PPT”也不能被错误解释成“分析当前数据/资料库”。
+    presentation_requested = _matches_any(lowered, PRESENTATION_ROUTE_KEYWORDS)
+    knowledge_intent_requested = _matches_any(lowered, KNOWLEDGE_ROUTE_KEYWORDS) or knowledge_deep_requested
+    document_intent_requested = _matches_any(lowered, DOCUMENT_ROUTE_KEYWORDS)
+    data_intent_requested = _matches_any(lowered, DATA_ROUTE_KEYWORDS)
+    explicit_specialist_intent = (
+        knowledge_intent_requested
+        or document_intent_requested
+        or data_intent_requested
+    )
+    # 已选材料是“本轮可用的候选上下文”，而非隐式命令。否则客户从数据页跳到调度台
+    # 后随口问一个普通问题，也会被残留 CSV 强行劫持。只有目标本身出现处理意图时，
+    # 才把已选材料交给对应专业 Agent；`@` 在没有冲突目标时提供一个温和的偏好兜底。
+    material_task_requested = _requests_bound_material_work(message)
+    knowledge_requested = not presentation_requested and (
+        knowledge_intent_requested
+        or (
             bool(knowledge_base_refs)
-            or _matches_any(lowered, KNOWLEDGE_ROUTE_KEYWORDS)
-            or knowledge_deep_requested
+            and material_task_requested
+            and not explicit_specialist_intent
+        )
+        or (
+            "knowledge_agent" in hinted_agent_ids
+            and not (document_intent_requested or data_intent_requested)
+            and _hint_can_influence_route(
+                agent_id="knowledge_agent",
+                message=lowered,
+                material_refs=knowledge_base_refs,
+            )
         )
     )
     # C6.3 允许客户明确组合文档、资料库和数据集；材料引用优先于模糊关键词。
     # 只有没有资料库绑定时，才把“资料”等宽泛词当作普通文档意图，避免单独问资料库
     # 时额外产生“请选择文档”的噪声澄清。
-    document_requested = (
-        "document_agent" in hinted_agent_ids
-        if has_explicit_agent_hints
-        else bool(document_refs) or (
-            not knowledge_base_refs
-            and not knowledge_requested
-            and _matches_any(lowered, DOCUMENT_ROUTE_KEYWORDS)
+    document_requested = not presentation_requested and (
+        document_intent_requested
+        or (
+            bool(document_refs)
+            and material_task_requested
+            and not explicit_specialist_intent
+        )
+        or (
+            "document_agent" in hinted_agent_ids
+            and not (knowledge_intent_requested or data_intent_requested)
+            and _hint_can_influence_route(
+                agent_id="document_agent",
+                message=lowered,
+                material_refs=document_refs,
+            )
         )
     )
-    data_requested = (
-        "data_agent" in hinted_agent_ids
-        if has_explicit_agent_hints
-        else bool(dataset_refs) or _matches_any(lowered, DATA_ROUTE_KEYWORDS)
+    data_requested = not presentation_requested and (
+        data_intent_requested
+        or (
+            bool(dataset_refs)
+            and material_task_requested
+            and not explicit_specialist_intent
+        )
+        or (
+            "data_agent" in hinted_agent_ids
+            and not (knowledge_intent_requested or document_intent_requested)
+            and _hint_can_influence_route(
+                agent_id="data_agent",
+                message=lowered,
+                material_refs=dataset_refs,
+            )
+        )
     )
-    presentation_requested = _matches_any(lowered, PRESENTATION_ROUTE_KEYWORDS)
+    data_chart_delivery_requested = data_requested and _requests_data_chart_delivery(lowered)
     needs_document_understanding = _needs_document_understanding(message)
     clarifying_questions: list[str] = []
     steps: list[WorkflowStep] = [
@@ -201,30 +249,30 @@ def create_commander_plan(
             else:
                 clarifying_questions.append("知识库当前未通过总指挥动作准入，请检查资料库索引状态或后端健康状态。")
 
-    if document_requested:
-        if presentation_requested and not document_refs:
-            # 从一句主题开始创作 PPT 不等于“分析一份文档”。它先打开已有的独立工作台，
-            # 由客户查看创作计划；模型调用、图片生成和文件写入仍留在该工作台的明确流程中。
-            specialist_step_id = f"step_{next_index}"
-            decision = _append_admitted_step(
-                steps=steps,
-                step_id=specialist_step_id,
-                agent_id="document_agent",
-                action="open_presentation_studio",
-                title="打开智能制作 PPT 工作台",
-                depends_on=["step_1"],
-                step_input={"task_goal": message},
-                reason="客户提供的是创作主题而非待读取材料；直接进入可预填主题的 PPT 工作台，避免错误要求选择文档。",
-                agents=available_agent_list,
-                materials=material_bindings,
-                timeout_ms=30_000,
-            )
-            if decision is not None:
-                specialist_step_ids.append(specialist_step_id)
-                next_index += 1
-            else:
-                clarifying_questions.append("智能制作 PPT 当前不可用，请在文档助手页面检查工作台状态后重试。")
-        elif not document_refs:
+    if presentation_requested:
+        # 从一句主题开始创作 PPT 不等于“分析一份文档”。这个明确目标始终进入现有的
+        # 智能制作工作台，而不会被当前残留的数据集、资料库或 `@数据工作台` 标签劫持。
+        specialist_step_id = f"step_{next_index}"
+        decision = _append_admitted_step(
+            steps=steps,
+            step_id=specialist_step_id,
+            agent_id="document_agent",
+            action="open_presentation_studio",
+            title="打开智能制作 PPT 工作台",
+            depends_on=["step_1"],
+            step_input={"task_goal": message},
+            reason="客户明确要求制作 PPT；直接带入主题进入创作工作台，避免错误要求先分析无关材料。",
+            agents=available_agent_list,
+            materials=material_bindings,
+            timeout_ms=30_000,
+        )
+        if decision is not None:
+            specialist_step_ids.append(specialist_step_id)
+            next_index += 1
+        else:
+            clarifying_questions.append("智能制作 PPT 当前不可用，请在文档助手页面检查工作台状态后重试。")
+    elif document_requested:
+        if not document_refs:
             clarifying_questions.append("已点名 @文档助手，但尚未选择文档；请先导入并选择 TXT、Markdown、PDF 或 DOCX 材料。")
         elif search_query and not needs_document_understanding:
             specialist_step_id = f"step_{next_index}"
@@ -301,7 +349,7 @@ def create_commander_plan(
                 },
                 reason=(
                     "已绑定一份导入数据；数据工作台将复用本地画像和白名单聚合生成只读结论。"
-                    "字段加工、图表 PNG 与 Excel 交付仍需客户在数据工作台明确确认。"
+                    "客户明确要求图表时会进入单独的受控 PNG 交付步骤；字段加工与 Excel 交付仍需单独确认。"
                 ),
                 agents=available_agent_list,
                 materials=material_bindings,
@@ -310,6 +358,30 @@ def create_commander_plan(
             if decision is not None:
                 specialist_step_ids.append(specialist_step_id)
                 next_index += 1
+                if data_chart_delivery_requested:
+                    chart_step_id = f"step_{next_index}"
+                    chart_decision = _append_admitted_step(
+                        steps=steps,
+                        step_id=chart_step_id,
+                        agent_id="data_agent",
+                        action="export_chart_dashboard",
+                        title="生成可保存的数据图表 PNG",
+                        depends_on=[specialist_step_id],
+                        step_input={
+                            "task_goal": message,
+                            "dataset_name": dataset_refs[0],
+                            "dataset_refs": dataset_refs,
+                            "cleaning_policy": "safe",
+                            "max_chart_count": 4,
+                        },
+                        reason="客户明确要求生成图表；先完成同一份数据的只读分析，再在受控 outputs 中写入并回读 PNG。",
+                        agents=available_agent_list,
+                        materials=material_bindings,
+                        timeout_ms=150_000,
+                    )
+                    if chart_decision is not None:
+                        specialist_step_ids.append(chart_step_id)
+                        next_index += 1
             else:
                 clarifying_questions.append("数据工作台当前不可用，请检查数据文件或后端状态。")
 
@@ -331,15 +403,20 @@ def create_commander_plan(
 
     # C6.4 只解除已验证的只读组合。未知、深度或后台型动作仍保留 C6.3 的 Runtime 保护，
     # 以免“组合”变成绕过各自检查点和权限边界的捷径。
+    specialist_agent_ids = {
+        step.agent for step in steps if step.id in specialist_step_ids
+    }
     native_composition_supported = (
-        len(specialist_step_ids) > 1
+        len(specialist_agent_ids) > 1
         and all(
             (step.agent, step.action) in _NATIVE_COMPOSITION_ACTIONS
             for step in steps
             if step.id in specialist_step_ids
         )
     )
-    if len(specialist_step_ids) > 1:
+    # 同一个专业 Agent 的“分析 -> 导出”是单 Agent 的顺序工作流，不应被误标为
+    # 多 Agent 组合任务，更不能因此丢掉已经批准的 Runtime 与权限语义。
+    if len(specialist_agent_ids) > 1:
         _append_admitted_step(
             steps=steps,
             step_id=f"step_{next_index}",
@@ -376,7 +453,9 @@ def create_commander_plan(
         (step.action for step in steps if step.execution_mode == "guided_handoff"),
         "",
     )
-    requires_composition_runtime = len(specialist_step_ids) > 1 and not native_composition_supported
+    requires_composition_runtime = (
+        len(specialist_agent_ids) > 1 and not native_composition_supported
+    )
     plan = WorkflowPlan(
         workflow_name="commander_manager_plan",
         description="Commander 基于显式材料绑定与 Agent action 准入生成的结构化计划。",
@@ -524,6 +603,8 @@ def build_commander_planning_context(plan: WorkflowPlan) -> str:
                 "本轮类型：普通对话，不需要读取绑定材料，也不需要启动 Workflow Runtime。",
                 "回复要求：直接、清楚地回答客户问题；先给结论，再按需给出简短依据或不确定性说明。",
                 "不要展示任务拆解、dry-run、Agent 路由、预算、日志、‘开始执行’或让客户确认的说明。",
+                "如客户问题与 AgentFlow 的已有能力有关，可在直接回答后用一句话提示最贴切的下一步；不要强行路由或暗示不存在的能力。",
+                "已有能力摘要：数据工作台只处理客户导入的 CSV/XLSX，可分析趋势、生成可保存 PNG 图表、导出 Excel 副本；文档助手可审查材料和制作可编辑 PPT；知识库只回答客户已选且完成索引的资料库内容。",
             ]
         )
 
@@ -539,7 +620,8 @@ def build_commander_planning_context(plan: WorkflowPlan) -> str:
         "回复要求：说明计划、材料范围、尚未执行的边界和下一步。"
         "不要声称已经读取、检索或得到了专业结果。"
         "对于已绑定且已准入的材料，不得称系统‘无法访问’或‘没有对应工具’；"
-        "应准确说明将在客户点击开始执行后由对应专业 Agent 受控读取。",
+        "应准确说明将在客户回复“开始执行”后由对应专业 Agent 受控读取。",
+        "能力提醒：数据图表 PNG 和 Excel 均只基于客户明确导入的数据；PPT 创作由智能制作 PPT 工作台负责；资料库问答只读取已选择且索引完成的资料库。不要因为残留材料或 @ 标签，把明显不相关的任务转给它们。",
     ]
     if plan.clarifying_questions:
         lines.append("仍需客户补充：" + "；".join(plan.clarifying_questions[:3]))
@@ -577,7 +659,7 @@ def build_commander_planning_reply(plan: WorkflowPlan) -> str:
     if plan.clarifying_questions:
         lines.append("开始前还需要：" + "；".join(plan.clarifying_questions[:3]))
     else:
-        lines.append("当前仍处于预演，尚未读取材料正文或生成专业结论；请审阅计划后点击“开始执行”。")
+        lines.append("当前尚未读取材料正文或生成专业结论；如计划无误，请回复“开始执行”进入真实 Runtime。")
     return "\n\n".join(lines)
 
 
@@ -730,6 +812,58 @@ def _build_admitted_step(
 
 def _matches_any(value: str, keywords: tuple[str, ...]) -> bool:
     return any(keyword in value for keyword in keywords)
+
+
+def _requests_bound_material_work(message: str) -> bool:
+    """判断客户是否真的要处理当前材料，而不是进行普通闲聊。
+
+    这不是为了替代模型意图理解，而是总指挥的最小安全闸门：已挂载的文档、CSV 或资料库
+    不能因为一次会话仍在同一页面就自动获得读取资格。覆盖的词刻意偏向客户常用的任务动词，
+    并保留“这份/当前/刚才”等指代，方便从专业工作台跳转后自然续问。
+    """
+
+    lowered = message.casefold()
+    task_markers = (
+        "分析", "看看", "查看", "读取", "检索", "搜索", "查找", "提取", "归纳",
+        "总结", "整理", "审查", "核验", "比较", "解释", "回答", "问答", "统计",
+        "计算", "生成", "制作", "导出", "保存", "加工", "清洗", "画图", "做图",
+        "当前", "这份", "这个", "刚才", "上一步",
+    )
+    return any(marker in lowered for marker in task_markers)
+
+
+def _hint_can_influence_route(
+    *,
+    agent_id: str,
+    message: str,
+    material_refs: list[str],
+) -> bool:
+    """让 `@Agent` 成为偏好，而不把它升级成隐藏权限或强制工具调用。
+
+    已带入对应材料时，客户主动点名就可以作为一次受控处理请求；没有材料时仍保留清晰
+    澄清，避免 `@数据工作台 帮我制作图表` 被错误当成普通闲聊。PPT 等更强的显式目标
+    已在调用方先行截获，因此不会被这里的提示标签覆盖。
+    """
+
+    if material_refs or _requests_bound_material_work(message):
+        return True
+
+    # 仅输入 @标签时也应告知该能力需要什么材料，而不是静默降成普通聊天。别名已经在
+    # `_normalize_agent_hints` 白名单化，因此这不会变成动态 Agent 发现入口。
+    aliases = _AGENT_HINT_ALIASES.get(agent_id, ())
+    return any(f"@{alias.casefold()}" in message for alias in aliases)
+
+
+def _requests_data_chart_delivery(message: str) -> bool:
+    """区分“给出图表建议”和“现在写出 PNG 图表”。
+
+    数据分析结果常会告诉客户“可生成图表”。这不是客户的写入确认，不能因为它包含
+    ``生成图表`` 四个字就创建 PNG 交付任务；只有明确的制作/导出/保存表达才触发文件写入。
+    """
+
+    if any(marker in message for marker in ("可生成图表", "图表建议", "建议图表", "能生成图表")):
+        return False
+    return _matches_any(message, DATA_CHART_DELIVERY_KEYWORDS)
 
 
 def _normalize_material_bindings(
@@ -982,6 +1116,12 @@ def _retry_policy_for_step(agent_id: str, action: str) -> WorkflowRetryPolicy:
             retryable=False,
             stop_condition="数据分析子任务只读取当前显式绑定的数据副本；失败时保留子任务说明，客户可核对文件后重新委派。",
         )
+    if agent_id == "data_agent" and action == "export_chart_dashboard":
+        return WorkflowRetryPolicy(
+            max_attempts=1,
+            retryable=False,
+            stop_condition="图表写入前后都会验证数据版本和 PNG 像素；失败时不覆盖旧产物，客户可调整目标后重新规划。",
+        )
     if action in {"read_text", "search_text", "generate_code", "generate_report"}:
         return WorkflowRetryPolicy(max_attempts=3, retryable=True, stop_condition="同类错误连续失败后停止自动重试。")
     return WorkflowRetryPolicy()
@@ -1012,6 +1152,12 @@ def _success_criteria_for_step(agent_id: str, action: str) -> list[str]:
             "本地白名单计算只生成有限指标、聚合与图表建议",
             "原始行不进入模型或父任务，保留关联子任务与源哈希",
             "不导出或修改 CSV/XLSX/PNG；正式交付仍需数据工作台确认",
+        ]
+    if agent_id == "data_agent" and action == "export_chart_dashboard":
+        return [
+            "仅读取一份客户明确绑定的数据文件及其已验证聚合结果",
+            "仅在受控 outputs 中新建 PNG 图表，不修改 CSV/XLSX",
+            "每张 PNG 都通过像素回读验证并登记可打开产物",
         ]
     if agent_id == "document_agent":
         return ["生成结构化需求摘要", "输出可供后续 Agent 使用的文档上下文"]
@@ -1093,10 +1239,12 @@ def _build_definition_of_done(steps: list[WorkflowStep]) -> list[str]:
         else:
             done.append("知识库助手仅依据所选资料库的活动版本完成可信问答，关键结论可在关联子任务查看来源。")
     if "data_agent" in agents:
-        if any(step.action == "analyze_dataset" for step in steps):
+        if any(step.action == "export_chart_dashboard" for step in steps):
+            done.append("数据工作台已基于明确绑定的数据生成并回读 PNG 图表；源 CSV/XLSX 不会被修改，交付物可在任务历史直接打开。")
+        elif any(step.action == "analyze_dataset" for step in steps):
             done.append(
                 "数据工作台已对一份明确绑定的导入数据完成只读画像、聚合和可追溯结论；"
-                "图表 PNG、字段副本和 Excel 交付仍须客户在数据工作台确认。"
+                "图表 PNG、字段副本和 Excel 交付可按明确目标进入各自的受控交付步骤。"
             )
         else:
             done.append("数据任务已带着明确材料和目标转入数据工作台；不把该引导误记为自动分析完成。")
@@ -1132,17 +1280,6 @@ def _build_workspace_scope(
     write_paths: list[str] = []
     external_services: list[str] = []
 
-    for material in materials:
-        if material.kind == "document":
-            read_paths.append(f"data/workspaces/{material.ref}")
-        elif material.kind == "dataset":
-            # 总指挥只声明选择范围；数据工作台会在自己的任务里重新验证与读取。
-            read_paths.append(f"data/datasets/{material.ref}")
-        elif material.kind == "knowledge_base":
-            # 资料库 ID 不是文件系统路径。计划只说明只读范围，具体副本、SQLite 与向量索引
-            # 继续封装在 Knowledge Retrieval Service 内部。
-            read_paths.append(f"knowledge-base://{material.ref}")
-
     for step in steps:
         if step.agent == "document_agent":
             path = step.input.get("path")
@@ -1158,6 +1295,12 @@ def _build_workspace_scope(
             knowledge_base_id = step.input.get("knowledge_base_id")
             if isinstance(knowledge_base_id, str) and knowledge_base_id:
                 read_paths.append(f"knowledge-base://{knowledge_base_id}")
+        if step.agent == "data_agent":
+            dataset_name = step.input.get("dataset_name")
+            if isinstance(dataset_name, str) and dataset_name:
+                # 数据集只在已准入的数据 action 中进入读取范围；调度台上残留的其他材料
+                # 只是本轮可选上下文，不应被审计面误写成已经授权读取。
+                read_paths.append(f"data/datasets/{dataset_name}")
         if "file_write" in step.required_permissions:
             write_paths.append("data/outputs/<runtime_task_id>/")
         if "network" in step.required_permissions:
