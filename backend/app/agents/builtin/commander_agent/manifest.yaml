@@ -1,0 +1,34 @@
+id: commander_agent
+name: 总指挥
+description: 理解用户任务，拆解计划，路由专业 Agent，并汇总最终结果。
+category: 调度
+version: 0.1.0
+icon: icons/dispatch.svg
+sort_order: 10
+entrypoint: app.agents.builtin.commander_agent.agent:CommanderAgent
+enabled: true
+runtime_ready: true
+health: ready
+maturity: mvp
+llm:
+  provider: inherit
+  model: inherit
+  allow_override: true
+tools:
+  - intent_classify
+  - build_workflow_plan
+  - summarize_result
+permissions:
+  file_read: false
+  file_write: false
+  network: false
+  shell: false
+  database: false
+ui:
+  type: qt_builtin_page
+  config: dispatch
+capabilities:
+  - 任务拆解
+  - Agent 路由
+  - 工作流规划
+  - 结果汇总

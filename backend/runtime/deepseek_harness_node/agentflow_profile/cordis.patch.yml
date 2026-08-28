@@ -1,0 +1,92 @@
+# AgentFlow 管理的只读 Harness profile。
+#
+# 此文件会覆盖官方 base profile 中同 ID 的条目；它不是用户配置入口，也不保存模型
+# Provider 或 API Key。每次预检都在专属 DSH_HOME 中原子同步该文件，再用 dump-config
+# 验证最终组合结果。真实任务接入前不得删除其中的禁用项。
+
+- id: sandbox-policy
+  config:
+    mode: read-only
+    workspaceRoot: !!js process.env.DSH_CWD ?? process.cwd()
+
+- id: approval
+  config:
+    policy: ask
+
+# Bridge 只在本次子进程环境中传入 DeepSeek 的运行时配置，模型 ID 和输出预算不会写入
+# Harness settings 文件。其余字段仍使用官方适配器的安全默认值。
+- id: agent-default-model
+  config:
+    provider: deepseek-official
+    model: !!js process.env.AGENTFLOW_HARNESS_MODEL ?? 'deepseek-v4-flash'
+- id: llm-deepseek
+  config:
+    thinking: !!js process.env.AGENTFLOW_HARNESS_THINKING ?? 'disabled'
+    maxTokens: !!js Number(process.env.AGENTFLOW_HARNESS_MAX_TOKENS ?? 2048)
+    streamIdleTimeoutMs: !!js Number(process.env.AGENTFLOW_HARNESS_IDLE_TIMEOUT_MS ?? 180000)
+
+# 不读取可被外部修改的 Harness settings；Provider、模型和凭据仍由 AgentFlow 决定。
+- id: settings
+  disabled: true
+
+# 只读试点不装配任何本地文件、命令、网络、子 Agent 或工作流工具。
+- id: pwsh-sandbox
+  disabled: true
+- id: tool-pwsh
+  disabled: true
+- id: tool-jobs
+  disabled: true
+- id: tool-fs
+  disabled: true
+- id: tool-fs-search
+  disabled: true
+- id: tool-str-replace-editor
+  disabled: true
+- id: tool-web
+  disabled: true
+- id: web
+  disabled: true
+- id: web-search-deepseek
+  disabled: true
+- id: tool-subagent
+  disabled: true
+- id: tool-subagent-fork
+  disabled: true
+- id: tool-subagent-control
+  disabled: true
+- id: tool-subagent-list-agents
+  disabled: true
+- id: tool-subagent-report
+  disabled: true
+- id: workflow-worker-thread
+  disabled: true
+- id: tool-workflow
+  disabled: true
+- id: tool-ralph
+  disabled: true
+- id: tool-skill
+  disabled: true
+- id: skill
+  disabled: true
+- id: skill-filesystem
+  disabled: true
+- id: tool-goal
+  disabled: true
+- id: tool-todo
+  disabled: true
+- id: commands
+  disabled: true
+- id: command-feedback
+  disabled: true
+- id: command-goal
+  disabled: true
+- id: agent-instructions
+  disabled: true
+- id: session-title-llm
+  disabled: true
+- id: llm-retry
+  disabled: true
+- id: compaction-basic
+  disabled: true
+- id: command-compact
+  disabled: true

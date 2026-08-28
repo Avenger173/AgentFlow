@@ -1,0 +1,12 @@
+{
+  "name": "agentflow-deepseek-harness-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AgentFlow 项目内锁定的 DeepSeek Harness Node Runtime。",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh": "0.1.0-rc.6"
+  }
+}

@@ -1,0 +1,19 @@
+<RCC>
+    <qresource prefix="/icons">
+        <file alias="apps.svg">icons/apps.svg</file>
+        <file alias="code.svg">icons/code.svg</file>
+        <file alias="data.svg">icons/data.svg</file>
+        <file alias="dispatch.svg">icons/dispatch.svg</file>
+        <file alias="document.svg">icons/document.svg</file>
+        <file alias="history.svg">icons/history.svg</file>
+        <file alias="knowledge.svg">icons/knowledge.svg</file>
+        <file alias="model.svg">icons/model.svg</file>
+        <file alias="overview.svg">icons/overview.svg</file>
+        <file alias="plugins.svg">icons/plugins.svg</file>
+        <file alias="report.svg">icons/report.svg</file>
+        <file alias="settings.svg">icons/settings.svg</file>
+        <file alias="video.svg">icons/video.svg</file>
+        <file alias="vision.svg">icons/vision.svg</file>
+        <file alias="workflow.svg">icons/workflow.svg</file>
+    </qresource>
+</RCC>

@@ -1,0 +1,336 @@
+
+QMainWindow {
+    background: #F3F7FC;
+}
+
+QWidget {
+    font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI";
+    font-size: 14px;
+    color: #1E293B;
+}
+
+QFrame#mainRoot {
+    background: #F3F7FC;
+}
+
+QFrame#sidebarFrame {
+    background: #FFFFFF;
+    border-right: 1px solid #E6EDF5;
+}
+
+QFrame#topBarFrame {
+    background: transparent;
+}
+
+QFrame#heroCard,
+QFrame#historyMainCard,
+QFrame#whiteCard,
+QFrame#sidePanel,
+QFrame#summaryCard,
+QFrame#contentCard,
+QFrame#agentCard,
+QFrame#knowledgeCard,
+QFrame#settingsCard {
+    background: #FFFFFF;
+    border: 1px solid #E7EEF8;
+    border-radius: 22px;
+}
+
+QFrame#heroCard,
+QFrame#historyMainCard {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                                stop:0 #FFFFFF,
+                                stop:0.55 #F2F7FF,
+                                stop:1 #EAF7FF);
+    border: 1px solid #CCE0FF;
+}
+
+QFrame#accentHeroCard {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                                stop:0 #2563EB,
+                                stop:0.55 #0EA5E9,
+                                stop:1 #14B8A6);
+    border-radius: 28px;
+}
+
+QPushButton {
+    border: 1px solid #D7E4F5;
+    border-radius: 14px;
+    padding: 11px 14px;
+    background: #FFFFFF;
+    color: #2563EB;
+    text-align: center;
+}
+
+QPushButton:hover {
+    background: #EEF6FF;
+    color: #2563EB;
+}
+
+QPushButton:disabled {
+    background: #F8FAFC;
+    border-color: #E2E8F0;
+    color: #A0AEC0;
+}
+
+QPushButton[active="true"] {
+    background: #2563EB;
+    color: white;
+    font-weight: 700;
+}
+
+QFrame#sidebarFrame QPushButton {
+    border: none;
+    background: transparent;
+    color: #475569;
+    text-align: left;
+}
+
+QFrame#sidebarFrame QPushButton:hover {
+    background: #EEF6FF;
+    color: #2563EB;
+}
+
+QFrame#sidebarFrame QPushButton[active="true"] {
+    background: #2563EB;
+    color: #FFFFFF;
+    font-weight: 800;
+}
+
+QPushButton#primaryButton {
+    background: #2563EB;
+    color: #FFFFFF;
+    font-weight: 800;
+    border-radius: 16px;
+    padding: 12px 20px;
+    text-align: center;
+}
+
+QPushButton#primaryButton:hover {
+    background: #1D4ED8;
+}
+
+QPushButton#primaryButton:pressed {
+    background: #1E40AF;
+}
+
+QPushButton#primaryButton:disabled {
+    background: #B9C9E8;
+    color: #F8FAFC;
+}
+
+QPushButton#secondaryButton {
+    background: #EEF6FF;
+    color: #2563EB;
+    font-weight: 700;
+    border-radius: 16px;
+    padding: 12px 18px;
+    text-align: center;
+}
+
+QPushButton#secondaryButton:hover {
+    background: #DCEBFF;
+}
+
+QPushButton#secondaryButton:pressed {
+    background: #C7DEFF;
+}
+
+QPushButton#secondaryButton:disabled {
+    background: #F1F5F9;
+    color: #94A3B8;
+}
+
+QPushButton#ghostButton {
+    background: #FFFFFF;
+    border: 1px solid #D7E4F5;
+    color: #2563EB;
+    border-radius: 14px;
+    text-align: center;
+}
+
+QPushButton#ghostButton:hover {
+    background: #EEF6FF;
+    border-color: #9FC5FF;
+}
+
+QPushButton#ghostButton:pressed {
+    background: #DCEBFF;
+}
+
+QPushButton#ghostButton:disabled {
+    background: #F8FAFC;
+    border-color: #E2E8F0;
+    color: #A0AEC0;
+}
+
+QPushButton#dangerButton {
+    background: #FEF2F2;
+    color: #DC2626;
+    border-radius: 14px;
+    text-align: center;
+}
+
+QPushButton#dangerButton:hover {
+    background: #FEE2E2;
+}
+
+QPushButton#dangerButton:pressed {
+    background: #FECACA;
+}
+
+QPushButton#dangerButton:disabled {
+    background: #F8FAFC;
+    color: #CBD5E1;
+}
+
+QPushButton#primaryButton:focus, QPushButton#secondaryButton:focus,
+QPushButton#ghostButton:focus, QPushButton#dangerButton:focus {
+    border: 2px solid #60A5FA;
+}
+
+QLabel#logoBadge {
+    background: #2563EB;
+    color: #FFFFFF;
+    border-radius: 16px;
+    font-size: 24px;
+    font-weight: 900;
+}
+
+QLabel#avatarLabel {
+    background: #DBEAFE;
+    color: #2563EB;
+    border-radius: 22px;
+    font-weight: 900;
+}
+
+QLabel#brandTitle {
+    font-size: 19px;
+    font-weight: 900;
+    color: #0F172A;
+}
+
+QLabel#pageTitle {
+    font-size: 32px;
+    font-weight: 900;
+    color: #0F172A;
+}
+
+QLabel#heroTitle {
+    font-size: 38px;
+    font-weight: 900;
+    color: #0F172A;
+}
+
+QLabel#sectionTitle {
+    font-size: 18px;
+    font-weight: 800;
+    color: #0F172A;
+}
+
+QLabel#cardTitle {
+    font-size: 16px;
+    font-weight: 800;
+    color: #111827;
+}
+
+QLabel#largeMetric {
+    font-size: 28px;
+    font-weight: 900;
+    color: #2563EB;
+}
+
+QLabel#subText {
+    color: #64748B;
+    font-size: 13px;
+}
+
+QLabel#tinyText {
+    color: #94A3B8;
+    font-size: 12px;
+}
+
+QLabel#badgeBlue {
+    background: #EAF2FF;
+    color: #2563EB;
+    border-radius: 11px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 800;
+}
+
+QLabel#badgeGreen {
+    background: #ECFDF5;
+    color: #059669;
+    border-radius: 11px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 800;
+}
+
+QLabel#badgeOrange {
+    background: #FFF7ED;
+    color: #EA580C;
+    border-radius: 11px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 800;
+}
+
+QLabel#badgePurple {
+    background: #F5F3FF;
+    color: #7C3AED;
+    border-radius: 11px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 800;
+}
+
+QLabel#badgeGray {
+    background: #F1F5F9;
+    color: #64748B;
+    border-radius: 11px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 800;
+}
+
+QLineEdit {
+    background: #FFFFFF;
+    border: 1px solid #DFEAF7;
+    border-radius: 16px;
+    padding: 11px 16px;
+    color: #1E293B;
+    selection-background-color: #BFDBFE;
+}
+
+QLineEdit:focus {
+    border: 1px solid #60A5FA;
+}
+
+QTextEdit {
+    background: #F8FBFF;
+    border: 1px solid #E1EAF6;
+    border-radius: 18px;
+    padding: 14px;
+    color: #334155;
+}
+
+QProgressBar {
+    border: none;
+    background: #EAF0F7;
+    border-radius: 7px;
+    height: 12px;
+    text-align: center;
+    color: transparent;
+}
+
+QProgressBar::chunk {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                stop:0 #2563EB, stop:1 #14B8A6);
+    border-radius: 7px;
+}
+
+QStackedWidget {
+    background: transparent;
+}

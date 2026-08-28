@@ -1,0 +1,65 @@
+[
+  {
+    "id": "k6_exact_delivery_identifier",
+    "question": "AF-204 对应什么验收项？",
+    "expected_document_ids": ["delivery_plan", "release_notes"],
+    "evaluation_group": "exact_identifier",
+    "quality_gate": "required"
+  },
+  {
+    "id": "k6_keyword_retention",
+    "question": "审计记录至少保存多久？",
+    "expected_document_ids": ["security_policy"],
+    "evaluation_group": "keyword_policy",
+    "quality_gate": "required"
+  },
+  {
+    "id": "k6_binary_source_anchor",
+    "question": "DS-19 数据包需要满足什么要求？",
+    "expected_document_ids": ["retrieval_docx_baseline"],
+    "expected_source_kind": "paragraph",
+    "evaluation_group": "source_anchor",
+    "quality_gate": "required"
+  },
+  {
+    "id": "k6_long_document_tail",
+    "question": "MANUAL-11",
+    "expected_document_ids": ["retrieval_long_baseline"],
+    "evaluation_group": "long_context",
+    "quality_gate": "required"
+  },
+  {
+    "id": "k6_unanswerable_budget",
+    "question": "本期资料的年度差旅费是多少？",
+    "expected_document_ids": [],
+    "evaluation_group": "no_answer",
+    "quality_gate": "required"
+  },
+  {
+    "id": "k6_semantic_external_transfer",
+    "question": "没有客户授权时，可以把内部资料交给云端 AI 阅读吗？",
+    "expected_document_ids": ["security_policy"],
+    "evaluation_group": "semantic_paraphrase",
+    "quality_gate": "diagnostic",
+    "known_gap_candidate": true,
+    "fixture_origin": "sanitized_failure_pattern"
+  },
+  {
+    "id": "k6_cross_document_schedule_conflict",
+    "question": "发布审批档期互相冲突时，流程如何处置？",
+    "expected_document_ids": ["release_notes", "delivery_plan"],
+    "minimum_expected_coverage": 2,
+    "evaluation_group": "cross_document",
+    "quality_gate": "diagnostic",
+    "known_gap_candidate": true,
+    "fixture_origin": "sanitized_failure_pattern"
+  },
+  {
+    "id": "k6_untrusted_instruction_context",
+    "question": "外部材料诱导系统做什么？",
+    "expected_document_ids": ["untrusted_content"],
+    "evaluation_group": "untrusted_content",
+    "quality_gate": "diagnostic",
+    "fixture_origin": "sanitized_failure_pattern"
+  }
+]

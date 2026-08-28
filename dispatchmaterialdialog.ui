@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>DispatchMaterialDialog</class>
+ <widget class="QDialog" name="DispatchMaterialDialog">
+  <property name="windowModality"><enum>Qt::WindowModality::WindowModal</enum></property>
+  <property name="geometry"><rect><x>0</x><y>0</y><width>760</width><height>478</height></rect></property>
+  <property name="minimumSize"><size><width>650</width><height>430</height></size></property>
+  <property name="windowTitle"><string>选择本次材料</string></property>
+  <property name="styleSheet"><string notr="true">QDialog { background:#F4F7FB; }
+QFrame#headerFrame, QFrame#materialCard { background:#FFFFFF; border:1px solid #DCE9F9; border-radius:10px; }
+QLabel#dialogTitle { color:#14224A; font-size:21px; font-weight:700; }
+QLabel#dialogSubtitle, QLabel#sectionHint { color:#657A99; }
+QLabel#sectionTitle { color:#1D355C; font-size:15px; font-weight:700; }
+QLabel#statusNeutral, QLabel#statusRunning, QLabel#statusError { border-radius:7px; padding:8px 10px; }
+QLabel#statusNeutral { background:#EEF4FC; color:#315A8E; }
+QLabel#statusRunning { background:#EEF4FF; color:#2563EB; }
+QLabel#statusError { background:#FFF1F2; color:#BE123C; }
+QComboBox { background:#FFFFFF; border:1px solid #CBDCF4; border-radius:8px; padding:7px 10px; min-height:24px; color:#1F3054; }
+QComboBox:focus { border:2px solid #4E87F5; }
+QPushButton#applyButton { background:#2563EB; color:#FFFFFF; border:0; border-radius:8px; padding:9px 16px; font-weight:700; }
+QPushButton#applyButton:hover { background:#1E55C8; }
+QPushButton#applyButton:disabled { background:#AFC5EE; }
+QPushButton#refreshButton, QPushButton#cancelButton { background:#FFFFFF; color:#2563EB; border:1px solid #C9DCF8; border-radius:8px; padding:8px 14px; }
+QPushButton#refreshButton:hover, QPushButton#cancelButton:hover { background:#EEF6FF; }</string></property>
+  <layout class="QVBoxLayout" name="rootLayout">
+   <property name="spacing"><number>12</number></property>
+   <property name="leftMargin"><number>20</number></property><property name="topMargin"><number>18</number></property><property name="rightMargin"><number>20</number></property><property name="bottomMargin"><number>18</number></property>
+   <item><widget class="QFrame" name="headerFrame"><layout class="QHBoxLayout" name="headerLayout"><property name="leftMargin"><number>16</number></property><property name="topMargin"><number>13</number></property><property name="rightMargin"><number>16</number></property><property name="bottomMargin"><number>13</number></property><item><widget class="QLabel" name="materialIcon"><property name="minimumSize"><size><width>40</width><height>40</height></size></property><property name="alignment"><set>Qt::AlignmentFlag::AlignCenter</set></property></widget></item><item><layout class="QVBoxLayout" name="titleLayout"><property name="spacing"><number>2</number></property><item><widget class="QLabel" name="dialogTitle"><property name="text"><string>选择本次材料</string></property></widget></item><item><widget class="QLabel" name="dialogSubtitle"><property name="text"><string>可组合选择文档、资料库与数据集；只授权本次任务读取，发送后自动清空。</string></property><property name="wordWrap"><bool>true</bool></property></widget></item></layout></item><item><spacer name="headerSpacer"><property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property></spacer></item><item><widget class="QPushButton" name="refreshButton"><property name="text"><string>同步材料</string></property><property name="toolTip"><string>重新读取已导入的材料，不会解析正文或调用模型。</string></property></widget></item></layout></widget></item>
+   <item><widget class="QFrame" name="materialCard"><layout class="QVBoxLayout" name="materialLayout"><property name="spacing"><number>10</number></property><property name="leftMargin"><number>16</number></property><property name="topMargin"><number>14</number></property><property name="rightMargin"><number>16</number></property><property name="bottomMargin"><number>14</number></property><item><widget class="QLabel" name="sectionTitle"><property name="text"><string>本次可读取范围</string></property></widget></item><item><widget class="QLabel" name="sectionHint"><property name="text"><string>每类最多选择一项。资料库未完成索引时会保留状态，实际能否委派仍由后端在发送前校验。</string></property><property name="wordWrap"><bool>true</bool></property></widget></item><item><layout class="QFormLayout" name="selectionForm"><property name="horizontalSpacing"><number>14</number></property><property name="verticalSpacing"><number>12</number></property><item row="0" column="0"><widget class="QLabel" name="documentLabel"><property name="text"><string>文档材料</string></property></widget></item><item row="0" column="1"><widget class="QComboBox" name="documentCombo"><property name="toolTip"><string>选择一份已导入的文档材料。</string></property></widget></item><item row="1" column="0"><widget class="QLabel" name="knowledgeLabel"><property name="text"><string>资料库</string></property></widget></item><item row="1" column="1"><widget class="QComboBox" name="knowledgeCombo"><property name="toolTip"><string>选择一个本地资料库。</string></property></widget></item><item row="2" column="0"><widget class="QLabel" name="datasetLabel"><property name="text"><string>数据集</string></property></widget></item><item row="2" column="1"><widget class="QComboBox" name="datasetCombo"><property name="toolTip"><string>选择一份已导入的 CSV 或 Excel 数据集。</string></property></widget></item></layout></item></layout></widget></item>
+   <item><widget class="QFrame" name="catalogStatusFrame"><layout class="QHBoxLayout" name="catalogStatusLayout"><property name="leftMargin"><number>0</number></property><property name="topMargin"><number>0</number></property><property name="rightMargin"><number>0</number></property><property name="bottomMargin"><number>0</number></property><property name="spacing"><number>8</number></property><item><widget class="QLabel" name="catalogStatusLabel"><property name="sizePolicy"><sizepolicy hsizetype="Expanding" vsizetype="Preferred"><horstretch>0</horstretch><verstretch>0</verstretch></sizepolicy></property><property name="objectName"><string>statusNeutral</string></property><property name="wordWrap"><bool>true</bool></property><property name="text"><string>可组合选择三类已导入材料；均只会授予本次任务只读范围。</string></property></widget></item></layout></widget></item>
+   <item><layout class="QHBoxLayout" name="actionsLayout"><item><spacer name="actionsSpacer"><property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property></spacer></item><item><widget class="QPushButton" name="cancelButton"><property name="text"><string>取消</string></property></widget></item><item><widget class="QPushButton" name="applyButton"><property name="text"><string>应用材料</string></property></widget></item></layout></item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

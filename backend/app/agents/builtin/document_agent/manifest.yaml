@@ -1,0 +1,34 @@
+id: document_agent
+name: 文档助手
+description: 分析用户导入的 UTF-8 TXT、Markdown 文档，输出带来源的摘要、需求和直接回答。
+category: 文档处理
+version: 0.1.0
+icon: icons/document.svg
+sort_order: 20
+entrypoint: app.agents.builtin.document_agent.agent:DocumentAgent
+enabled: true
+runtime_ready: true
+health: ready
+maturity: mvp
+llm:
+  provider: inherit
+  model: inherit
+  allow_override: true
+tools:
+  - search_text
+  - read_text
+  - analyze_document
+permissions:
+  file_read: true
+  file_write: false
+  network: false
+  shell: false
+  database: false
+ui:
+  type: qt_builtin_page
+  config: document
+capabilities:
+  - 文档读取
+  - 关键词定位
+  - 带来源摘要
+  - 需求与约束解析

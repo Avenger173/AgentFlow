@@ -1,0 +1,33 @@
+id: code_agent
+name: 代码工坊
+description: 生成、解释、修复代码，并可在后续阶段接入安全沙箱执行。
+category: 代码开发
+version: 0.1.0
+icon: icons/code.svg
+sort_order: 30
+entrypoint: app.agents.builtin.code_agent.agent:CodeAgent
+enabled: true
+runtime_ready: false
+health: unknown
+maturity: placeholder
+llm:
+  provider: inherit
+  model: inherit
+  allow_override: true
+tools:
+  - generate_code
+  - explain_code
+  - create_project_files
+permissions:
+  file_read: true
+  file_write: true
+  network: false
+  shell: false
+  database: false
+ui:
+  type: qt_builtin_page
+  config: code
+capabilities:
+  - 代码生成
+  - 代码解释
+  - 项目结构生成

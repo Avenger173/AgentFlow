@@ -1,0 +1,31 @@
+id: knowledge_agent
+name: 知识库
+description: 基于客户明确选择的本地资料库生成带来源的可信回答。
+category: 知识管理
+version: 0.1.0
+icon: icons/knowledge.svg
+sort_order: 35
+entrypoint: app.services.knowledge_answer:run_knowledge_answer_task
+enabled: true
+runtime_ready: true
+health: ready
+maturity: mvp
+llm:
+  provider: inherit
+  model: inherit
+  allow_override: true
+tools:
+  - answer_question
+permissions:
+  file_read: false
+  file_write: false
+  network: false
+  shell: false
+  database: false
+ui:
+  type: qt_builtin_page
+  config: knowledge
+capabilities:
+  - 本地资料库管理
+  - 混合检索
+  - 带来源可信问答

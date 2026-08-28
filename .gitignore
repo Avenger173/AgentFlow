@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+# K0 技术试验使用独立解释器与依赖，不能混入正式后端发行环境。
+backend/.k0_*/
+
+# FastAPI / local runtime
+*.env
+.env
+backend/.env
+backend/.env.*
+backend/logs/
+backend/data/
+data/
+output/
+
+# 仅作本地学习参考的原始 PDF；其中可能包含第三方示例凭据或版权材料。
+docs/langchainANDlanggraphPDF/
+
+# Node 版 DeepSeek Harness 的项目内依赖和 npm 临时缓存由 lockfile 重建；发行目录再单独收集。
+backend/runtime/**/node_modules/
+backend/runtime/.npm-cache/
+# DeepSeek Harness 本机探测与临时运行状态
+backend/runtime/**/.probe-state/
+
+# Qt / CMake build outputs
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+
+# IDE and OS noise
+.idea/
+.vscode/
+*.user
+*.suo
+Thumbs.db
+.DS_Store

@@ -1,0 +1,32 @@
+id: report_agent
+name: 报告助手
+description: 整理任务过程和结果；当前仅保留 Markdown 报告能力的后续实现入口。
+category: 报告生成
+version: 0.1.0
+icon: icons/report.svg
+sort_order: 40
+entrypoint: app.agents.builtin.report_agent.agent:ReportAgent
+enabled: true
+runtime_ready: false
+health: unknown
+maturity: placeholder
+llm:
+  provider: inherit
+  model: inherit
+  allow_override: true
+tools:
+  - generate_markdown_report
+  - summarize_artifacts
+permissions:
+  file_read: true
+  file_write: true
+  network: false
+  shell: false
+  database: false
+ui:
+  type: qt_builtin_page
+  config: report
+capabilities:
+  - Markdown 报告
+  - 结果汇总
+  - 产物说明

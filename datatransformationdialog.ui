@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>DataTransformationDialog</class>
+ <widget class="QDialog" name="DataTransformationDialog">
+  <property name="windowModality"><enum>Qt::WindowModality::WindowModal</enum></property>
+  <property name="geometry"><rect><x>0</x><y>0</y><width>920</width><height>700</height></rect></property>
+  <property name="minimumSize"><size><width>780</width><height>620</height></size></property>
+  <property name="windowTitle"><string>字段加工</string></property>
+  <property name="styleSheet"><string notr="true">QDialog { background:#F4F7FB; }
+QFrame#headerFrame, QFrame#workspaceFrame { background:#FFFFFF; border:1px solid #DDEBFA; border-radius:10px; }
+QFrame#operationPane { background:#F8FBFF; border-right:1px solid #E3EDF9; }
+QFrame#queueFrame { background:#F8FBFF; border:1px solid #DDEBFA; border-radius:8px; }
+QLabel#dialogTitle { color:#14224A; font-size:22px; font-weight:700; }
+QLabel#dialogSubtitle, QLabel#scopeLabel, QLabel#operationDescription, QLabel#queueHint { color:#61728E; }
+QLabel#operationTitle { color:#1E315A; font-size:17px; font-weight:700; }
+QLabel#statusLabel { color:#315A8E; background:#EEF4FC; border-radius:7px; padding:7px 10px; }
+QListWidget#operationList { border:0; background:transparent; outline:0; padding:6px; }
+QListWidget#operationList::item { color:#43546F; border-radius:7px; margin:2px 0; padding:8px 10px; }
+QListWidget#operationList::item:selected { background:#2563EB; color:#FFFFFF; font-weight:700; }
+QListWidget#queueList { background:#FFFFFF; border:1px solid #D9E6F7; border-radius:7px; padding:3px; }
+QListWidget#queueList::item { border-radius:5px; padding:5px 7px; color:#264162; }
+QListWidget#queueList::item:selected { background:#E6F0FF; color:#1D4ED8; }
+QComboBox, QLineEdit { background:#FFFFFF; border:1px solid #CBDCF4; border-radius:8px; min-height:30px; padding:4px 9px; color:#1F3054; }
+QPushButton#previewButton { background:#2563EB; color:#FFFFFF; border:0; border-radius:8px; padding:9px 18px; font-weight:700; }
+QPushButton#previewButton:disabled { background:#AFC5EE; }
+QPushButton#cancelButton, QPushButton#addQueueButton, QPushButton#removeQueueButton { background:#FFFFFF; color:#2563EB; border:1px solid #C9DCF8; border-radius:8px; padding:7px 12px; }
+QLabel#modeBadge { color:#047857; background:#ECFDF5; border-radius:11px; padding:5px 10px; font-weight:700; }</string></property>
+  <layout class="QVBoxLayout" name="mainLayout">
+   <property name="spacing"><number>12</number></property>
+   <property name="leftMargin"><number>22</number></property>
+   <property name="topMargin"><number>20</number></property>
+   <property name="rightMargin"><number>22</number></property>
+   <property name="bottomMargin"><number>20</number></property>
+   <item>
+    <widget class="QFrame" name="headerFrame">
+     <layout class="QHBoxLayout" name="headerLayout">
+      <property name="leftMargin"><number>18</number></property><property name="topMargin"><number>14</number></property><property name="rightMargin"><number>18</number></property><property name="bottomMargin"><number>14</number></property>
+      <item><widget class="QLabel" name="dialogIcon"><property name="minimumSize"><size><width>40</width><height>40</height></size></property><property name="alignment"><set>Qt::AlignmentFlag::AlignCenter</set></property></widget></item>
+      <item><layout class="QVBoxLayout" name="headerTextLayout"><property name="spacing"><number>2</number></property><item><widget class="QLabel" name="dialogTitle"><property name="text"><string>创建数据副本</string></property></widget></item><item><widget class="QLabel" name="dialogSubtitle"><property name="text"><string>选择多个字段加工；确认后在原表行列方向上统一追加，绝不改动原文件。</string></property></widget></item></layout></item>
+      <item><spacer name="headerSpacer"><property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property></spacer></item>
+      <item><widget class="QLabel" name="modeBadge"><property name="text"><string>原格式副本 · 不加样式</string></property></widget></item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QFrame" name="workspaceFrame">
+     <property name="sizePolicy"><sizepolicy hsizetype="Preferred" vsizetype="Expanding"><horstretch>0</horstretch><verstretch>1</verstretch></sizepolicy></property>
+     <layout class="QHBoxLayout" name="workspaceLayout">
+      <property name="spacing"><number>0</number></property><property name="leftMargin"><number>0</number></property><property name="topMargin"><number>0</number></property><property name="rightMargin"><number>0</number></property><property name="bottomMargin"><number>0</number></property>
+      <item>
+       <widget class="QFrame" name="operationPane">
+        <property name="minimumSize"><size><width>220</width><height>0</height></size></property><property name="maximumSize"><size><width>250</width><height>16777215</height></size></property>
+        <layout class="QVBoxLayout" name="operationLayout">
+         <property name="spacing"><number>6</number></property><property name="leftMargin"><number>12</number></property><property name="topMargin"><number>14</number></property><property name="rightMargin"><number>12</number></property><property name="bottomMargin"><number>14</number></property>
+         <item><widget class="QLabel" name="operationPaneTitle"><property name="text"><string>本次要添加什么？</string></property><property name="styleSheet"><string notr="true">font-size:14px; font-weight:700; color:#1E315A;</string></property></widget></item>
+         <item><widget class="QLabel" name="operationPaneHint"><property name="text"><string>只提供可验证、可回读的本地加工。</string></property><property name="wordWrap"><bool>true</bool></property><property name="styleSheet"><string notr="true">color:#71829D;</string></property></widget></item>
+         <item><widget class="QListWidget" name="operationList"><property name="minimumSize"><size><width>0</width><height>400</height></size></property><property name="selectionMode"><enum>QAbstractItemView::SelectionMode::SingleSelection</enum></property></widget></item>
+        </layout>
+       </widget>
+      </item>
+      <item>
+       <widget class="QFrame" name="editorPane">
+        <layout class="QVBoxLayout" name="editorLayout">
+         <property name="spacing"><number>12</number></property><property name="leftMargin"><number>22</number></property><property name="topMargin"><number>18</number></property><property name="rightMargin"><number>22</number></property><property name="bottomMargin"><number>18</number></property>
+         <item><widget class="QLabel" name="scopeLabel"><property name="text"><string>当前数据范围</string></property><property name="styleSheet"><string notr="true">color:#2563EB; font-weight:600;</string></property></widget></item>
+         <item><widget class="QLabel" name="operationTitle"><property name="text"><string>四则计算 / 比率</string></property></widget></item>
+         <item><widget class="QLabel" name="operationDescription"><property name="wordWrap"><bool>true</bool></property><property name="text"><string>选择一个操作后配置字段。</string></property></widget></item>
+         <item>
+          <layout class="QFormLayout" name="formLayout">
+           <property name="horizontalSpacing"><number>14</number></property><property name="verticalSpacing"><number>10</number></property><property name="labelAlignment"><set>Qt::AlignmentFlag::AlignRight|Qt::AlignmentFlag::AlignVCenter</set></property>
+           <item row="0" column="0"><widget class="QLabel" name="primaryLabel"><property name="text"><string>主字段</string></property></widget></item><item row="0" column="1"><widget class="QComboBox" name="primaryCombo"/></item>
+           <item row="1" column="0"><widget class="QLabel" name="secondaryLabel"><property name="text"><string>第二字段</string></property></widget></item><item row="1" column="1"><widget class="QComboBox" name="secondaryCombo"/></item>
+           <item row="2" column="0"><widget class="QLabel" name="arithmeticLabel"><property name="text"><string>计算方式</string></property></widget></item><item row="2" column="1"><widget class="QComboBox" name="arithmeticCombo"/></item>
+           <item row="3" column="0"><widget class="QLabel" name="datePartLabel"><property name="text"><string>拆分维度</string></property></widget></item><item row="3" column="1"><widget class="QComboBox" name="datePartCombo"/></item>
+           <item row="4" column="0"><widget class="QLabel" name="roundDigitsLabel"><property name="text"><string>保留位数</string></property></widget></item><item row="4" column="1"><widget class="QComboBox" name="roundDigitsCombo"/></item>
+           <item row="5" column="0"><widget class="QLabel" name="resultNameLabel"><property name="text"><string>新字段名称</string></property></widget></item><item row="5" column="1"><widget class="QLineEdit" name="resultNameEdit"><property name="placeholderText"><string>可留空，系统生成安全名称</string></property></widget></item>
+          </layout>
+         </item>
+         <item>
+          <widget class="QFrame" name="queueFrame">
+           <layout class="QVBoxLayout" name="queueLayout">
+            <property name="spacing"><number>6</number></property><property name="leftMargin"><number>10</number></property><property name="topMargin"><number>9</number></property><property name="rightMargin"><number>10</number></property><property name="bottomMargin"><number>9</number></property>
+            <item><layout class="QHBoxLayout" name="queueHeaderLayout"><item><widget class="QLabel" name="queueTitle"><property name="text"><string>本次新增字段</string></property><property name="styleSheet"><string notr="true">font-weight:700;color:#1E315A;</string></property></widget></item><item><spacer name="queueHeaderFill"><property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>20</width><height>20</height></size></property></spacer></item><item><widget class="QPushButton" name="removeQueueButton"><property name="minimumSize"><size><width>84</width><height>30</height></size></property><property name="text"><string>移除选中</string></property></widget></item><item><widget class="QPushButton" name="addQueueButton"><property name="minimumSize"><size><width>114</width><height>30</height></size></property><property name="text"><string>加入本次加工</string></property></widget></item></layout></item>
+            <item><widget class="QListWidget" name="queueList"><property name="minimumSize"><size><width>0</width><height>92</height></size></property><property name="maximumSize"><size><width>16777215</width><height>210</height></size></property><property name="selectionMode"><enum>QAbstractItemView::SelectionMode::SingleSelection</enum></property></widget></item>
+            <item><widget class="QLabel" name="queueHint"><property name="wordWrap"><bool>true</bool></property><property name="text"><string>尚未加入加工项。每一项只追加一个新字段，源字段不会被覆盖。</string></property></widget></item>
+           </layout>
+          </widget>
+         </item>
+         <item><spacer name="editorSpacer"><property name="orientation"><enum>Qt::Orientation::Vertical</enum></property><property name="sizePolicy"><sizepolicy hsizetype="Minimum" vsizetype="Expanding"><horstretch>0</horstretch><verstretch>0</verstretch></sizepolicy></property><property name="sizeHint" stdset="0"><size><width>20</width><height>20</height></size></property></spacer></item>
+         <item><widget class="QLabel" name="statusLabel"><property name="wordWrap"><bool>true</bool></property><property name="text"><string>先加入本次加工；可继续添加最多 12 项，再统一生成预览。</string></property></widget></item>
+        </layout>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="footerLayout">
+     <item><spacer name="footerSpacer"><property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property></spacer></item>
+     <item><widget class="QPushButton" name="cancelButton"><property name="minimumSize"><size><width>96</width><height>38</height></size></property><property name="text"><string>取消</string></property></widget></item>
+     <item><widget class="QPushButton" name="previewButton"><property name="minimumSize"><size><width>132</width><height>38</height></size></property><property name="text"><string>统一生成预览</string></property><property name="toolTip"><string>只计算全部新增字段的样例和影响范围，不写入文件</string></property></widget></item>
+    </layout>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

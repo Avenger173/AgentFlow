@@ -1,0 +1,36 @@
+id: data_agent
+name: 数据工作台
+description: 对用户明确导入的 Excel/CSV 建立受控数据画像，并在后续生成可编辑的分析工作簿。
+category: 数据分析
+version: 0.1.0
+icon: icons/data.svg
+sort_order: 30
+enabled: true
+# D5.4 只开放一个窄的 Commander action：单份已导入数据的只读预览。字段加工、PNG 和 Excel
+# 交付仍由数据工作台内客户明确确认的独立任务负责，不能被此标记扩大为任意文件写入能力。
+runtime_ready: true
+health: ready
+maturity: mvp
+llm:
+  provider: inherit
+  model: inherit
+  allow_override: true
+tools:
+  - data.inspect_file
+  - data.profile_table
+  - data.preview_analysis
+permissions:
+  file_read: true
+  file_write: false
+  network: false
+  shell: false
+  database: false
+ui:
+  type: qt_builtin_page
+  config: data_workspace
+capabilities:
+  - Excel/CSV 受控导入
+  - 工作表与表头识别
+  - 有限预览
+  - 数据质量画像
+  - 只读趋势/对比与图表建议

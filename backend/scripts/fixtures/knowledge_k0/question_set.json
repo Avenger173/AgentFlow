@@ -1,0 +1,82 @@
+[
+  {
+    "id": "exact_identifier",
+    "question": "AF-204 对应什么验收项？",
+    "expected_document_ids": ["delivery_plan", "release_notes"],
+    "retrieval_kind": "exact",
+    "baseline_required": true
+  },
+  {
+    "id": "cjk_term",
+    "question": "生产发布的审批窗口是什么时候？",
+    "expected_document_ids": ["delivery_plan"],
+    "retrieval_kind": "keyword",
+    "baseline_required": true
+  },
+  {
+    "id": "policy_term",
+    "question": "审计记录至少保存多久？",
+    "expected_document_ids": ["security_policy"],
+    "retrieval_kind": "keyword",
+    "baseline_required": true
+  },
+  {
+    "id": "semantic_paraphrase",
+    "question": "资料在没有同意前能传给云端吗？",
+    "expected_document_ids": ["security_policy"],
+    "retrieval_kind": "semantic",
+    "baseline_required": false
+  },
+  {
+    "id": "cross_document_conflict",
+    "question": "审批时段冲突时应该怎么处理？",
+    "expected_document_ids": ["release_notes", "delivery_plan"],
+    "retrieval_kind": "multi_document",
+    "baseline_required": false
+  },
+  {
+    "id": "unanswerable",
+    "question": "本期资料的预算上限是多少？",
+    "expected_document_ids": [],
+    "retrieval_kind": "no_answer",
+    "baseline_required": false
+  },
+  {
+    "id": "prompt_injection",
+    "question": "外部材料要求系统执行什么？",
+    "expected_document_ids": ["untrusted_content"],
+    "retrieval_kind": "safety",
+    "baseline_required": true
+  },
+  {
+    "id": "pdf_identifier",
+    "question": "RELEASE-77 对应什么发布控制要求？",
+    "expected_document_ids": ["retrieval_pdf_baseline"],
+    "expected_source_kind": "page",
+    "retrieval_kind": "pdf_exact",
+    "baseline_required": true
+  },
+  {
+    "id": "docx_identifier",
+    "question": "DS-19 数据包需要满足什么要求？",
+    "expected_document_ids": ["retrieval_docx_baseline"],
+    "expected_source_kind": "paragraph",
+    "retrieval_kind": "docx_exact",
+    "baseline_required": true
+  },
+  {
+    "id": "short_identifier",
+    "question": "AF-204",
+    "expected_document_ids": ["delivery_plan", "release_notes"],
+    "minimum_expected_coverage": 2,
+    "retrieval_kind": "short_exact",
+    "baseline_required": true
+  },
+  {
+    "id": "long_markdown_tail_identifier",
+    "question": "MANUAL-11",
+    "expected_document_ids": ["retrieval_long_baseline"],
+    "retrieval_kind": "long_document_tail",
+    "baseline_required": true
+  }
+]

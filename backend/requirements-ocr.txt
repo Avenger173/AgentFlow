@@ -1,0 +1,5 @@
+# K7 OCR 是明确可选的本地能力：默认 backend requirements 不安装这些大型 CPU 推理依赖。
+# 仅在客户已确认“准备本地 OCR 模型”的发行 profile / 安装流程中使用本文件。
+-r requirements.txt
+paddlepaddle==3.3.1
+paddleocr==3.7.0
