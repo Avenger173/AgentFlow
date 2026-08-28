@@ -10965,6 +10965,21 @@ bool MainWindow::isCurrentDispatchAutoReadOnlyTask() const
     return currentDispatchDirectKnowledgeAnswer || currentDispatchDirectDataAnalysis;
 }
 
+bool MainWindow::isCurrentDispatchDataChartDelivery() const
+{
+    // 只识别既有的单数据图表写入闭环。它需要客户确认，不能因为含有“图表”一词就把任意
+    // 数据分析任务当成已授权写盘；实际动作和文件边界仍由后端 Runtime 二次校验。
+    bool hasAnalysis = false;
+    bool hasChartExport = false;
+    for (const WorkflowStepInfo &step : currentDispatchPlanSteps) {
+        hasAnalysis = hasAnalysis || (step.agent == QStringLiteral("data_agent")
+                                      && step.action == QStringLiteral("analyze_dataset"));
+        hasChartExport = hasChartExport || (step.agent == QStringLiteral("data_agent")
+                                            && step.action == QStringLiteral("export_chart_dashboard"));
+    }
+    return hasAnalysis && hasChartExport;
+}
+
 bool MainWindow::isCurrentDispatchDirectConversation() const
 {
     // 只有没有专业步骤、没有材料副作用也没有澄清问题的普通问答才能直接收束。计划仍会
@@ -18958,12 +18973,15 @@ void MainWindow::submitDispatchMessage(const QString &message,
     currentDispatchExecutionSubmitted = false;
     currentDispatchDirectKnowledgeAnswer = false;
     currentDispatchDirectDataAnalysis = false;
+    currentDispatchDataChartDelivery = false;
     currentDispatchAutoExecutePending = false;
     currentDispatchKnowledgeAnswerResultRequested = false;
     currentDispatchKnowledgeAnswerDelivered = false;
     currentDispatchDataAnalysisDelivered = false;
+    currentDispatchDataChartDeliveryDelivered = false;
     currentDispatchKnowledgeAnswerFailed = false;
     currentDispatchDataAnalysisFailed = false;
+    currentDispatchDataChartDeliveryFailed = false;
     currentDispatchKnowledgeAnswerChildTaskId.clear();
     currentDispatchRuntimeMode.clear();
     currentDispatchRuntimeStatus.clear();
@@ -19038,8 +19056,11 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
     currentDispatchKnowledgeAnswerFailed = false;
     currentDispatchDirectKnowledgeAnswer = isCurrentDispatchDirectKnowledgeAnswer();
     currentDispatchDirectDataAnalysis = isCurrentDispatchDirectDataAnalysis();
+    currentDispatchDataChartDelivery = isCurrentDispatchDataChartDelivery();
     currentDispatchDataAnalysisDelivered = false;
+    currentDispatchDataChartDeliveryDelivered = false;
     currentDispatchDataAnalysisFailed = false;
+    currentDispatchDataChartDeliveryFailed = false;
     currentDispatchAutoExecutePending = isCurrentDispatchAutoReadOnlyTask();
 
     ui->summaryVal0->setText(result.taskId);
@@ -19054,6 +19075,8 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
         taskSummary = QStringLiteral("待转入数据工作台");
     } else if (currentDispatchDirectDataAnalysis) {
         taskSummary = QStringLiteral("正在准备数据分析");
+    } else if (currentDispatchDataChartDelivery) {
+        taskSummary = QStringLiteral("等待确认图表交付");
     }
     ui->summaryVal3->setText(taskSummary);
 
@@ -19073,6 +19096,11 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
     } else if (currentDispatchDirectDataAnalysis) {
         appendConversationHtml(
             QStringLiteral("<hr/><h3>AI 调度台</h3><p>正在分析已选数据，完成后会直接给出主要趋势、差异和图表建议。</p>"));
+    } else if (currentDispatchDataChartDelivery) {
+        appendConversationHtml(
+            QStringLiteral("<hr/><h3>AI 调度台</h3><p><b>图表交付计划已准备。</b></p>"
+                           "<p>我会先复用当前数据的受控分析，再生成新的 PNG 图表；原始数据不会被修改。"
+                           "请直接回复“开始执行”确认写入。</p>"));
     } else if (currentDispatchPresentationHandoff) {
         appendConversationHtml(
             QStringLiteral("<hr/><h3>AI 调度台</h3><p>已打开“智能制作 PPT”，并带入你的主题。你可以先查看或调整创作计划，再确认导出 PPTX。</p>"));
@@ -19101,6 +19129,8 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
         dispatchStatus = QStringLiteral("待补充");
     } else if (autoReadOnlyTask) {
         dispatchStatus = currentDispatchAutoReadOnlyActivityText();
+    } else if (currentDispatchDataChartDelivery) {
+        dispatchStatus = QStringLiteral("等待确认图表交付");
     } else if (currentDispatchPresentationHandoff) {
         dispatchStatus = QStringLiteral("已打开智能制作 PPT");
     } else if (currentDispatchGuidedHandoff) {
@@ -19131,6 +19161,10 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
     } else if (currentDispatchDirectDataAnalysis) {
         stageThree = QStringLiteral("3 数据分析 · 正在准备");
         stageFour = QStringLiteral("4 权限 / 产物 · 无需额外确认");
+    } else if (currentDispatchDataChartDelivery) {
+        stageThree = QStringLiteral("3 图表交付 · 等待你的自然语言确认");
+        stageFour = QStringLiteral("4 权限 / 产物 · 确认后新建 PNG");
+        stageFive = QStringLiteral("5 当前结论 · 图表计划已准备");
     } else if (currentDispatchPresentationHandoff) {
         stageThree = QStringLiteral("3 智能制作 PPT · 已带入主题");
         stageFour = QStringLiteral("4 权限 / 产物 · 导出前单独确认");
@@ -19615,7 +19649,7 @@ void MainWindow::applyDispatchTaskUpdates(const WorkflowTaskUpdateListResult &re
                     conclusion = QStringLiteral("数据分析已完成，但当前没有可展示的结论摘要；请在查看历史中打开关联任务。");
                 }
                 appendConversationHtml(formatDispatchAssistantMessageHtml(
-                    QStringLiteral("## 数据分析结果\n\n%1\n\n> 已基于本次受控数据完成只读预览；源文件没有被修改。图表或 Excel 交付仍可在数据工作台确认。\n")
+                    QStringLiteral("## 数据分析结果\n\n%1\n\n> 已基于本次受控数据完成只读预览；源文件没有被修改。需要图表时，直接回复“生成图表”即可，我会先给出交付计划。\n")
                         .arg(conclusion)));
                 currentDispatchDataAnalysisDelivered = true;
             }
@@ -19635,6 +19669,54 @@ void MainWindow::applyDispatchTaskUpdates(const WorkflowTaskUpdateListResult &re
                     QStringLiteral("<hr/><h3>AI 调度台</h3>"
                                    "<p style=\"color:#B45309;\"><b>这次数据分析没有完成。</b></p>"
                                    "<p>源数据没有被修改。请在“查看历史”中确认文件画像和运行原因后重试。</p>"));
+            }
+            setDispatchActivityRunning(false);
+        }
+    } else if (currentDispatchDataChartDelivery && latestState
+               && currentDispatchRuntimeMode == QStringLiteral("runtime")) {
+        if (latestState->status == QStringLiteral("completed")) {
+            if (!currentDispatchDataChartDeliveryDelivered) {
+                const QJsonObject retrospective = latestState->payload
+                    .value(QStringLiteral("task_retrospective")).toObject();
+                const QJsonArray delegations = retrospective.value(QStringLiteral("delegations")).toArray();
+                QString chartSummary;
+                // QJsonArray 没有 STL 的反向迭代器；按索引逆序读取，确保同一父任务内先拿到
+                // 最后完成的图表交付子任务，而不是前一个只读分析子任务。
+                for (int index = delegations.size() - 1; index >= 0; --index) {
+                    const QJsonObject delegation = delegations.at(index).toObject();
+                    const QString delegatedTaskId = delegation.value(QStringLiteral("task_id")).toString();
+                    if (delegation.value(QStringLiteral("agent_id")).toString() == QStringLiteral("data_agent")
+                        && delegatedTaskId.startsWith(QStringLiteral("task_data_chart_"))
+                        && delegation.value(QStringLiteral("status")).toString() == QStringLiteral("completed")) {
+                        chartSummary = delegation.value(QStringLiteral("summary")).toString().trimmed();
+                        break;
+                    }
+                }
+                if (chartSummary.isEmpty()) {
+                    chartSummary = QStringLiteral("已生成并回读验证本次图表 PNG 交付物。");
+                }
+                appendConversationHtml(formatDispatchAssistantMessageHtml(
+                    QStringLiteral("## 图表交付已完成\n\n%1\n\n"
+                                   "> 图表已生成到本次受控交付中，源 CSV/XLSX 没有被修改。完整预览与打开入口会保留在任务历史，也会随会话恢复展示。")
+                        .arg(chartSummary)));
+                currentDispatchDataChartDeliveryDelivered = true;
+            }
+            ui->dispatchChatStatus->setText(QStringLiteral("图表已交付"));
+            ui->summaryVal3->setText(QStringLiteral("已生成并验证图表交付"));
+            setProgressStep(5, QStringLiteral("5 当前结论 · 图表已生成并验证"), QStringLiteral("badgeGreen"));
+            setDispatchActivityRunning(false);
+        } else if (latestState->status == QStringLiteral("failed")
+                   || latestState->status == QStringLiteral("blocked")
+                   || latestState->status == QStringLiteral("cancelled")) {
+            if (!currentDispatchDataChartDeliveryFailed) {
+                currentDispatchDataChartDeliveryFailed = true;
+                ui->dispatchChatStatus->setText(QStringLiteral("图表交付未完成"));
+                ui->summaryVal3->setText(QStringLiteral("源数据未被修改"));
+                setProgressStep(5, QStringLiteral("5 当前结论 · 图表交付未完成"), QStringLiteral("badgeOrange"));
+                appendConversationHtml(
+                    QStringLiteral("<hr/><h3>AI 调度台</h3>"
+                                   "<p style=\"color:#B45309;\"><b>这次图表交付没有完成。</b></p>"
+                                   "<p>源数据没有被修改。你可以直接调整目标后再次发送，我会重新生成受控交付计划。</p>"));
             }
             setDispatchActivityRunning(false);
         }

@@ -28,6 +28,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.schemas.chat import WorkflowMaterialBinding, WorkflowPlanPreferences  # noqa: E402
 from app.services.agent_catalog import list_agents  # noqa: E402
 from app.services.commander import create_commander_plan  # noqa: E402
+from app.services.conversation_memory import prepare_conversation  # noqa: E402
 from app.workflow.dry_run import run_workflow_dry_run  # noqa: E402
 from main import app  # noqa: E402
 
@@ -70,6 +71,12 @@ def main() -> None:
             origin="client_selected",
             usage="客户明确要求分析并生成可保存图表。",
         )
+        prepared_conversation = prepare_conversation(
+            conversation_id="",
+            project_scope="global",
+            message="请分析当前 CSV 的月度趋势和区域差异，并制作可保存的图表 PNG。",
+            supplied_materials=[material],
+        )
 
         # `auto_approve` 仅用于离线验收“客户已经回复开始执行”的后续权限策略；生产环境
         # 默认 smart_confirm 仍会保留文件写入确认。图表节点本身继续把 file_write 写入计划。
@@ -78,6 +85,7 @@ def main() -> None:
             available_agents=agents,
             materials=[material],
             preferences=WorkflowPlanPreferences(permission_policy="auto_approve"),
+            conversation_id=prepared_conversation.context.session.conversation_id,
         )
         assert plan.validation_errors == [], plan.validation_errors
         analysis_step = next(step for step in plan.steps if step.action == "analyze_dataset")
@@ -126,7 +134,20 @@ def main() -> None:
         )
         assert sha256(source_path.read_bytes()).hexdigest() == source_hash_before
 
-    print("Commander chart delivery verification passed: plan=two-step runtime=completed png=audited source_unchanged=true")
+        # 图表是客户明确确认后的写入型交付，但完成后也必须回到同一段调度会话，不能只让
+        # 客户去数据工作台或任务历史猜测结果。该断言同时覆盖 Runtime 的稳定交付 ID 去重。
+        conversation_id = prepared_conversation.context.session.conversation_id
+        messages = client.get(f"/api/chat/conversations/{conversation_id}/messages").json()["messages"]
+        deliveries = [
+            item["content"]
+            for item in messages
+            if item["role"] == "assistant" and "图表交付已完成" in item["content"]
+        ]
+        assert len(deliveries) == 1, deliveries
+        assert "通过像素回读验证" in deliveries[0]
+        assert "源 CSV/XLSX 没有被修改" in deliveries[0]
+
+    print("Commander chart delivery verification passed: plan=two-step runtime=completed png=audited chat_delivery=once source_unchanged=true")
 
 
 if __name__ == "__main__":

@@ -51,6 +51,7 @@ from app.services.data_analysis_delegate import (
 )
 from app.services.data_chart_delivery import (
     create_data_chart_queued_run,
+    get_data_chart_export_task_result,
     run_data_chart_export_task,
 )
 from app.services.data_workspace import get_data_dataset_profile
@@ -305,6 +306,7 @@ def run_prepared_workflow_runtime(
     )
     _persist_direct_knowledge_answer_delivery(plan=plan, run=run)
     _persist_direct_data_analysis_delivery(plan=plan, run=run)
+    _persist_data_chart_delivery(plan=plan, run=run)
     return run
 
 
@@ -456,7 +458,7 @@ def _persist_direct_data_analysis_delivery(*, plan: WorkflowPlan, run: WorkflowR
     delivery = (
         "## 数据分析结果\n\n"
         f"### {headline or '数据分析结果'}\n\n{conclusion}\n\n"
-        "> 已基于本次受控数据完成只读预览；源文件没有被修改。图表或 Excel 交付仍需在数据工作台确认。"
+        "> 已基于本次受控数据完成只读预览；源文件没有被修改。需要图表时，直接在此会话回复“生成图表”即可，我会先给出交付计划。"
     )
     try:
         # 异步会话交付以子任务 ID 去重；Runtime 恢复不会重复插入同一份最终结论。
@@ -466,6 +468,78 @@ def _persist_direct_data_analysis_delivery(*, plan: WorkflowPlan, run: WorkflowR
             assistant_message=delivery,
         )
     except Exception:
+        return
+
+
+def _is_data_chart_delivery_plan(plan: WorkflowPlan) -> bool:
+    """识别已在聊天中确认、且只处理一份数据的图表交付计划。
+
+    图表写入必须保留 ``file_write`` 的确认边界，因此它不能混入只读自动执行白名单；但一旦
+    Runtime 已经完成，最终文件同样应直接回到客户原会话，不能再把客户赶回数据工作台找结果。
+    """
+
+    specialists = [step for step in plan.steps if step.agent != "commander_agent"]
+    if len(specialists) != 2:
+        return False
+    analysis_step = next(
+        (step for step in specialists if step.agent == "data_agent" and step.action == "analyze_dataset"),
+        None,
+    )
+    chart_step = next(
+        (step for step in specialists if step.agent == "data_agent" and step.action == "export_chart_dashboard"),
+        None,
+    )
+    if analysis_step is None or chart_step is None or analysis_step.id not in chart_step.depends_on:
+        return False
+    dataset_name = str(analysis_step.input.get("dataset_name", "")).strip()
+    return bool(dataset_name and dataset_name == str(chart_step.input.get("dataset_name", "")).strip())
+
+
+def _persist_data_chart_delivery(*, plan: WorkflowPlan, run: WorkflowRun) -> None:
+    """把已验证 PNG 的客户交付摘要追加到原会话。
+
+    父 Runtime 只保存脱敏委派回执；这里按已保存的子任务 ID 回读其经过像素验证的 artifact。
+    会话层继续使用子任务 ID 幂等写入，因此 Runtime 重试、进程恢复或状态轮询都不会重复插入。
+    """
+
+    if run.status != "completed" or not plan.conversation_id or not _is_data_chart_delivery_plan(plan):
+        return
+    chart_step = next(step for step in plan.steps if step.action == "export_chart_dashboard")
+    step_run = next((item for item in run.steps if item.step_id == chart_step.id), None)
+    result = step_run.output.get("result") if step_run is not None else None
+    delegated_task_id = str(result.get("delegated_task_id", "")).strip() if isinstance(result, dict) else ""
+    if not delegated_task_id:
+        return
+
+    try:
+        delegated = get_data_chart_export_task_result(delegated_task_id)
+        if (
+            delegated is None
+            or delegated.status != "completed"
+            or delegated.verification is None
+            or not delegated.verification.passed
+            or not delegated.artifacts
+        ):
+            return
+        chart_lines = [
+            f"- **{artifact.title}** · {artifact.chart_type} · {artifact.width} × {artifact.height}"
+            for artifact in delegated.artifacts[:4]
+        ]
+        dataset_name = str(chart_step.input.get("dataset_name", "当前数据")).strip() or "当前数据"
+        delivery = (
+            "## 图表交付已完成\n\n"
+            f"已基于 **{dataset_name}** 生成 {len(delegated.artifacts)} 张 PNG 图表，并通过像素回读验证。\n\n"
+            "### 本次图表\n"
+            + "\n".join(chart_lines)
+            + "\n\n> 源 CSV/XLSX 没有被修改。图表已作为本次会话的受控交付保存；完整预览与打开入口会在调度台结果卡中逐步补齐，当前也可从任务历史重新打开。"
+        )
+        persist_async_assistant_delivery(
+            conversation_id=plan.conversation_id,
+            task_id=delegated_task_id,
+            assistant_message=delivery,
+        )
+    except Exception:
+        # 会话归档失败不能撤销已经经过 PNG 回读验证的本地交付；任务历史仍保留完整 artifact。
         return
 
 
