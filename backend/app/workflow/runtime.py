@@ -298,6 +298,7 @@ def run_prepared_workflow_runtime(
         event_reporter=event_reporter,
     )
     _persist_direct_knowledge_answer_delivery(plan=plan, run=run)
+    _persist_direct_data_analysis_delivery(plan=plan, run=run)
     return run
 
 
@@ -395,6 +396,64 @@ def _persist_direct_knowledge_answer_delivery(*, plan: WorkflowPlan, run: Workfl
             delivery += "\n\n### 参考来源\n" + "\n".join(source_lines)
         # 会话归档不可用不应撤销已经完成并写入任务历史的专业问答；下一次恢复或新问题仍可从
         # 任务历史访问该子任务，稳定 message_id 也会防止恢复后产生重复交付。
+        persist_async_assistant_delivery(
+            conversation_id=plan.conversation_id,
+            task_id=delegated_task_id,
+            assistant_message=delivery,
+        )
+    except Exception:
+        return
+
+
+def _is_direct_data_analysis_plan(plan: WorkflowPlan) -> bool:
+    """识别唯一可自动交付到会话的单数据集只读分析。"""
+
+    if (
+        plan.execution_readiness != "ready"
+        or plan.requires_confirmation
+        or plan.workspace_scope.write_paths
+        or plan.workspace_scope.external_services
+    ):
+        return False
+    specialists = [step for step in plan.steps if step.agent != "commander_agent"]
+    if len(specialists) != 1:
+        return False
+    step = specialists[0]
+    return (
+        not step.requires_confirmation
+        and step.agent == "data_agent"
+        and step.action == "analyze_dataset"
+        and step.execution_mode == "execute"
+        and bool(str(step.input.get("dataset_name", "")).strip())
+    )
+
+
+def _persist_direct_data_analysis_delivery(*, plan: WorkflowPlan, run: WorkflowRun) -> None:
+    """把已脱敏的数据结论追加到原会话，保留源表不进入会话与父任务正文。"""
+
+    if (
+        run.status != "completed"
+        or not plan.conversation_id
+        or not _is_direct_data_analysis_plan(plan)
+    ):
+        return
+    data_step = next(step for step in plan.steps if step.agent == "data_agent")
+    step_run = next((item for item in run.steps if item.step_id == data_step.id), None)
+    result = step_run.output.get("result") if step_run is not None else None
+    if not isinstance(result, dict) or result.get("agent_status") != "completed":
+        return
+    delegated_task_id = str(result.get("delegated_task_id", "")).strip()
+    conclusion = str(result.get("reply", "")).strip()
+    if not delegated_task_id or not conclusion:
+        return
+    headline = str(result.get("insight_headline", "数据分析结果")).strip()[:80]
+    delivery = (
+        "## 数据分析结果\n\n"
+        f"### {headline or '数据分析结果'}\n\n{conclusion}\n\n"
+        "> 已基于本次受控数据完成只读预览；源文件没有被修改。图表或 Excel 交付仍需在数据工作台确认。"
+    )
+    try:
+        # 异步会话交付以子任务 ID 去重；Runtime 恢复不会重复插入同一份最终结论。
         persist_async_assistant_delivery(
             conversation_id=plan.conversation_id,
             task_id=delegated_task_id,

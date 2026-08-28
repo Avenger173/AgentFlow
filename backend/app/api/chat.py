@@ -21,8 +21,8 @@ from fastapi import APIRouter, HTTPException
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 
-def _is_direct_knowledge_answer_plan(plan: WorkflowPlan | None) -> bool:
-    """仅识别可自动执行的单资料库只读问答，保持聊天归档与 Runtime 同一边界。"""
+def _automatic_read_only_activity(plan: WorkflowPlan | None) -> str:
+    """返回可自动受理的单材料只读动作，其他计划一律保留既有确认流程。"""
 
     if (
         plan is None
@@ -31,18 +31,18 @@ def _is_direct_knowledge_answer_plan(plan: WorkflowPlan | None) -> bool:
         or plan.workspace_scope.write_paths
         or plan.workspace_scope.external_services
     ):
-        return False
+        return ""
     specialists = [step for step in plan.steps if step.agent != "commander_agent"]
     if len(specialists) != 1:
-        return False
+        return ""
     step = specialists[0]
-    return (
-        not step.requires_confirmation
-        and step.agent == "knowledge_agent"
-        and step.action == "answer_question"
-        and step.execution_mode == "execute"
-        and bool(str(step.input.get("knowledge_base_id", "")).strip())
-    )
+    if step.requires_confirmation or step.execution_mode != "execute":
+        return ""
+    if step.agent == "knowledge_agent" and step.action == "answer_question":
+        return "knowledge" if str(step.input.get("knowledge_base_id", "")).strip() else ""
+    if step.agent == "data_agent" and step.action == "analyze_dataset":
+        return "data" if str(step.input.get("dataset_name", "")).strip() else ""
+    return ""
 
 
 @router.get("/conversations", response_model=ConversationSessionList)
@@ -152,12 +152,17 @@ async def chat(request: ChatRequest) -> ChatResponse:
             conversation=prepared_conversation,
         )
 
-    if _is_direct_knowledge_answer_plan(response.workflow_plan):
+    automatic_activity = _automatic_read_only_activity(response.workflow_plan)
+    if automatic_activity:
         # 规划模型的长篇解释属于 Inspector，而不是客户会话。先保存一句真实状态，Runtime 完成后
         # 仅由 K3 Gate 已验证的最终答案追加回同一会话，避免重启后恢复一段“计划书”却看不到结论。
-        response = response.model_copy(
-            update={"reply": "已收到，正在检索已选资料库；完成后会直接给出带来源的回答。"}
-        )
+        response = response.model_copy(update={
+            "reply": (
+                "已收到，正在检索已选资料库；完成后会直接给出带来源的回答。"
+                if automatic_activity == "knowledge"
+                else "已收到，正在分析已选数据；完成后会直接给出趋势、差异和图表建议。"
+            )
+        })
 
     # 会话材料只以 Commander 已规范化的 plan 快照为准；因此客户端自填的非法相对引用不会
     # 被存成下一轮可复用范围。无计划的普通聊天才回退到本轮已准备的有限材料列表。

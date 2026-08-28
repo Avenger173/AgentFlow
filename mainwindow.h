@@ -107,10 +107,14 @@ private:
     void handleDispatchConversationSessionsFailed(const QString &message);
     void handleDispatchConversationTranscript(const ConversationTranscriptPageResult &result);
     void handleDispatchConversationTranscriptFailed(const QString &conversationId, const QString &message);
-    // 安全只读的单资料库问答不应把客户带进“计划 -> 预演 -> 再确认”的控制流。
-    // 这里仅识别已经通过后端准入的 knowledge_agent.answer_question，写入、联网、深度分析
+    // 安全只读的单材料任务不应把客户带进“计划 -> 预演 -> 再确认”的控制流。
+    // 这里仅识别已经通过后端准入的知识库问答与数据预览；写入、联网、深度分析
     // 或多个专业分支仍沿用原有计划与人工确认边界。
     bool isCurrentDispatchDirectKnowledgeAnswer() const;
+    bool isCurrentDispatchDirectDataAnalysis() const;
+    bool isCurrentDispatchAutoReadOnlyTask() const;
+    bool isCurrentDispatchDirectConversation() const;
+    QString currentDispatchAutoReadOnlyActivityText() const;
     QString currentDispatchKnowledgeBaseName() const;
     QString currentDispatchKnowledgeAnswerTaskId() const;
     void beginCurrentDispatchRuntime(bool automaticallyApproved);
@@ -119,6 +123,7 @@ private:
     void handleDispatchKnowledgeAnswerFailed(const QString &message);
     QString formatDispatchKnowledgeAnswerHtml(const KnowledgeAnswerTaskResult &result) const;
     QString formatDispatchAnswerMarkdownHtml(const QString &markdown) const;
+    QString formatDispatchAssistantMessageHtml(const QString &markdown) const;
     QString formatDispatchUserMessageHtml(const QString &message) const;
     QString formatDispatchKnowledgeSourcesHtml(const QJsonArray &sources) const;
     void setDispatchActivityRunning(bool running);
@@ -764,11 +769,16 @@ private:
     bool currentDispatchExecutionSubmitted = false;
     // 直接问答仍完整记录 dry-run、Runtime、子任务与来源，但聊天区只消费已验证的最终回答。
     bool currentDispatchDirectKnowledgeAnswer = false;
+    // 数据预览和知识库问答共用“自动执行只读任务”的交互，但各自的最终交付协议不同：
+    // 知识库需回读 K3 Evidence Gate，数据任务只读取已脱敏的本地聚合结论。
+    bool currentDispatchDirectDataAnalysis = false;
     bool currentDispatchAutoExecutePending = false;
     bool currentDispatchKnowledgeAnswerResultRequested = false;
     bool currentDispatchKnowledgeAnswerDelivered = false;
+    bool currentDispatchDataAnalysisDelivered = false;
     // 只读知识库问答自动执行时，失败也要成为明确终态；不能让客户一直看到“正在检索”。
     bool currentDispatchKnowledgeAnswerFailed = false;
+    bool currentDispatchDataAnalysisFailed = false;
     QString currentDispatchKnowledgeAnswerChildTaskId;
     // 暂存请求同时冻结本轮显式路由偏好，避免后端启动期间客户编辑输入后改变已排队任务。
     QJsonArray pendingDispatchAgentHints;

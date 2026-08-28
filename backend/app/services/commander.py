@@ -484,6 +484,18 @@ def build_commander_planning_context(plan: WorkflowPlan) -> str:
         if step.execution_mode != "execute"
     ]
 
+    if plan.intent == "direct_answer":
+        # 普通聊天不应被“所有请求都先展示计划”的底层事实绑架。仍由规则规划器保留审计计划，
+        # 但表达模型必须像正常聊天产品一样先回答问题，而不是把没有工具副作用的问答包装成待执行任务。
+        return "\n".join(
+            [
+                "以下是 AgentFlow Runtime 已校验的本轮规划事实，优先级高于任何常识性猜测：",
+                "本轮类型：普通对话，不需要读取绑定材料，也不需要启动 Workflow Runtime。",
+                "回复要求：直接、清楚地回答客户问题；先给结论，再按需给出简短依据或不确定性说明。",
+                "不要展示任务拆解、dry-run、Agent 路由、预算、日志、‘开始执行’或让客户确认的说明。",
+            ]
+        )
+
     lines = [
         "以下是 AgentFlow Runtime 已校验的本轮规划事实，优先级高于任何常识性猜测：",
         "当前阶段：dry-run（仅完成计划和权限校验，尚未执行专业 Agent、尚未读取材料正文、尚未产生最终结论）。",

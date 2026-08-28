@@ -23,6 +23,7 @@ sys.path.insert(0, str(BACKEND_ROOT))
 
 from fastapi.testclient import TestClient
 
+from app.api.chat import _automatic_read_only_activity
 from app.schemas.chat import WorkflowMaterialBinding
 from app.services.agent_catalog import list_agents
 from app.services.commander import create_commander_plan
@@ -100,6 +101,9 @@ def main() -> None:
         assert plan.next_action == "execute_after_confirm"
         assert plan.workspace_scope.read_paths == [f"data/datasets/{dataset_ref}"]
         assert plan.workspace_scope.write_paths == []
+        # 计划协议保持 `execute_after_confirm` 兼容，但桌面端和聊天 API 只会把这个极窄的
+        # 单数据集只读 action 识别为可自动受理；写入、联网和组合任务不能复用该判断。
+        assert _automatic_read_only_activity(plan) == "data"
 
         admissions = client.get("/api/agents/action-admissions")
         assert admissions.status_code == 200, admissions.text
@@ -150,6 +154,28 @@ def main() -> None:
         assert delegation["name"] == "数据工作台分析结果"
         assert delegation["uri"] == f"agentflow-task://{child_task_id}"
         assert delegation["metadata"]["delegated_task_id"] == child_task_id
+
+        # 聊天 API 对同一条安全白名单计划应先保存简短真实状态；Runtime 完成后把已经脱敏的
+        # 数据结论追加回同一会话。这里不读取原始 CSV、预览行或模型输出。
+        chat = client.post(
+            "/api/chat",
+            json={
+                "message": "请分析当前数据文件的主要趋势和可生成图表。",
+                "materials": [material.model_dump(mode="json")],
+            },
+        )
+        assert chat.status_code == 200, chat.text
+        chat_payload = chat.json()
+        assert "正在分析已选数据" in chat_payload["reply"]
+        chat_execution = client.post(f"/api/tasks/{chat_payload['task_id']}/execute")
+        assert chat_execution.status_code == 200, chat_execution.text
+        conversation_id = chat_payload["conversation_id"]
+        transcript = client.get(f"/api/chat/conversations/{conversation_id}/messages", params={"limit": 20})
+        assert transcript.status_code == 200, transcript.text
+        assistant_messages = [
+            item["content"] for item in transcript.json()["messages"] if item["role"] == "assistant"
+        ]
+        assert any("数据分析结果" in item for item in assistant_messages)
 
     assert not (VERIFY_DATA_DIR / "outputs").exists()
     print("Commander D5.4 data delegation verification passed: one-dataset read-only child task audited.")
