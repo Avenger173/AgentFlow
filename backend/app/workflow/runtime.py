@@ -26,6 +26,8 @@ from app.schemas.chat import WorkflowPlan, WorkflowStep
 from app.schemas.data_agent import (
     DataAnalysisPreviewRequest,
     DataChartExportRequest,
+    DataJoinExportRequest,
+    DataJoinPreviewRequest,
     DataTransformPreviewRequest,
     DataTransformationExportRequest,
     DataWorkbookExportRequest,
@@ -70,6 +72,12 @@ from app.services.data_transformation_delivery import (
     create_data_transformation_queued_run,
     get_data_transformation_task_result,
     run_data_transformation_task,
+)
+from app.services.data_join import DataJoinError, preview_data_join
+from app.services.data_join_delivery import (
+    create_data_join_queued_run,
+    get_data_join_task_result,
+    run_data_join_task,
 )
 from app.services.data_workspace import get_data_dataset_profile
 from app.services.knowledge_answer import (
@@ -125,6 +133,7 @@ _NON_RETRYABLE_ERROR_CODES = {
     "file_too_large",
     "data_chart_export_failed",
     "data_workbook_export_failed",
+    "data_join_failed",
 }
 
 RuntimeEventReporter = Callable[[TaskLogEvent], None]
@@ -328,6 +337,7 @@ def run_prepared_workflow_runtime(
     _persist_data_chart_delivery(plan=plan, run=run)
     _persist_data_workbook_delivery(plan=plan, run=run)
     _persist_data_transformation_delivery(plan=plan, run=run)
+    _persist_data_join_delivery(plan=plan, run=run)
     return run
 
 
@@ -693,6 +703,70 @@ def _persist_data_transformation_delivery(*, plan: WorkflowPlan, run: WorkflowRu
         )
     except Exception:
         # 会话归档失败不影响已通过回读验证的副本，任务历史仍保留完整 artifact。
+        return
+
+
+def _is_data_join_delivery_plan(plan: WorkflowPlan) -> bool:
+    """识别“关联预览 -> 新建多数据集合并副本”的两步计划。"""
+
+    specialists = [step for step in plan.steps if step.agent != "commander_agent"]
+    if len(specialists) != 2:
+        return False
+    preview_step = next(
+        (step for step in specialists if step.agent == "data_agent" and step.action == "plan_dataset_join"),
+        None,
+    )
+    export_step = next(
+        (step for step in specialists if step.agent == "data_agent" and step.action == "export_dataset_join"),
+        None,
+    )
+    if preview_step is None or export_step is None or preview_step.id not in export_step.depends_on:
+        return False
+    return preview_step.input.get("dataset_refs") == export_step.input.get("dataset_refs")
+
+
+def _persist_data_join_delivery(*, plan: WorkflowPlan, run: WorkflowRun) -> None:
+    """把已验证的合并副本直接交付到当前会话。"""
+
+    if run.status != "completed" or not plan.conversation_id or not _is_data_join_delivery_plan(plan):
+        return
+    export_step = next(step for step in plan.steps if step.action == "export_dataset_join")
+    step_run = next((item for item in run.steps if item.step_id == export_step.id), None)
+    result = step_run.output.get("result") if step_run is not None else None
+    delegated_task_id = str(result.get("delegated_task_id", "")).strip() if isinstance(result, dict) else ""
+    if not delegated_task_id:
+        return
+
+    try:
+        delegated = get_data_join_task_result(delegated_task_id)
+        if (
+            delegated is None
+            or delegated.status != "completed"
+            or delegated.artifact is None
+            or delegated.plan is None
+            or delegated.verification is None
+            or not delegated.verification.passed
+        ):
+            return
+        delivery = (
+            "## 多数据集合并副本已交付\n\n"
+            f"已按 **{delegated.plan.left_key} = {delegated.plan.right_key}** 完成"
+            f"{'左连接' if delegated.plan.join_type == 'left' else '内连接'}，生成 **{delegated.artifact.name}**。\n\n"
+            "### 本次结果\n"
+            f"- 输出行数：{delegated.output_row_count}\n"
+            f"- 匹配行数：{delegated.matched_row_count}\n"
+            f"- 左表未匹配：{delegated.left_only_row_count}\n"
+            f"- 右表未匹配：{delegated.right_only_row_count}\n"
+            f"- 输出字段：{len(delegated.verification.output_columns)}\n\n"
+            "> 两份源文件均未修改，合并副本已通过列、行数和源版本回读验证，可从本次会话或任务历史打开。"
+        )
+        persist_async_assistant_delivery(
+            conversation_id=plan.conversation_id,
+            task_id=delegated_task_id,
+            assistant_message=delivery,
+        )
+    except Exception:
+        # 会话归档失败不影响已经验证的副本，任务历史仍保存完整交付事实。
         return
 
 
@@ -2026,6 +2100,18 @@ def _execute_safe_step(
             step=step,
             attempt=attempt,
         )
+    if step.agent == "data_agent" and step.action == "plan_dataset_join":
+        return _execute_data_join_plan(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            attempt=attempt,
+        )
+    if step.agent == "data_agent" and step.action == "export_dataset_join":
+        return _execute_data_join_export(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            attempt=attempt,
+        )
     if step.agent == "document_agent" and step.action in {"extract_requirements", "summarize_document"}:
         return _execute_document_memory_tool(
             runtime_task_id=runtime_task_id,
@@ -2622,6 +2708,253 @@ def _execute_data_workbook_export_handoff(
         started_at=started_at,
         finished_at=finished_at,
         request={"action": step.action, "dataset_name": dataset_name, "goal_length": len(request.goal.strip())},
+        result=result,
+    )
+    return step_run, tool_call, [_delegated_agent_artifact(runtime_task_id, step, result)]
+
+
+def _execute_data_join_plan(
+    *,
+    runtime_task_id: str,
+    step: WorkflowStep,
+    attempt: int,
+) -> tuple[WorkflowStepRun, WorkflowToolCall, list[WorkflowArtifact]]:
+    """执行多数据集只读关联预览，不把原始行写入父任务。"""
+
+    started_at = datetime.now(UTC)
+    timeout_ms = step.timeout_ms or 120_000
+    raw_refs = step.input.get("dataset_refs")
+    dataset_refs = [str(item).strip() for item in raw_refs] if isinstance(raw_refs, list) else []
+    left_dataset = str(step.input.get("left_dataset", "")).strip()
+    right_dataset = str(step.input.get("right_dataset", "")).strip()
+    source_hashes = step.input.get("source_hashes")
+    if (
+        len(dataset_refs) != 2
+        or dataset_refs != [left_dataset, right_dataset]
+        or not left_dataset
+        or not right_dataset
+        or not isinstance(source_hashes, dict)
+    ):
+        return _failed_safe_step(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            started_at=started_at,
+            error_code="invalid_parameters",
+            message="多数据集预览必须绑定两份有序数据和两份源版本。",
+            timeout_ms=timeout_ms,
+            attempt=attempt,
+        )
+
+    try:
+        request = DataJoinPreviewRequest.model_validate(
+            {
+                "left_dataset": left_dataset,
+                "right_dataset": right_dataset,
+                "left_key": step.input.get("left_key", ""),
+                "right_key": step.input.get("right_key", ""),
+                "join_type": step.input.get("join_type", "left"),
+                "duplicate_policy": step.input.get("duplicate_policy", "reject"),
+                "source_hashes": source_hashes,
+                "goal": step.input.get("task_goal", ""),
+            }
+        )
+        preview = preview_data_join(request)
+    except Exception as exc:
+        return _failed_safe_step(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            started_at=started_at,
+            error_code="data_join_failed",
+            message="多数据集关联预览未完成；请检查关联键、重复键和数据版本。",
+            details={"reason": str(exc)[:240]},
+            timeout_ms=timeout_ms,
+            attempt=attempt,
+        )
+
+    result = {
+        "intent_version": step.input.get("intent_version", "agentflow.data_join_intent.v1"),
+        "left_dataset": left_dataset,
+        "right_dataset": right_dataset,
+        "source_hashes": source_hashes,
+        "left_key": request.left_key,
+        "right_key": request.right_key,
+        "join_type": request.join_type,
+        "output_columns": preview.plan.output_columns,
+        "output_row_count": preview.output_row_count,
+        "matched_row_count": preview.matched_row_count,
+        "left_only_row_count": preview.left_only_row_count,
+        "right_only_row_count": preview.right_only_row_count,
+        "duplicate_left_key_count": preview.duplicate_left_key_count,
+        "duplicate_right_key_count": preview.duplicate_right_key_count,
+        "warning_count": len(preview.warnings),
+        "read_only": True,
+        "reply": (
+            f"已生成两份数据的关联预览：输出 {preview.output_row_count} 行，"
+            f"匹配 {preview.matched_row_count} 行；源文件尚未修改，确认后才会创建副本。"
+        ),
+    }
+    finished_at = datetime.now(UTC)
+    step_run = WorkflowStepRun(
+        step_id=step.id,
+        agent=step.agent,
+        action=step.action,
+        status="completed",
+        message=result["reply"],
+        requires_confirmation=step.requires_confirmation,
+        risk_level=step.risk_level,
+        output={"runtime": True, "tool_name": _tool_name_for_step(step), "result": result},
+    )
+    tool_call = _completed_tool_call(
+        runtime_task_id=runtime_task_id,
+        step=step,
+        attempt=attempt,
+        timeout_ms=timeout_ms,
+        started_at=started_at,
+        finished_at=finished_at,
+        request={"action": step.action, "dataset_count": 2, "goal_length": len(request.goal.strip())},
+        result=result,
+    )
+    return step_run, tool_call, []
+
+
+def _execute_data_join_export(
+    *,
+    runtime_task_id: str,
+    step: WorkflowStep,
+    attempt: int,
+) -> tuple[WorkflowStepRun, WorkflowToolCall, list[WorkflowArtifact]]:
+    """在 Runtime 已取得写入权限后创建多数据集合并副本。"""
+
+    started_at = datetime.now(UTC)
+    timeout_ms = step.timeout_ms or 150_000
+    raw_refs = step.input.get("dataset_refs")
+    dataset_refs = [str(item).strip() for item in raw_refs] if isinstance(raw_refs, list) else []
+    source_hashes = step.input.get("source_hashes")
+    if len(dataset_refs) != 2 or not isinstance(source_hashes, dict):
+        return _data_delegate_failure(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            started_at=started_at,
+            timeout_ms=timeout_ms,
+            attempt=attempt,
+            delegated_task_id="",
+            error_code="invalid_parameters",
+            message="多数据集合并必须绑定两份数据和两份源版本。",
+            result={"reply": "多数据集合并未开始。", "read_only": False},
+        )
+
+    try:
+        request = DataJoinExportRequest.model_validate(
+            {
+                "left_dataset": step.input.get("left_dataset", ""),
+                "right_dataset": step.input.get("right_dataset", ""),
+                "left_key": step.input.get("left_key", ""),
+                "right_key": step.input.get("right_key", ""),
+                "join_type": step.input.get("join_type", "left"),
+                "duplicate_policy": step.input.get("duplicate_policy", "reject"),
+                "source_hashes": source_hashes,
+                "goal": step.input.get("task_goal", ""),
+                "confirmed": True,
+            }
+        )
+    except Exception as exc:
+        return _data_delegate_failure(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            started_at=started_at,
+            timeout_ms=timeout_ms,
+            attempt=attempt,
+            delegated_task_id="",
+            error_code="invalid_parameters",
+            message="多数据集合并参数或确认状态不符合受控输入契约。",
+            result={"reply": "多数据集合并未开始。", "read_only": False, "details": str(exc)[:240]},
+        )
+
+    delegated_task_id = f"task_data_join_{uuid4().hex[:12]}"
+    create_data_join_queued_run(task_id=delegated_task_id, request=request)
+
+    async def _run_with_timeout():
+        return await asyncio.wait_for(
+            run_data_join_task(task_id=delegated_task_id, request=request),
+            timeout=timeout_ms / 1000,
+        )
+
+    try:
+        response = asyncio.run(_run_with_timeout())
+    except TimeoutError:
+        return _data_delegate_failure(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            started_at=started_at,
+            timeout_ms=timeout_ms,
+            attempt=attempt,
+            delegated_task_id=delegated_task_id,
+            error_code="tool_timeout",
+            message="多数据集合并在允许时间内没有完成；未修改源数据文件。",
+            result={"reply": "多数据集合并未完成。", "read_only": False},
+        )
+    except Exception:
+        return _data_delegate_failure(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            started_at=started_at,
+            timeout_ms=timeout_ms,
+            attempt=attempt,
+            delegated_task_id=delegated_task_id,
+            error_code="data_join_failed",
+            message="多数据集合并过程发生未预期错误；未修改源数据文件。",
+            result={"reply": "多数据集合并未完成。", "read_only": False},
+        )
+
+    artifact = response.artifact
+    verification = response.verification
+    result = {
+        "delegated_task_id": response.task_id,
+        "agent_status": response.status,
+        "stop_reason": "completed" if response.status == "completed" else "data_join_failed",
+        "reply": response.message,
+        "artifact": {"name": artifact.name, "uri": artifact.uri, "size_bytes": artifact.size_bytes} if artifact else None,
+        "plan": response.plan.model_dump(mode="json") if response.plan else None,
+        "verification": verification.model_dump(mode="json") if verification else None,
+        "output_row_count": response.output_row_count,
+        "matched_row_count": response.matched_row_count,
+        "left_only_row_count": response.left_only_row_count,
+        "right_only_row_count": response.right_only_row_count,
+        "source_hashes": source_hashes,
+        "read_only": False,
+    }
+    if response.status != "completed" or artifact is None or verification is None or not verification.passed:
+        return _data_delegate_failure(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            started_at=started_at,
+            timeout_ms=timeout_ms,
+            attempt=attempt,
+            delegated_task_id=response.task_id,
+            error_code="data_join_failed",
+            message=response.message or "多数据集合并未通过副本回读验证。",
+            result=result,
+        )
+
+    finished_at = datetime.now(UTC)
+    step_run = WorkflowStepRun(
+        step_id=step.id,
+        agent=step.agent,
+        action=step.action,
+        status="completed",
+        message=f"多数据集合并已生成 {artifact.name}，并通过副本回读验证。",
+        requires_confirmation=step.requires_confirmation,
+        risk_level=step.risk_level,
+        output={"runtime": True, "tool_name": _tool_name_for_step(step), "result": result},
+    )
+    tool_call = _completed_tool_call(
+        runtime_task_id=runtime_task_id,
+        step=step,
+        attempt=attempt,
+        timeout_ms=timeout_ms,
+        started_at=started_at,
+        finished_at=finished_at,
+        request={"action": step.action, "dataset_count": 2, "join_type": request.join_type},
         result=result,
     )
     return step_run, tool_call, [_delegated_agent_artifact(runtime_task_id, step, result)]
@@ -4367,6 +4700,7 @@ def _delegated_agent_artifact(
             else "数据图表交付" if step.action == "export_chart_dashboard"
             else "数据分析 Excel 交付" if step.action == "export_analysis_workbook"
             else "字段加工副本" if step.action == "export_field_transform"
+            else "多数据集合并副本" if step.action == "export_dataset_join"
             else "数据工作台分析结果" if step.agent == "data_agent"
             else "文档助手运行结果"
         ),

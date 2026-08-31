@@ -18,6 +18,10 @@ from app.schemas.data_agent import (
     DataDatasetInfo,
     DataDatasetListResponse,
     DataDatasetProfileResponse,
+    DataJoinExportRequest,
+    DataJoinExportResponse,
+    DataJoinPreviewRequest,
+    DataJoinPreviewResponse,
     DataRecommendationRequest,
     DataRecommendationResponse,
     DataTransformPreviewRequest,
@@ -53,6 +57,7 @@ from app.services.data_transformation_delivery import (
     get_data_transformation_task_result,
     run_data_transformation_task,
 )
+from app.services.data_join import DataJoinError, export_data_join_copy, preview_data_join
 from app.services.data_transformations import DataTransformationError, preview_data_transformation
 from app.services.data_workbook import DataWorkbookError, export_data_analysis_workbook
 from app.services.data_workspace import (
@@ -394,3 +399,25 @@ async def _run_data_transformation_export_background(
         )
     finally:
         await finish_live_task_event_stream(task_id)
+
+
+@router.post("/joins/preview", response_model=DataJoinPreviewResponse)
+async def preview_data_join_endpoint(request: DataJoinPreviewRequest) -> DataJoinPreviewResponse:
+    """生成两份数据的只读关联预览，不创建文件。"""
+
+    try:
+        return await asyncio.to_thread(preview_data_join, request)
+    except DataJoinError as exc:
+        status_code = 404 if "未找到" in str(exc) else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+@router.post("/joins/export", response_model=DataJoinExportResponse)
+async def export_data_join_endpoint(request: DataJoinExportRequest) -> DataJoinExportResponse:
+    """在显式 confirmed=true 后生成多数据集合并副本。"""
+
+    try:
+        return await asyncio.to_thread(export_data_join_copy, request)
+    except DataJoinError as exc:
+        status_code = 404 if "未找到" in str(exc) else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc

@@ -191,6 +191,27 @@ ACTION_ADMISSIONS: dict[tuple[str, str], AgentActionAdmission] = {
         recovery_hint="确认字段加工预览后再执行；失败时不覆盖源文件或已有交付物。",
         additional_permissions=("file_write",),
     ),
+    ("data_agent", "plan_dataset_join"): AgentActionAdmission(
+        agent_id="data_agent",
+        action="plan_dataset_join",
+        execution_mode="execute",
+        requires_runtime_ready=True,
+        material_kind="dataset",
+        expected_output="两份已绑定数据的关联键、匹配范围和输出字段预览，不修改源文件。",
+        verification_scope="两份数据显式绑定、源哈希、关联键类型、一对一重复键检查和输出列合同。",
+        recovery_hint="请明确左右数据和关联键；存在重复键或多个候选键时不会自动猜测。",
+    ),
+    ("data_agent", "export_dataset_join"): AgentActionAdmission(
+        agent_id="data_agent",
+        action="export_dataset_join",
+        execution_mode="execute",
+        requires_runtime_ready=True,
+        material_kind="dataset",
+        expected_output="在受控 outputs 中生成两份数据的新 CSV/XLSX 合并副本，并完成回读验证。",
+        verification_scope="两份源版本、关联键、输出列、结果行数和合并副本回读验证。",
+        recovery_hint="先查看关联预览并确认；失败时不修改任一源文件或旧交付物。",
+        additional_permissions=("file_write",),
+    ),
 }
 
 

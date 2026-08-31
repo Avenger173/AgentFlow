@@ -217,6 +217,17 @@ class Settings:
         ).resolve()
 
     @property
+    def data_join_output_dir(self) -> Path:
+        """返回多数据集合并副本的固定交付目录。"""
+
+        return Path(
+            os.getenv(
+                "AGENTFLOW_DATA_JOIN_OUTPUT_DIR",
+                self.project_root / "output" / "data_joins",
+            )
+        ).resolve()
+
+    @property
     def node_harness_runtime_dir(self) -> Path:
         """返回随项目或安装目录携带的锁定 Node Harness 依赖目录。"""
 

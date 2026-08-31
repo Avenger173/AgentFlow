@@ -554,3 +554,137 @@ class DataTransformationTaskResultResponse(BaseModel):
     affected_count: int = Field(default=0, ge=0)
     empty_result_count: int = Field(default=0, ge=0)
     warnings: list[str] = Field(default_factory=list, max_length=12)
+
+
+# R5.4C 先把“多数据集合并”收口为一个可验证的连接合同。它不接受 SQL、pandas
+# 表达式或任意脚本；Commander 只能传递已经从两份数据画像中确认过的连接键。
+DataJoinType = Literal["left", "inner"]
+
+
+class DataJoinOperationInput(BaseModel):
+    """两份记录型数据的一次受控关联输入。"""
+
+    left_dataset: str = Field(min_length=1, max_length=180)
+    right_dataset: str = Field(min_length=1, max_length=180)
+    left_key: str = Field(min_length=1, max_length=180)
+    right_key: str = Field(min_length=1, max_length=180)
+    join_type: DataJoinType = "left"
+    # 首版拒绝重复键，避免把一对多扩张误当成普通合并结果。
+    duplicate_policy: Literal["reject"] = "reject"
+
+
+class DataJoinIntent(BaseModel):
+    """由本地画像编译出的、可供预览和导出复用的多数据集意图。"""
+
+    intent_version: Literal["agentflow.data_join_intent.v1"] = "agentflow.data_join_intent.v1"
+    operation: DataJoinOperationInput
+    source_hashes: dict[str, str] = Field(min_length=2, max_length=2)
+    output_columns: list[str] = Field(default_factory=list, min_length=1, max_length=100)
+    right_column_renames: dict[str, str] = Field(default_factory=dict, max_length=100)
+    summary: str = Field(min_length=1, max_length=320)
+
+
+class DataJoinPreviewRequest(BaseModel):
+    """连接预览请求；正文和原始行不通过接口进入模型或计划。"""
+
+    left_dataset: str = Field(min_length=1, max_length=180)
+    right_dataset: str = Field(min_length=1, max_length=180)
+    left_key: str = Field(min_length=1, max_length=180)
+    right_key: str = Field(min_length=1, max_length=180)
+    join_type: DataJoinType = "left"
+    duplicate_policy: Literal["reject"] = "reject"
+    source_hashes: dict[str, str] = Field(min_length=2, max_length=2)
+    goal: str = Field(default="", max_length=1_200)
+
+
+class DataJoinPlan(BaseModel):
+    """回传给客户端的连接计划摘要，不包含绝对路径。"""
+
+    intent_version: Literal["agentflow.data_join_intent.v1"] = "agentflow.data_join_intent.v1"
+    left_dataset: str
+    right_dataset: str
+    left_key: str
+    right_key: str
+    join_type: DataJoinType
+    duplicate_policy: Literal["reject"] = "reject"
+    output_columns: list[str] = Field(default_factory=list, min_length=1, max_length=100)
+    right_column_renames: dict[str, str] = Field(default_factory=dict, max_length=100)
+    summary: str = Field(min_length=1, max_length=320)
+
+
+class DataJoinPreviewResponse(BaseModel):
+    """连接写入前的脱敏统计预览。"""
+
+    plan: DataJoinPlan
+    left_row_count: int = Field(ge=0)
+    right_row_count: int = Field(ge=0)
+    output_row_count: int = Field(ge=0)
+    matched_row_count: int = Field(ge=0)
+    left_only_row_count: int = Field(ge=0)
+    right_only_row_count: int = Field(ge=0)
+    duplicate_left_key_count: int = Field(ge=0)
+    duplicate_right_key_count: int = Field(ge=0)
+    preview_rows: list[list[str]] = Field(default_factory=list, max_length=8)
+    warnings: list[str] = Field(default_factory=list, max_length=12)
+
+
+class DataJoinExportRequest(DataJoinPreviewRequest):
+    """客户确认后才允许生成新的合并副本。"""
+
+    confirmed: Literal[True]
+
+
+class DataJoinArtifact(BaseModel):
+    """多数据集合并副本的脱敏 artifact 描述。"""
+
+    name: str
+    uri: str
+    size_bytes: int = Field(ge=1)
+    created_at: str
+
+
+class DataJoinVerification(BaseModel):
+    """重新读取合并副本后的确定性验证摘要。"""
+
+    passed: bool
+    dataset_type: Literal["xlsx", "csv"]
+    row_count: int = Field(ge=0)
+    column_count: int = Field(ge=0)
+    output_columns: list[str] = Field(default_factory=list, max_length=100)
+    source_hashes_unchanged: bool
+    warnings: list[str] = Field(default_factory=list, max_length=12)
+
+
+class DataJoinExportResponse(BaseModel):
+    """多数据集合并完成后的最小交付回执。"""
+
+    artifact: DataJoinArtifact
+    plan: DataJoinPlan
+    verification: DataJoinVerification
+    output_row_count: int = Field(ge=0)
+    matched_row_count: int = Field(ge=0)
+    left_only_row_count: int = Field(ge=0)
+    right_only_row_count: int = Field(ge=0)
+    warnings: list[str] = Field(default_factory=list, max_length=12)
+
+
+class DataJoinTaskStartResponse(BaseModel):
+    task_id: str
+    status: Literal["queued"] = "queued"
+
+
+class DataJoinTaskResultResponse(BaseModel):
+    """从任务历史恢复的多数据集合并终态。"""
+
+    task_id: str
+    status: Literal["pending", "running", "completed", "failed", "cancelled"]
+    summary: str
+    message: str
+    artifact: DataJoinArtifact | None = None
+    plan: DataJoinPlan | None = None
+    verification: DataJoinVerification | None = None
+    output_row_count: int = Field(default=0, ge=0)
+    matched_row_count: int = Field(default=0, ge=0)
+    left_only_row_count: int = Field(default=0, ge=0)
+    right_only_row_count: int = Field(default=0, ge=0)
+    warnings: list[str] = Field(default_factory=list, max_length=12)

@@ -19,6 +19,7 @@ from app.schemas.chat import (
 )
 from app.schemas.memory import LongTermMemoryRecord
 from app.services.long_term_memory import build_memory_context_summary
+from app.services.data_join import DataJoinError, build_data_join_intent
 from app.services.data_transform_intent import DataTransformIntentError, build_data_transform_intent
 from app.workflow.action_admission import (
     ActionAdmissionDecision,
@@ -60,6 +61,9 @@ DATA_TRANSFORM_KEYWORDS = (
     "排名", "排行", "累计", "环比", "占比", "份额", "四舍五入", "保留小数",
     "月份字段", "提取月份", "分段", "分档", "去空格", "清理空格", "规范化文本",
     "相加", "相减", "相乘", "相除", "计算比率",
+)
+DATA_JOIN_KEYWORDS = (
+    "合并", "关联", "连接", "多数据集", "join", "inner join", "left join",
 )
 PRESENTATION_ROUTE_KEYWORDS = (
     "ppt", "pptx", "演示文稿", "幻灯片", "幻灯",
@@ -131,10 +135,12 @@ def create_commander_plan(
     document_intent_requested = _matches_any(lowered, DOCUMENT_ROUTE_KEYWORDS)
     data_intent_requested = _matches_any(lowered, DATA_ROUTE_KEYWORDS)
     data_transform_intent_requested = _matches_any(lowered, DATA_TRANSFORM_KEYWORDS)
+    data_join_intent_requested = _matches_any(lowered, DATA_JOIN_KEYWORDS)
     explicit_specialist_intent = (
         knowledge_intent_requested
         or document_intent_requested
         or data_intent_requested
+        or data_join_intent_requested
     )
     # 已选材料是“本轮可用的候选上下文”，而非隐式命令。否则客户从数据页跳到调度台
     # 后随口问一个普通问题，也会被残留 CSV 强行劫持。只有目标本身出现处理意图时，
@@ -180,6 +186,7 @@ def create_commander_plan(
     data_requested = not presentation_requested and (
         data_intent_requested
         or data_transform_intent_requested
+        or data_join_intent_requested
         or (
             bool(dataset_refs)
             and material_task_requested
@@ -198,6 +205,7 @@ def create_commander_plan(
     data_chart_delivery_requested = data_requested and _requests_data_chart_delivery(lowered)
     data_workbook_delivery_requested = data_requested and _requests_data_workbook_delivery(lowered)
     data_transform_requested = data_requested and data_transform_intent_requested
+    data_join_requested = data_requested and data_join_intent_requested
     needs_document_understanding = _needs_document_understanding(message)
     clarifying_questions: list[str] = []
     steps: list[WorkflowStep] = [
@@ -345,6 +353,66 @@ def create_commander_plan(
     if data_requested:
         if not dataset_refs:
             clarifying_questions.append("已点名 @数据工作台，但尚未选择数据文件；请先在数据工作台完成导入和画像。")
+        elif data_join_requested:
+            if len(dataset_refs) != 2:
+                clarifying_questions.append("多数据集合并首版需要明确选择两份数据文件，请保留两份最相关的数据后重试。")
+            else:
+                try:
+                    intent = build_data_join_intent(dataset_refs, message)
+                except DataJoinError as exc:
+                    clarifying_questions.append(str(exc))
+                else:
+                    join_input = {
+                        "task_goal": message,
+                        "dataset_refs": dataset_refs,
+                        "left_dataset": intent.operation.left_dataset,
+                        "right_dataset": intent.operation.right_dataset,
+                        "left_key": intent.operation.left_key,
+                        "right_key": intent.operation.right_key,
+                        "join_type": intent.operation.join_type,
+                        "duplicate_policy": intent.operation.duplicate_policy,
+                        "source_hashes": intent.source_hashes,
+                        "intent_version": intent.intent_version,
+                        "output_columns": intent.output_columns,
+                        "right_column_renames": intent.right_column_renames,
+                    }
+                    plan_step_id = f"step_{next_index}"
+                    plan_decision = _append_admitted_step(
+                        steps=steps,
+                        step_id=plan_step_id,
+                        agent_id="data_agent",
+                        action="plan_dataset_join",
+                        title="规划多数据集关联并生成预览",
+                        depends_on=["step_1"],
+                        parallel_group="specialist_read_only",
+                        step_input=join_input,
+                        reason="已确认两份数据和关联键；先计算匹配范围与字段冲突预览，不写入源文件。",
+                        agents=available_agent_list,
+                        materials=material_bindings,
+                        timeout_ms=120000,
+                    )
+                    if plan_decision is not None:
+                        specialist_step_ids.append(plan_step_id)
+                        next_index += 1
+                        export_step_id = f"step_{next_index}"
+                        export_decision = _append_admitted_step(
+                            steps=steps,
+                            step_id=export_step_id,
+                            agent_id="data_agent",
+                            action="export_dataset_join",
+                            title="确认后生成多数据集合并副本",
+                            depends_on=[plan_step_id],
+                            step_input=join_input,
+                            reason="客户确认后才在受控 outputs 中生成新的合并副本，并回读验证列、行和源版本。",
+                            agents=available_agent_list,
+                            materials=material_bindings,
+                            timeout_ms=150000,
+                        )
+                        if export_decision is not None:
+                            specialist_step_ids.append(export_step_id)
+                            next_index += 1
+                    else:
+                        clarifying_questions.append("多数据集合并计划当前未通过总指挥动作准入，请检查数据工作台状态。")
         elif len(dataset_refs) > 1:
             clarifying_questions.append("数据工作台一次只分析一份已明确选择的数据文件；请保留最相关的一份后重试。")
         else:
@@ -1249,6 +1317,18 @@ def _retry_policy_for_step(agent_id: str, action: str) -> WorkflowRetryPolicy:
             retryable=False,
             stop_condition="字段加工副本写入前后都会验证源哈希、新字段和行数；失败时不覆盖源文件或旧产物。",
         )
+    if agent_id == "data_agent" and action == "plan_dataset_join":
+        return WorkflowRetryPolicy(
+            max_attempts=1,
+            retryable=False,
+            stop_condition="多数据集计划只接受明确的一对一关联键；键不明确或重复时直接澄清，不重复猜测。",
+        )
+    if agent_id == "data_agent" and action == "export_dataset_join":
+        return WorkflowRetryPolicy(
+            max_attempts=1,
+            retryable=False,
+            stop_condition="合并副本写入前后都会验证两份源哈希、输出列和行数；失败时不覆盖源文件。",
+        )
     if action in {"read_text", "search_text", "generate_code", "generate_report"}:
         return WorkflowRetryPolicy(max_attempts=3, retryable=True, stop_condition="同类错误连续失败后停止自动重试。")
     return WorkflowRetryPolicy()
@@ -1304,6 +1384,18 @@ def _success_criteria_for_step(agent_id: str, action: str) -> list[str]:
             "按原文件类型追加所有确认字段，不添加无关样式",
             "新副本通过字段、行数和源版本回读验证后再交付",
         ]
+    if agent_id == "data_agent" and action == "plan_dataset_join":
+        return [
+            "仅使用两份客户明确绑定且哈希未变化的数据文件",
+            "关联键、连接方式和重复键策略均已固定",
+            "只生成匹配统计和字段冲突预览，不写入源文件",
+        ]
+    if agent_id == "data_agent" and action == "export_dataset_join":
+        return [
+            "仅在客户确认后新建多数据集合并副本，不修改任一源文件",
+            "输出列和连接行数与预览一致，并完成副本回读验证",
+            "合并 artifact 记录两份源版本和关联键摘要",
+        ]
     if agent_id == "document_agent":
         return ["生成结构化需求摘要", "输出可供后续 Agent 使用的文档上下文"]
     if agent_id == "code_agent":
@@ -1330,6 +1422,8 @@ def _infer_intent(steps: list[WorkflowStep]) -> str:
     if "knowledge_agent" in agents:
         return "knowledge_deep_summary" if any(step.action == "deep_summary" for step in steps) else "knowledge_answer"
     if "data_agent" in agents:
+        if any(step.action in {"plan_dataset_join", "export_dataset_join"} for step in steps):
+            return "data_join"
         if any(step.action in {"plan_field_transform", "export_field_transform"} for step in steps):
             return "data_transform"
         return "data_workspace"
@@ -1386,7 +1480,9 @@ def _build_definition_of_done(steps: list[WorkflowStep]) -> list[str]:
         else:
             done.append("知识库助手仅依据所选资料库的活动版本完成可信问答，关键结论可在关联子任务查看来源。")
     if "data_agent" in agents:
-        if any(step.action == "export_field_transform" for step in steps):
+        if any(step.action == "export_dataset_join" for step in steps):
+            done.append("数据工作台已按确认的关联计划生成多数据集合并副本，并完成列、行和源版本回读验证。")
+        elif any(step.action == "export_field_transform" for step in steps):
             done.append("数据工作台已按确认的白名单加工计划，在新副本中追加字段并完成回读验证；源文件未修改。")
         elif any(step.action == "export_chart_dashboard" for step in steps):
             done.append("数据工作台已基于明确绑定的数据生成并回读 PNG 图表；源 CSV/XLSX 不会被修改，交付物可在任务历史直接打开。")
@@ -1450,6 +1546,11 @@ def _build_workspace_scope(
                 # 数据集只在已准入的数据 action 中进入读取范围；调度台上残留的其他材料
                 # 只是本轮可选上下文，不应被审计面误写成已经授权读取。
                 read_paths.append(f"data/datasets/{dataset_name}")
+            dataset_refs = step.input.get("dataset_refs")
+            if isinstance(dataset_refs, list):
+                for dataset_ref in dataset_refs:
+                    if isinstance(dataset_ref, str) and dataset_ref:
+                        read_paths.append(f"data/datasets/{dataset_ref}")
         if "file_write" in step.required_permissions:
             write_paths.append("data/outputs/<runtime_task_id>/")
         if "network" in step.required_permissions:
