@@ -179,6 +179,43 @@ struct WorkflowPlanDetailResult
     QList<WorkflowStepInfo> steps;
 };
 
+// 调度台统一交付卡。它只承载客户真正需要的结果摘要，不把内部日志、绝对路径或
+// Runtime 私有标识复制到聊天区；完整审计仍保留在历史任务详情中。
+struct WorkflowDeliveryArtifactInfo
+{
+    QString artifactId;
+    QString name;
+    QString kind;
+    QString summary;
+    QString uri;
+    QString mimeType;
+    bool openable = false;
+    bool previewable = false;
+};
+
+struct WorkflowDeliveryFactInfo
+{
+    QString label;
+    QString value;
+};
+
+struct WorkflowDeliveryCardInfo
+{
+    QString schemaVersion;
+    QString deliveryId;
+    QString taskId;
+    QString mode;
+    QString status;
+    bool terminal = false;
+    QString headline;
+    QString summaryMarkdown;
+    QList<WorkflowDeliveryFactInfo> facts;
+    QStringList warnings;
+    QList<WorkflowDeliveryArtifactInfo> artifacts;
+    QStringList nextActions;
+    QString updatedAt;
+};
+
 // 计划版本列表保持轻量，用户选中版本后再按需读取完整步骤，避免版本多时拖慢调度台。
 struct WorkflowPlanVersionInfo
 {
@@ -1325,6 +1362,8 @@ public:
     void requestTaskToolCalls(const QString &taskId);
     // 拉取任务 updates 时间线，用于把预演、权限、工具和产物串成用户可读事件流。
     void requestTaskUpdates(const QString &taskId);
+    // 拉取统一交付卡。调度台只在任务提交后和终态到达时请求，避免轮询期间反复刷新正文。
+    void requestTaskDeliveryCard(const QString &taskId);
     // 批准或拒绝某个权限请求。
     void requestTaskPermissionDecision(
         const QString &taskId,
@@ -1406,6 +1445,8 @@ signals:
     void taskUpdatesReceived(const WorkflowTaskUpdateListResult &result);
     // 调度台和历史页可能同时请求 updates，失败时必须携带任务 ID，避免错误串到别的任务。
     void taskUpdatesFailed(const QString &taskId, const QString &message);
+    void taskDeliveryCardReceived(const WorkflowDeliveryCardInfo &card);
+    void taskDeliveryCardFailed(const QString &taskId, const QString &message);
     void modelProvidersReceived(const ModelProviderListResult &result);
     void modelProvidersFailed(const QString &message);
     void modelRoutesReceived(const ModelRouteListResult &result);
@@ -1619,6 +1660,7 @@ private:
     QUrl buildTaskArtifactOpenUrl(const QString &taskId, const QString &artifactId) const;
     QUrl buildTaskToolCallsUrl(const QString &taskId) const;
     QUrl buildTaskUpdatesUrl(const QString &taskId) const;
+    QUrl buildTaskDeliveryCardUrl(const QString &taskId) const;
     QUrl buildTaskPermissionDecisionUrl(const QString &taskId, const QString &requestId) const;
     QUrl buildTaskControlUrl(const QString &taskId, const QString &action) const;
     QUrl buildTaskExecuteUrl(const QString &taskId) const;
@@ -1699,6 +1741,7 @@ private:
     void handleTaskArtifactOpenReply(QNetworkReply *reply, const QString &requestedTaskId, const QString &requestedArtifactId);
     void handleTaskToolCallsReply(QNetworkReply *reply);
     void handleTaskUpdatesReply(QNetworkReply *reply, const QString &requestedTaskId);
+    void handleTaskDeliveryCardReply(QNetworkReply *reply, const QString &requestedTaskId);
     void handleTaskPermissionDecisionReply(QNetworkReply *reply);
     void handleTaskControlReply(QNetworkReply *reply);
     void handleTaskExecutionReply(QNetworkReply *reply);

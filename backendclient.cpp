@@ -1061,6 +1061,54 @@ WorkflowArtifactListResult readWorkflowArtifactListResult(const QJsonObject &pay
     return result;
 }
 
+WorkflowDeliveryCardInfo readWorkflowDeliveryCardInfo(const QJsonObject &payload)
+{
+    WorkflowDeliveryCardInfo result;
+    result.schemaVersion = payload.value(QStringLiteral("schema_version")).toString();
+    result.deliveryId = payload.value(QStringLiteral("delivery_id")).toString();
+    result.taskId = payload.value(QStringLiteral("task_id")).toString();
+    result.mode = payload.value(QStringLiteral("mode")).toString();
+    result.status = payload.value(QStringLiteral("status")).toString();
+    result.terminal = payload.value(QStringLiteral("terminal")).toBool();
+    result.headline = payload.value(QStringLiteral("headline")).toString();
+    result.summaryMarkdown = payload.value(QStringLiteral("summary_markdown")).toString();
+    result.warnings = readStringList(payload.value(QStringLiteral("warnings")).toArray());
+    result.nextActions = readStringList(payload.value(QStringLiteral("next_actions")).toArray());
+    result.updatedAt = payload.value(QStringLiteral("updated_at")).toString();
+
+    const QJsonArray facts = payload.value(QStringLiteral("facts")).toArray();
+    result.facts.reserve(facts.size());
+    for (const QJsonValue &value : facts) {
+        const QJsonObject factPayload = value.toObject();
+        WorkflowDeliveryFactInfo fact;
+        fact.label = factPayload.value(QStringLiteral("label")).toString();
+        fact.value = factPayload.value(QStringLiteral("value")).toString();
+        if (!fact.label.isEmpty() || !fact.value.isEmpty()) {
+            result.facts.append(fact);
+        }
+    }
+
+    const QJsonArray artifacts = payload.value(QStringLiteral("artifacts")).toArray();
+    result.artifacts.reserve(artifacts.size());
+    for (const QJsonValue &value : artifacts) {
+        const QJsonObject artifactPayload = value.toObject();
+        WorkflowDeliveryArtifactInfo artifact;
+        artifact.artifactId = artifactPayload.value(QStringLiteral("artifact_id")).toString();
+        artifact.name = artifactPayload.value(QStringLiteral("name")).toString();
+        artifact.kind = artifactPayload.value(QStringLiteral("kind")).toString();
+        artifact.summary = artifactPayload.value(QStringLiteral("summary")).toString();
+        artifact.uri = artifactPayload.value(QStringLiteral("uri")).toString();
+        artifact.mimeType = artifactPayload.value(QStringLiteral("mime_type")).toString();
+        artifact.openable = artifactPayload.value(QStringLiteral("openable")).toBool();
+        artifact.previewable = artifactPayload.value(QStringLiteral("previewable")).toBool();
+        if (!artifact.artifactId.isEmpty() || !artifact.name.isEmpty()) {
+            result.artifacts.append(artifact);
+        }
+    }
+
+    return result;
+}
+
 WorkflowArtifactPreviewResult readWorkflowArtifactPreviewResult(const QJsonObject &payload)
 {
     WorkflowArtifactPreviewResult result;
@@ -3333,6 +3381,22 @@ void BackendClient::requestTaskUpdates(const QString &taskId)
     });
 }
 
+void BackendClient::requestTaskDeliveryCard(const QString &taskId)
+{
+    const QString normalizedTaskId = taskId.trimmed();
+    if (normalizedTaskId.isEmpty()) {
+        emit taskDeliveryCardFailed(taskId, QStringLiteral("任务 ID 为空，无法加载交付结果。"));
+        return;
+    }
+
+    // 交付卡是轻量 JSON，使用独立请求不会阻塞已有 WebSocket 日志和历史详情请求。
+    QNetworkReply *reply = networkManager_.get(
+        createRequest(buildTaskDeliveryCardUrl(normalizedTaskId), 10000));
+    connect(reply, &QNetworkReply::finished, this, [this, reply, normalizedTaskId]() {
+        handleTaskDeliveryCardReply(reply, normalizedTaskId);
+    });
+}
+
 void BackendClient::requestTaskPermissionDecision(
     const QString &taskId,
     const QString &requestId,
@@ -4218,6 +4282,14 @@ QUrl BackendClient::buildTaskUpdatesUrl(const QString &taskId) const
 {
     QUrl url(baseUrl_);
     url.setPath(QStringLiteral("/api/tasks/%1/updates").arg(QString::fromUtf8(QUrl::toPercentEncoding(taskId))));
+    return url;
+}
+
+QUrl BackendClient::buildTaskDeliveryCardUrl(const QString &taskId) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/tasks/%1/delivery")
+                   .arg(QString::fromUtf8(QUrl::toPercentEncoding(taskId))));
     return url;
 }
 
@@ -5884,6 +5956,31 @@ void BackendClient::handleTaskUpdatesReply(QNetworkReply *reply, const QString &
     }
 
     emit taskUpdatesReceived(result);
+}
+
+void BackendClient::handleTaskDeliveryCardReply(
+    QNetworkReply *reply,
+    const QString &requestedTaskId)
+{
+    reply->deleteLater();
+
+    if (reply->error() != QNetworkReply::NoError) {
+        emit taskDeliveryCardFailed(requestedTaskId, replyErrorMessage(reply));
+        return;
+    }
+
+    const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+    if (!document.isObject()) {
+        emit taskDeliveryCardFailed(requestedTaskId, QStringLiteral("交付结果响应格式无效。"));
+        return;
+    }
+
+    const WorkflowDeliveryCardInfo card = readWorkflowDeliveryCardInfo(document.object());
+    if (card.taskId.isEmpty() || card.schemaVersion.isEmpty()) {
+        emit taskDeliveryCardFailed(requestedTaskId, QStringLiteral("交付结果缺少任务或协议版本。"));
+        return;
+    }
+    emit taskDeliveryCardReceived(card);
 }
 
 void BackendClient::handleTaskPermissionDecisionReply(QNetworkReply *reply)

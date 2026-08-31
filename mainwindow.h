@@ -342,6 +342,11 @@ private:
     void sendDispatchMessage();
     void handleChatCompleted(const ChatResult &result);
     void handleChatFailed(const QString &message);
+    void handleTaskDeliveryCardReceived(const WorkflowDeliveryCardInfo &card);
+    void handleTaskDeliveryCardFailed(const QString &taskId, const QString &message);
+    void resetDispatchDeliveryCard();
+    void requestCurrentDispatchDeliveryCardIfTerminal();
+    QString formatDispatchDeliveryCardHtml(const WorkflowDeliveryCardInfo &card) const;
     QString formatDispatchWorkflowPlanHtml(const ChatResult &result) const;
     QString formatDispatchWorkflowPlanHtml(
         const WorkflowPlanSummaryInfo &plan,
@@ -742,6 +747,10 @@ private:
     TaskActivityIndicator *dataActivityIndicator = nullptr;
     // 当前调度台对应的任务，用来把 WebSocket 日志和 updates 聚合结果对准同一个上下文。
     QString currentDispatchTaskId;
+    // 同一任务的结果卡请求只允许有一个在途请求；任务切换或 Runtime 接管后会清空状态。
+    QString currentDispatchDeliveryCardTaskId;
+    bool currentDispatchDeliveryCardRequestInFlight = false;
+    bool currentDispatchDeliveryCardTerminal = false;
     // 规划阶段返回的步骤数，方便后续把右侧 5 步进度解释成“已生成多少步骤”。
     int currentDispatchPlannedStepCount = 0;
     // 用于真实执行前的二次确认：只保存后端返回的脱敏计划摘要和步骤，不保存文件正文或绝对路径。

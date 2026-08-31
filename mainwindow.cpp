@@ -1300,6 +1300,14 @@ void MainWindow::setupBackendIntegration()
     connect(backendClient, &BackendClient::taskToolCallsFailed, this, &MainWindow::handleTaskToolCallsFailed);
     connect(backendClient, &BackendClient::taskUpdatesReceived, this, &MainWindow::handleTaskUpdatesReceived);
     connect(backendClient, &BackendClient::taskUpdatesFailed, this, &MainWindow::handleTaskUpdatesFailed);
+    connect(backendClient,
+            &BackendClient::taskDeliveryCardReceived,
+            this,
+            &MainWindow::handleTaskDeliveryCardReceived);
+    connect(backendClient,
+            &BackendClient::taskDeliveryCardFailed,
+            this,
+            &MainWindow::handleTaskDeliveryCardFailed);
     connect(backendClient, &BackendClient::modelProvidersReceived, this, &MainWindow::handleModelProvidersReceived);
     connect(backendClient, &BackendClient::modelProvidersFailed, this, &MainWindow::handleModelProvidersFailed);
     connect(backendClient, &BackendClient::modelRoutesReceived, this, &MainWindow::handleModelRoutesReceived);
@@ -1530,6 +1538,7 @@ void MainWindow::setupDispatchChat()
     // Designer 中的对话内容只是早期页面示例。真实调度会话改为增量追加：首条成功发送前
     // 清空示例，后续轮次不会清屏，客户才能看清“刚才/上一步”究竟指向什么。
     ui->conversationTextEdit->clear();
+    resetDispatchDeliveryCard();
     ui->dispatchChatStatus->setText(
         currentDispatchConversationId.isEmpty()
             ? QStringLiteral("待命")
@@ -1598,6 +1607,10 @@ void MainWindow::setupDispatchChat()
     connect(ui->dispatchModelRouteButton, &QToolButton::clicked, this, [this]() {
         openModelRouteDialogForRoute(QStringLiteral("commander_planning"));
     });
+    connect(ui->dispatchDeliveryHistoryButton,
+            &QPushButton::clicked,
+            this,
+            &MainWindow::openCurrentDispatchTaskInHistory);
     connect(ui->dispatchNewConversationButton, &QToolButton::clicked, this, &MainWindow::startNewDispatchConversation);
     connect(ui->dispatchConversationHistoryButton,
             &QToolButton::clicked,
@@ -15279,6 +15292,7 @@ void MainWindow::handleTaskUpdatesReceived(const WorkflowTaskUpdateListResult &r
 {
     if (!result.taskId.isEmpty() && result.taskId == currentDispatchTaskId) {
         applyDispatchTaskUpdates(result);
+        requestCurrentDispatchDeliveryCardIfTerminal();
         if (shouldPollCurrentDispatchUpdates()) {
             scheduleDispatchUpdatesRefresh(DispatchUpdatesPollIntervalMs);
         } else if (dispatchUpdateRefreshTimer) {
@@ -15572,6 +15586,7 @@ void MainWindow::handleTaskExecutionCompleted(const WorkflowExecutionResult &res
         currentDispatchExecutionSubmitted = true;
         currentDispatchNeedsClarification = false;
         currentDispatchTaskId = result.runtimeTaskId;
+        resetDispatchDeliveryCard();
         currentDispatchUpdateWatermark = 0;
         currentDispatchUpdates.clear();
         currentDispatchRuntimeMode = QStringLiteral("runtime");
@@ -15604,6 +15619,7 @@ void MainWindow::handleTaskExecutionCompleted(const WorkflowExecutionResult &res
                     .arg(message.toHtmlEscaped(), result.runtimeTaskId.toHtmlEscaped()));
         }
         backendClient->connectTaskLog(result.runtimeTaskId);
+        backendClient->requestTaskDeliveryCard(result.runtimeTaskId);
         refreshCurrentDispatchUpdates();
         updateDispatchActionButtons();
     }
@@ -18976,6 +18992,7 @@ void MainWindow::submitDispatchMessage(const QString &message,
     }
     resetProgressPanel();
     currentDispatchTaskId.clear();
+    resetDispatchDeliveryCard();
     currentDispatchPlannedStepCount = 0;
     currentDispatchPlanSummary = WorkflowPlanSummaryInfo{};
     currentDispatchPlanSteps.clear();
@@ -19047,6 +19064,7 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
     }
     ui->dispatchChatStatus->setText(QStringLiteral("已规划"));
     currentDispatchTaskId = result.taskId;
+    resetDispatchDeliveryCard();
     currentDispatchPlannedStepCount = result.steps.size();
     currentDispatchPlanSummary = result.planSummary;
     currentDispatchProjectScope = result.planSummary.projectScope.isEmpty()
@@ -19083,6 +19101,10 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
     currentDispatchDataChartDeliveryFailed = false;
     currentDispatchDataWorkbookDeliveryFailed = false;
     currentDispatchAutoExecutePending = isCurrentDispatchAutoReadOnlyTask();
+
+    // 规划响应到达后先拉取一张轻量结果卡。Runtime 完成时会复用同一入口刷新为最终交付，
+    // 让客户始终在调度台看到结果，而不是被迫翻到历史页寻找结论。
+    backendClient->requestTaskDeliveryCard(result.taskId);
 
     ui->summaryVal0->setText(result.taskId);
     ui->summaryVal1->setText(chatModeSummary(result));
@@ -19910,6 +19932,7 @@ void MainWindow::handleChatFailed(const QString &message)
     ui->sendTaskButton->setEnabled(true);
     ui->dispatchChatStatus->setText(QStringLiteral("请求失败"));
     currentDispatchTaskId.clear();
+    resetDispatchDeliveryCard();
     currentDispatchPlannedStepCount = 0;
     currentDispatchUpdateWatermark = 0;
     currentDispatchUpdates.clear();
@@ -19937,6 +19960,143 @@ void MainWindow::handleChatFailed(const QString &message)
     updateDispatchActionButtons();
     appendConversationHtml(
         QStringLiteral("<hr/><h3>系统</h3><p style=\"color:#DC2626;\">聊天请求失败：%1</p>")
+            .arg(message.toHtmlEscaped()));
+}
+
+void MainWindow::resetDispatchDeliveryCard()
+{
+    // 结果卡只属于当前任务。清空时同时撤销请求状态，避免上一轮慢响应覆盖新会话。
+    currentDispatchDeliveryCardTaskId.clear();
+    currentDispatchDeliveryCardRequestInFlight = false;
+    currentDispatchDeliveryCardTerminal = false;
+    if (!ui->dispatchDeliveryCard) {
+        return;
+    }
+
+    ui->dispatchDeliveryCard->setVisible(false);
+    ui->dispatchDeliveryStatus->setText(QStringLiteral("等待结果"));
+    polishBadge(ui->dispatchDeliveryStatus, QStringLiteral("badgeGray"));
+    ui->dispatchDeliveryText->setHtml(QStringLiteral("<p>任务结果将在这里显示。</p>"));
+}
+
+void MainWindow::requestCurrentDispatchDeliveryCardIfTerminal()
+{
+    if (currentDispatchTaskId.isEmpty()) {
+        return;
+    }
+
+    const bool terminal = currentDispatchRuntimeStatus == QStringLiteral("completed")
+        || currentDispatchRuntimeStatus == QStringLiteral("failed")
+        || currentDispatchRuntimeStatus == QStringLiteral("cancelled")
+        || currentDispatchRuntimeStatus == QStringLiteral("blocked")
+        || currentDispatchRuntimeStatus == QStringLiteral("paused");
+    if (!terminal || currentDispatchDeliveryCardRequestInFlight
+        || (currentDispatchDeliveryCardTaskId == currentDispatchTaskId
+            && currentDispatchDeliveryCardTerminal)) {
+        return;
+    }
+
+    currentDispatchDeliveryCardTaskId = currentDispatchTaskId;
+    currentDispatchDeliveryCardRequestInFlight = true;
+    backendClient->requestTaskDeliveryCard(currentDispatchTaskId);
+}
+
+QString MainWindow::formatDispatchDeliveryCardHtml(const WorkflowDeliveryCardInfo &card) const
+{
+    const QString headline = card.headline.trimmed().isEmpty()
+        ? QStringLiteral("任务已收到结果")
+        : card.headline.trimmed();
+    QString html = QStringLiteral(
+        "<div style=\"margin:0;color:#0F172A;\"><h3 style=\"margin:0 0 6px 0;\">%1</h3>")
+        .arg(headline.toHtmlEscaped());
+
+    if (!card.summaryMarkdown.trimmed().isEmpty()) {
+        html += formatDispatchAnswerMarkdownHtml(card.summaryMarkdown);
+    }
+
+    if (!card.facts.isEmpty()) {
+        html += QStringLiteral(
+            "<table border=\"1\" cellspacing=\"0\" cellpadding=\"5\" "
+            "style=\"border-color:#D7E5FF;margin:6px 0;width:100%;\">");
+        for (const WorkflowDeliveryFactInfo &fact : card.facts) {
+            html += QStringLiteral(
+                "<tr><th align=\"left\" style=\"background:#F8FBFF;color:#475569;\">%1</th>"
+                "<td>%2</td></tr>")
+                .arg(fact.label.toHtmlEscaped(), fact.value.toHtmlEscaped());
+        }
+        html += QStringLiteral("</table>");
+    }
+
+    if (!card.artifacts.isEmpty()) {
+        html += QStringLiteral("<p style=\"margin:7px 0 3px 0;\"><b>交付物</b></p><ul style=\"margin:2px 0 5px 18px;\">");
+        for (const WorkflowDeliveryArtifactInfo &artifact : card.artifacts) {
+            const QString name = artifact.name.trimmed().isEmpty()
+                ? QStringLiteral("未命名产物")
+                : artifact.name.trimmed();
+            const QString summary = artifact.summary.trimmed().isEmpty()
+                ? QString()
+                : QStringLiteral("：%1").arg(artifact.summary.trimmed());
+            html += QStringLiteral("<li>%1%2</li>")
+                .arg(name.toHtmlEscaped(), summary.toHtmlEscaped());
+        }
+        html += QStringLiteral("</ul>");
+    }
+
+    if (!card.warnings.isEmpty()) {
+        html += QStringLiteral(
+            "<div style=\"margin-top:6px;padding:6px 8px;background:#FFF7ED;color:#9A3412;\"><b>需要留意</b><ul style=\"margin:3px 0 0 18px;\">");
+        for (const QString &warning : card.warnings) {
+            html += QStringLiteral("<li>%1</li>").arg(warning.toHtmlEscaped());
+        }
+        html += QStringLiteral("</ul></div>");
+    }
+
+    if (!card.nextActions.isEmpty()) {
+        html += QStringLiteral("<p style=\"margin:7px 0 2px 0;color:#475569;\"><b>下一步</b>：%1</p>")
+            .arg(card.nextActions.join(QStringLiteral("；")).toHtmlEscaped());
+    }
+    html += QStringLiteral("</div>");
+    return html;
+}
+
+void MainWindow::handleTaskDeliveryCardReceived(const WorkflowDeliveryCardInfo &card)
+{
+    // 任务切换后旧请求可能晚到，必须丢弃，不能把上一轮结果显示到当前会话。
+    if (card.taskId.isEmpty() || card.taskId != currentDispatchTaskId) {
+        return;
+    }
+
+    currentDispatchDeliveryCardTaskId = card.taskId;
+    currentDispatchDeliveryCardRequestInFlight = false;
+    currentDispatchDeliveryCardTerminal = card.terminal;
+    ui->dispatchDeliveryCard->setVisible(true);
+    ui->dispatchDeliveryText->setHtml(formatDispatchDeliveryCardHtml(card));
+
+    const bool failed = card.status == QStringLiteral("failed")
+        || card.status == QStringLiteral("cancelled")
+        || card.status == QStringLiteral("blocked");
+    const QString statusText = card.terminal
+        ? (failed ? QStringLiteral("未完成") : QStringLiteral("已完成"))
+        : QStringLiteral("处理中");
+    ui->dispatchDeliveryStatus->setText(statusText);
+    polishBadge(ui->dispatchDeliveryStatus,
+                card.terminal ? (failed ? QStringLiteral("badgeOrange") : QStringLiteral("badgeGreen"))
+                              : QStringLiteral("badgeBlue"));
+}
+
+void MainWindow::handleTaskDeliveryCardFailed(const QString &taskId, const QString &message)
+{
+    if (taskId.isEmpty() || taskId != currentDispatchTaskId) {
+        return;
+    }
+
+    currentDispatchDeliveryCardRequestInFlight = false;
+    ui->dispatchDeliveryCard->setVisible(true);
+    ui->dispatchDeliveryStatus->setText(QStringLiteral("暂不可用"));
+    polishBadge(ui->dispatchDeliveryStatus, QStringLiteral("badgeOrange"));
+    ui->dispatchDeliveryText->setHtml(
+        QStringLiteral("<p style=\"color:#9A3412;\"><b>结果卡暂时无法读取。</b></p>"
+                       "<p>完整结果仍保留在任务历史中。%1</p>")
             .arg(message.toHtmlEscaped()));
 }
 

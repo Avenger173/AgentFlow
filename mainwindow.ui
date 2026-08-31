@@ -1273,6 +1273,52 @@ QPushButton#navGroupButton:hover {
 <property name="readOnly"><bool>true</bool></property>
 <property name="undoRedoEnabled"><bool>false</bool></property>
 <property name="html"><string>&lt;p&gt;&lt;/p&gt;</string></property>
+</widget></item>
+<item><widget class="QFrame" name="dispatchDeliveryCard">
+<property name="visible"><bool>false</bool></property>
+<property name="objectName"><string>subtlePanel</string></property>
+<property name="maximumSize"><size><width>16777215</width><height>190</height></size></property>
+<property name="frameShape"><enum>QFrame::Shape::NoFrame</enum></property>
+<layout class="QVBoxLayout" name="dispatchDeliveryLayout">
+<property name="spacing"><number>6</number></property>
+<property name="leftMargin"><number>12</number></property>
+<property name="topMargin"><number>10</number></property>
+<property name="rightMargin"><number>12</number></property>
+<property name="bottomMargin"><number>10</number></property>
+<item><layout class="QHBoxLayout" name="dispatchDeliveryHeaderLayout">
+<property name="spacing"><number>8</number></property>
+<item><widget class="QLabel" name="dispatchDeliveryTitle">
+<property name="objectName"><string>sectionTitle</string></property>
+<property name="text"><string>本次结果</string></property>
+</widget></item>
+<item><spacer name="dispatchDeliveryHeaderSpacer">
+<property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property>
+<property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property>
+</spacer></item>
+<item><widget class="QLabel" name="dispatchDeliveryStatus">
+<property name="objectName"><string>badgeBlue</string></property>
+<property name="text"><string>整理中</string></property>
+</widget></item>
+</layout></item>
+<item><widget class="QTextBrowser" name="dispatchDeliveryText">
+<property name="minimumSize"><size><width>0</width><height>76</height></size></property>
+<property name="maximumSize"><size><width>16777215</width><height>128</height></size></property>
+<property name="openExternalLinks"><bool>false</bool></property>
+<property name="openLinks"><bool>false</bool></property>
+<property name="html"><string>&lt;p&gt;任务结果将在这里显示。&lt;/p&gt;</string></property>
+</widget></item>
+<item><layout class="QHBoxLayout" name="dispatchDeliveryActionLayout">
+<property name="spacing"><number>8</number></property>
+<item><spacer name="dispatchDeliveryActionSpacer">
+<property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property>
+<property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property>
+</spacer></item>
+<item><widget class="QPushButton" name="dispatchDeliveryHistoryButton">
+<property name="objectName"><string>ghostButton</string></property>
+<property name="text"><string>查看任务详情</string></property>
+</widget></item>
+</layout></item>
+</layout>
 </widget></item><item><widget class="QFrame" name="dispatchInputCard">
 <property name="objectName"><string>heroCard</string></property><property name="minimumSize"><size><width>0</width><height>92</height></size></property>
 <property name="frameShape"><enum>QFrame::Shape::NoFrame</enum></property>
