@@ -15,6 +15,7 @@ from app.schemas.workflow import (
     WorkflowDeliveryArtifact,
     WorkflowDeliveryCard,
     WorkflowDeliveryFact,
+    WorkflowDeliveryTableSummary,
     WorkflowRun,
     WorkflowToolCall,
 )
@@ -46,6 +47,7 @@ def build_delivery_card(
         headline=_headline(run=run, artifacts=artifacts),
         summary_markdown=_summary(run=run, evaluation=evaluation, artifacts=artifacts),
         facts=facts,
+        table_summary=_table_summary(run=run, artifacts=artifacts),
         warnings=warnings,
         artifacts=[_artifact(item) for item in artifacts[:8]],
         next_actions=_next_actions(run=run, artifacts=artifacts, evaluation=evaluation),
@@ -99,8 +101,14 @@ def _facts(*, run: WorkflowRun, artifacts: list[WorkflowArtifact]) -> list[Workf
         _append_result_fact(facts, result, "matched_row_count", "匹配行数", suffix=" 行")
         _append_result_fact(facts, result, "chart_count", "图表", suffix=" 张")
         _append_result_fact(facts, result, "field_count", "新增字段", suffix=" 个")
+        verification = result.get("verification")
+        if isinstance(verification, dict):
+            _append_result_fact(facts, verification, "table_count", "表格", suffix=" 个")
+            _append_result_fact(facts, verification, "chart_count", "图表", suffix=" 张")
+            _append_result_fact(facts, verification, "metric_count", "指标", suffix=" 个")
         if result.get("source_files_unchanged") is True or result.get("original_files_unchanged") is True:
             _append_unique_fact(facts, WorkflowDeliveryFact(label="源文件", value="未修改"))
+        _append_specialized_facts(facts, result)
     return facts[:12]
 
 
@@ -117,6 +125,70 @@ def _append_unique_fact(facts: list[WorkflowDeliveryFact], fact: WorkflowDeliver
         facts.append(fact)
 
 
+def _append_specialized_facts(facts: list[WorkflowDeliveryFact], result: dict) -> None:
+    """把文档/知识库的验证事实压缩成数量或状态，不把正文和来源 ID带入结果卡。"""
+
+    knowledge_answer = result.get("knowledge_answer")
+    if isinstance(knowledge_answer, dict):
+        source_ids = knowledge_answer.get("source_ids")
+        if isinstance(source_ids, list):
+            _append_unique_fact(facts, WorkflowDeliveryFact(label="引用来源", value=f"{len(source_ids)} 条"))
+        claims = knowledge_answer.get("claims")
+        if isinstance(claims, list):
+            _append_unique_fact(facts, WorkflowDeliveryFact(label="关键结论", value=f"{len(claims)} 条"))
+        evidence_gate = knowledge_answer.get("evidence_gate")
+        if isinstance(evidence_gate, dict):
+            state = str(evidence_gate.get("evidence_state", "")).strip()
+            if state:
+                _append_unique_fact(facts, WorkflowDeliveryFact(label="证据状态", value=_safe_text(state, maximum=60)))
+
+    document_context = result.get("document_context")
+    if isinstance(document_context, dict):
+        source_refs = document_context.get("source_refs")
+        if isinstance(source_refs, list):
+            _append_unique_fact(facts, WorkflowDeliveryFact(label="引用来源", value=f"{len(source_refs)} 条"))
+        draft_sections = document_context.get("draft_sections")
+        if isinstance(draft_sections, list):
+            _append_unique_fact(facts, WorkflowDeliveryFact(label="内容章节", value=f"{len(draft_sections)} 节"))
+
+
+def _table_summary(*, run: WorkflowRun, artifacts: list[WorkflowArtifact]) -> WorkflowDeliveryTableSummary | None:
+    """从专用任务已保存的 verification 中提取表格/图表摘要，不重新读取输出文件。"""
+
+    table_count = chart_count = metric_count = 0
+    for step in run.steps:
+        output = step.output if isinstance(step.output, dict) else {}
+        verification = output.get("verification")
+        if not isinstance(verification, dict):
+            continue
+        table_count = max(table_count, _nonnegative_int(verification.get("table_count")))
+        chart_count = max(chart_count, _nonnegative_int(verification.get("chart_count")))
+        metric_count = max(metric_count, _nonnegative_int(verification.get("metric_count")))
+
+    image_count = sum(1 for item in artifacts if item.mime_type.lower().startswith("image/"))
+    chart_count = max(chart_count, image_count)
+    if table_count == 0 and chart_count == 0 and metric_count == 0:
+        return None
+
+    parts: list[str] = []
+    if table_count:
+        parts.append(f"{table_count} 个表格")
+    if chart_count:
+        parts.append(f"{chart_count} 个图表")
+    if metric_count:
+        parts.append(f"{metric_count} 个指标")
+    return WorkflowDeliveryTableSummary(
+        table_count=table_count,
+        chart_count=chart_count,
+        metric_count=metric_count,
+        description="、".join(parts) + "，均来自已验证交付结果。",
+    )
+
+
+def _nonnegative_int(value: object) -> int:
+    return value if isinstance(value, int) and value >= 0 else 0
+
+
 def _artifact(artifact: WorkflowArtifact) -> WorkflowDeliveryArtifact:
     """映射为不带 metadata 的安全产物摘要。"""
 
@@ -128,7 +200,10 @@ def _artifact(artifact: WorkflowArtifact) -> WorkflowDeliveryArtifact:
         uri=artifact.uri,
         mime_type=artifact.mime_type,
         openable=bool(artifact.metadata.get("runtime") is True and artifact.uri.startswith("agentflow-output://")),
-        previewable=artifact.kind in {"text", "markdown", "report"},
+        previewable=(
+            artifact.kind in {"text", "markdown", "report"}
+            or artifact.mime_type.lower().startswith("image/")
+        ),
     )
 
 

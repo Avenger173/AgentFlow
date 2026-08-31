@@ -29,6 +29,7 @@ class TaskActivityIndicator;
 class QLineEdit;
 class QListWidget;
 class QPlainTextEdit;
+class QResizeEvent;
 class QScrollArea;
 class QTimer;
 class QTableWidget;
@@ -49,6 +50,7 @@ public:
 
 protected:
     void closeEvent(QCloseEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
 
 private:
     Ui::MainWindow *ui;
@@ -346,6 +348,8 @@ private:
     void handleTaskDeliveryCardFailed(const QString &taskId, const QString &message);
     void resetDispatchDeliveryCard();
     void requestCurrentDispatchDeliveryCardIfTerminal();
+    void openDispatchDeliveryArtifact();
+    void renderDispatchDeliveryImage();
     QString formatDispatchDeliveryCardHtml(const WorkflowDeliveryCardInfo &card) const;
     QString formatDispatchWorkflowPlanHtml(const ChatResult &result) const;
     QString formatDispatchWorkflowPlanHtml(
@@ -751,6 +755,10 @@ private:
     QString currentDispatchDeliveryCardTaskId;
     bool currentDispatchDeliveryCardRequestInFlight = false;
     bool currentDispatchDeliveryCardTerminal = false;
+    QString currentDispatchDeliveryOpenArtifactId;
+    QString currentDispatchDeliveryPreviewArtifactId;
+    bool currentDispatchDeliveryOpenInProgress = false;
+    QPixmap currentDispatchDeliveryImage;
     // 规划阶段返回的步骤数，方便后续把右侧 5 步进度解释成“已生成多少步骤”。
     int currentDispatchPlannedStepCount = 0;
     // 用于真实执行前的二次确认：只保存后端返回的脱敏计划摘要和步骤，不保存文件正文或绝对路径。

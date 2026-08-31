@@ -1277,7 +1277,7 @@ QPushButton#navGroupButton:hover {
 <item><widget class="QFrame" name="dispatchDeliveryCard">
 <property name="visible"><bool>false</bool></property>
 <property name="objectName"><string>subtlePanel</string></property>
-<property name="maximumSize"><size><width>16777215</width><height>190</height></size></property>
+<property name="maximumSize"><size><width>16777215</width><height>300</height></size></property>
 <property name="frameShape"><enum>QFrame::Shape::NoFrame</enum></property>
 <layout class="QVBoxLayout" name="dispatchDeliveryLayout">
 <property name="spacing"><number>6</number></property>
@@ -1307,12 +1307,25 @@ QPushButton#navGroupButton:hover {
 <property name="openLinks"><bool>false</bool></property>
 <property name="html"><string>&lt;p&gt;任务结果将在这里显示。&lt;/p&gt;</string></property>
 </widget></item>
+<item><widget class="QLabel" name="dispatchDeliveryImage">
+<property name="visible"><bool>false</bool></property>
+<property name="objectName"><string>subtlePanel</string></property>
+<property name="minimumSize"><size><width>0</width><height>82</height></size></property>
+<property name="maximumSize"><size><width>16777215</width><height>100</height></size></property>
+<property name="text"><string>正在读取图表预览…</string></property>
+<property name="alignment"><set>Qt::AlignmentFlag::AlignCenter</set></property>
+</widget></item>
 <item><layout class="QHBoxLayout" name="dispatchDeliveryActionLayout">
 <property name="spacing"><number>8</number></property>
 <item><spacer name="dispatchDeliveryActionSpacer">
 <property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property>
 <property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property>
 </spacer></item>
+<item><widget class="QPushButton" name="dispatchDeliveryOpenButton">
+<property name="visible"><bool>false</bool></property>
+<property name="objectName"><string>secondaryButton</string></property>
+<property name="text"><string>打开交付物</string></property>
+</widget></item>
 <item><widget class="QPushButton" name="dispatchDeliveryHistoryButton">
 <property name="objectName"><string>ghostButton</string></property>
 <property name="text"><string>查看任务详情</string></property>

@@ -20,6 +20,7 @@ from app.schemas.workflow import (  # noqa: E402
     RuntimeExecutionMetrics,
     WorkflowArtifact,
     WorkflowRun,
+    WorkflowStepRun,
 )
 from main import app  # noqa: E402
 
@@ -32,7 +33,22 @@ def main() -> None:
         mode="runtime",
         status="completed",
         summary="数据分析已完成并通过回读验证。",
-        steps=[],
+        steps=[
+            WorkflowStepRun(
+                step_id="step_2",
+                agent="data_agent",
+                action="data.render_workbook",
+                status="completed",
+                message="数据工作簿已完成。",
+                output={
+                    "verification": {
+                        "table_count": 2,
+                        "chart_count": 3,
+                        "metric_count": 4,
+                    }
+                },
+            )
+        ],
         metrics=RuntimeExecutionMetrics(
             started_at="2026-08-31T00:00:00+00:00",
             finished_at="2026-08-31T00:00:01+00:00",
@@ -67,6 +83,12 @@ def main() -> None:
         assert payload["terminal"] is True
         assert payload["artifacts"][0]["openable"] is True
         assert payload["artifacts"][0]["previewable"] is False
+        assert payload["table_summary"] == {
+            "table_count": 2,
+            "chart_count": 3,
+            "metric_count": 4,
+            "description": "2 个表格、3 个图表、4 个指标，均来自已验证交付结果。",
+        }
         assert "output_path" not in response.text
         assert str(VERIFY_ROOT) not in response.text
         assert payload["next_actions"] == ["打开交付物", "继续提出下一步要求"]

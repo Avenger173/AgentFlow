@@ -328,6 +328,15 @@ class WorkflowDeliveryFact(BaseModel):
     value: str = Field(min_length=1, max_length=180)
 
 
+class WorkflowDeliveryTableSummary(BaseModel):
+    """结果卡中的数据交付摘要，只保留已回读验证的数量事实。"""
+
+    table_count: int = Field(default=0, ge=0)
+    chart_count: int = Field(default=0, ge=0)
+    metric_count: int = Field(default=0, ge=0)
+    description: str = Field(default="", max_length=220)
+
+
 class WorkflowDeliveryCard(BaseModel):
     """统一的客户交付卡，隐藏 Runtime 细节但保留可操作结果。"""
 
@@ -340,6 +349,7 @@ class WorkflowDeliveryCard(BaseModel):
     headline: str = Field(min_length=1, max_length=180)
     summary_markdown: str = Field(min_length=1, max_length=2_200)
     facts: list[WorkflowDeliveryFact] = Field(default_factory=list, max_length=12)
+    table_summary: WorkflowDeliveryTableSummary | None = None
     warnings: list[str] = Field(default_factory=list, max_length=8)
     artifacts: list[WorkflowDeliveryArtifact] = Field(default_factory=list, max_length=8)
     next_actions: list[str] = Field(default_factory=list, max_length=4)

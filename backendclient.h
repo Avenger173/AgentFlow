@@ -199,6 +199,14 @@ struct WorkflowDeliveryFactInfo
     QString value;
 };
 
+struct WorkflowDeliveryTableSummaryInfo
+{
+    int tableCount = 0;
+    int chartCount = 0;
+    int metricCount = 0;
+    QString description;
+};
+
 struct WorkflowDeliveryCardInfo
 {
     QString schemaVersion;
@@ -210,6 +218,8 @@ struct WorkflowDeliveryCardInfo
     QString headline;
     QString summaryMarkdown;
     QList<WorkflowDeliveryFactInfo> facts;
+    bool hasTableSummary = false;
+    WorkflowDeliveryTableSummaryInfo tableSummary;
     QStringList warnings;
     QList<WorkflowDeliveryArtifactInfo> artifacts;
     QStringList nextActions;

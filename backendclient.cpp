@@ -1076,6 +1076,15 @@ WorkflowDeliveryCardInfo readWorkflowDeliveryCardInfo(const QJsonObject &payload
     result.nextActions = readStringList(payload.value(QStringLiteral("next_actions")).toArray());
     result.updatedAt = payload.value(QStringLiteral("updated_at")).toString();
 
+    const QJsonObject tableSummary = payload.value(QStringLiteral("table_summary")).toObject();
+    if (!tableSummary.isEmpty()) {
+        result.hasTableSummary = true;
+        result.tableSummary.tableCount = tableSummary.value(QStringLiteral("table_count")).toInt();
+        result.tableSummary.chartCount = tableSummary.value(QStringLiteral("chart_count")).toInt();
+        result.tableSummary.metricCount = tableSummary.value(QStringLiteral("metric_count")).toInt();
+        result.tableSummary.description = tableSummary.value(QStringLiteral("description")).toString();
+    }
+
     const QJsonArray facts = payload.value(QStringLiteral("facts")).toArray();
     result.facts.reserve(facts.size());
     for (const QJsonValue &value : facts) {

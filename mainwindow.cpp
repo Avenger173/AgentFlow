@@ -1532,6 +1532,12 @@ void MainWindow::closeEvent(QCloseEvent *event)
     QMainWindow::closeEvent(event);
 }
 
+void MainWindow::resizeEvent(QResizeEvent *event)
+{
+    QMainWindow::resizeEvent(event);
+    renderDispatchDeliveryImage();
+}
+
 void MainWindow::setupDispatchChat()
 {
     loadDispatchConversationPreference();
@@ -1611,6 +1617,10 @@ void MainWindow::setupDispatchChat()
             &QPushButton::clicked,
             this,
             &MainWindow::openCurrentDispatchTaskInHistory);
+    connect(ui->dispatchDeliveryOpenButton,
+            &QPushButton::clicked,
+            this,
+            &MainWindow::openDispatchDeliveryArtifact);
     connect(ui->dispatchNewConversationButton, &QToolButton::clicked, this, &MainWindow::startNewDispatchConversation);
     connect(ui->dispatchConversationHistoryButton,
             &QToolButton::clicked,
@@ -5084,6 +5094,19 @@ void MainWindow::handleDataChartImageReceived(
     const QString &artifactId,
     const QByteArray &imageBytes)
 {
+    if (taskId == currentDispatchTaskId
+        && artifactId == currentDispatchDeliveryPreviewArtifactId
+        && ui->dispatchDeliveryImage) {
+        QPixmap pixmap;
+        if (pixmap.loadFromData(imageBytes, "PNG")) {
+            currentDispatchDeliveryImage = pixmap;
+            renderDispatchDeliveryImage();
+        } else {
+            ui->dispatchDeliveryImage->setText(QStringLiteral("图表缩略图无法解码，可打开交付物查看。"));
+        }
+        return;
+    }
+
     if (taskId != dataChartDashboardTaskId || !dataChartDashboardImageLabel || !dataChartDashboardList) {
         return;
     }
@@ -5129,6 +5152,11 @@ void MainWindow::renderDataChartDashboardPixmap(const QPixmap &pixmap)
 
 void MainWindow::handleDataChartImageFailed(const QString &taskId, const QString &artifactId, const QString &message)
 {
+    if (taskId == currentDispatchTaskId && artifactId == currentDispatchDeliveryPreviewArtifactId
+        && ui->dispatchDeliveryImage) {
+        ui->dispatchDeliveryImage->setText(
+            QStringLiteral("图表缩略图暂时无法读取，可点击“打开交付物”。"));
+    }
     Q_UNUSED(artifactId)
     if (taskId == dataChartDashboardTaskId && dataChartDashboardStatusLabel) {
         dataChartDashboardStatusLabel->setText(
@@ -15150,6 +15178,13 @@ void MainWindow::handleTaskArtifactOpened(
     const QString &artifactId,
     const QString &message)
 {
+    if (taskId == currentDispatchTaskId && artifactId == currentDispatchDeliveryOpenArtifactId) {
+        currentDispatchDeliveryOpenInProgress = false;
+        ui->dispatchDeliveryOpenButton->setEnabled(true);
+        ui->dispatchDeliveryStatus->setText(QStringLiteral("已打开"));
+        polishBadge(ui->dispatchDeliveryStatus, QStringLiteral("badgeGreen"));
+    }
+
     const bool matchesHistoryOpen = taskId == pendingHistoryArtifactOpenTaskId
         && artifactId == pendingHistoryArtifactOpenId;
     if (matchesHistoryOpen) {
@@ -15173,6 +15208,13 @@ void MainWindow::handleTaskArtifactOpenFailed(
     const QString &artifactId,
     const QString &message)
 {
+    if (taskId == currentDispatchTaskId && artifactId == currentDispatchDeliveryOpenArtifactId) {
+        currentDispatchDeliveryOpenInProgress = false;
+        ui->dispatchDeliveryOpenButton->setEnabled(true);
+        ui->dispatchDeliveryStatus->setText(QStringLiteral("打开失败"));
+        polishBadge(ui->dispatchDeliveryStatus, QStringLiteral("badgeOrange"));
+    }
+
     const bool matchesHistoryOpen = taskId == pendingHistoryArtifactOpenTaskId
         && artifactId == pendingHistoryArtifactOpenId;
     if (matchesHistoryOpen) {
@@ -19969,6 +20011,10 @@ void MainWindow::resetDispatchDeliveryCard()
     currentDispatchDeliveryCardTaskId.clear();
     currentDispatchDeliveryCardRequestInFlight = false;
     currentDispatchDeliveryCardTerminal = false;
+    currentDispatchDeliveryOpenArtifactId.clear();
+    currentDispatchDeliveryPreviewArtifactId.clear();
+    currentDispatchDeliveryOpenInProgress = false;
+    currentDispatchDeliveryImage = QPixmap{};
     if (!ui->dispatchDeliveryCard) {
         return;
     }
@@ -19977,6 +20023,10 @@ void MainWindow::resetDispatchDeliveryCard()
     ui->dispatchDeliveryStatus->setText(QStringLiteral("等待结果"));
     polishBadge(ui->dispatchDeliveryStatus, QStringLiteral("badgeGray"));
     ui->dispatchDeliveryText->setHtml(QStringLiteral("<p>任务结果将在这里显示。</p>"));
+    ui->dispatchDeliveryImage->clear();
+    ui->dispatchDeliveryImage->setVisible(false);
+    ui->dispatchDeliveryOpenButton->setVisible(false);
+    ui->dispatchDeliveryOpenButton->setEnabled(false);
 }
 
 void MainWindow::requestCurrentDispatchDeliveryCardIfTerminal()
@@ -20027,6 +20077,14 @@ QString MainWindow::formatDispatchDeliveryCardHtml(const WorkflowDeliveryCardInf
         html += QStringLiteral("</table>");
     }
 
+    if (card.hasTableSummary) {
+        const WorkflowDeliveryTableSummaryInfo &summary = card.tableSummary;
+        html += QStringLiteral(
+            "<div style=\"margin:6px 0;padding:7px 9px;background:#EEF6FF;color:#174A86;\">"
+            "<b>数据交付摘要</b><br/>%1</div>")
+            .arg(summary.description.toHtmlEscaped());
+    }
+
     if (!card.artifacts.isEmpty()) {
         html += QStringLiteral("<p style=\"margin:7px 0 3px 0;\"><b>交付物</b></p><ul style=\"margin:2px 0 5px 18px;\">");
         for (const WorkflowDeliveryArtifactInfo &artifact : card.artifacts) {
@@ -20069,8 +20127,31 @@ void MainWindow::handleTaskDeliveryCardReceived(const WorkflowDeliveryCardInfo &
     currentDispatchDeliveryCardTaskId = card.taskId;
     currentDispatchDeliveryCardRequestInFlight = false;
     currentDispatchDeliveryCardTerminal = card.terminal;
+    currentDispatchDeliveryOpenArtifactId.clear();
+    currentDispatchDeliveryPreviewArtifactId.clear();
+    currentDispatchDeliveryOpenInProgress = false;
+    currentDispatchDeliveryImage = QPixmap{};
+    for (const WorkflowDeliveryArtifactInfo &artifact : card.artifacts) {
+        if (currentDispatchDeliveryOpenArtifactId.isEmpty() && artifact.openable) {
+            currentDispatchDeliveryOpenArtifactId = artifact.artifactId;
+        }
+        if (currentDispatchDeliveryPreviewArtifactId.isEmpty()
+            && artifact.previewable
+            && artifact.mimeType.startsWith(QStringLiteral("image/"), Qt::CaseInsensitive)
+            && artifact.uri.startsWith(QStringLiteral("agentflow-output://data_charts/"))) {
+            currentDispatchDeliveryPreviewArtifactId = artifact.artifactId;
+        }
+    }
     ui->dispatchDeliveryCard->setVisible(true);
     ui->dispatchDeliveryText->setHtml(formatDispatchDeliveryCardHtml(card));
+    ui->dispatchDeliveryOpenButton->setVisible(!currentDispatchDeliveryOpenArtifactId.isEmpty());
+    ui->dispatchDeliveryOpenButton->setEnabled(!currentDispatchDeliveryOpenArtifactId.isEmpty());
+    ui->dispatchDeliveryImage->clear();
+    ui->dispatchDeliveryImage->setVisible(!currentDispatchDeliveryPreviewArtifactId.isEmpty());
+    if (!currentDispatchDeliveryPreviewArtifactId.isEmpty()) {
+        ui->dispatchDeliveryImage->setText(QStringLiteral("正在读取已验证图表预览…"));
+        backendClient->requestDataChartImage(card.taskId, currentDispatchDeliveryPreviewArtifactId);
+    }
 
     const bool failed = card.status == QStringLiteral("failed")
         || card.status == QStringLiteral("cancelled")
@@ -20091,6 +20172,9 @@ void MainWindow::handleTaskDeliveryCardFailed(const QString &taskId, const QStri
     }
 
     currentDispatchDeliveryCardRequestInFlight = false;
+    currentDispatchDeliveryOpenArtifactId.clear();
+    currentDispatchDeliveryPreviewArtifactId.clear();
+    currentDispatchDeliveryImage = QPixmap{};
     ui->dispatchDeliveryCard->setVisible(true);
     ui->dispatchDeliveryStatus->setText(QStringLiteral("暂不可用"));
     polishBadge(ui->dispatchDeliveryStatus, QStringLiteral("badgeOrange"));
@@ -20098,6 +20182,40 @@ void MainWindow::handleTaskDeliveryCardFailed(const QString &taskId, const QStri
         QStringLiteral("<p style=\"color:#9A3412;\"><b>结果卡暂时无法读取。</b></p>"
                        "<p>完整结果仍保留在任务历史中。%1</p>")
             .arg(message.toHtmlEscaped()));
+    ui->dispatchDeliveryImage->clear();
+    ui->dispatchDeliveryImage->setVisible(false);
+    ui->dispatchDeliveryOpenButton->setVisible(false);
+    ui->dispatchDeliveryOpenButton->setEnabled(false);
+}
+
+void MainWindow::openDispatchDeliveryArtifact()
+{
+    if (currentDispatchTaskId.isEmpty() || currentDispatchDeliveryOpenArtifactId.isEmpty()
+        || currentDispatchDeliveryOpenInProgress) {
+        return;
+    }
+
+    // 只把结果卡中后端已经标记为 openable 的 artifact 交给受控打开接口，Qt 不拼接路径。
+    currentDispatchDeliveryOpenInProgress = true;
+    ui->dispatchDeliveryOpenButton->setEnabled(false);
+    ui->dispatchDeliveryStatus->setText(QStringLiteral("正在打开"));
+    polishBadge(ui->dispatchDeliveryStatus, QStringLiteral("badgeBlue"));
+    backendClient->requestTaskArtifactOpen(currentDispatchTaskId, currentDispatchDeliveryOpenArtifactId);
+}
+
+void MainWindow::renderDispatchDeliveryImage()
+{
+    if (!ui->dispatchDeliveryImage || currentDispatchDeliveryImage.isNull()
+        || !ui->dispatchDeliveryImage->isVisible()) {
+        return;
+    }
+
+    const int availableWidth = qMax(120, ui->dispatchDeliveryImage->width() - 16);
+    const QSize targetSize(availableWidth, 88);
+    const QPixmap rendered = currentDispatchDeliveryImage.scaled(
+        targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    ui->dispatchDeliveryImage->setPixmap(rendered);
+    ui->dispatchDeliveryImage->setText(QString());
 }
 
 void MainWindow::handleTaskLogReceived(const TaskLogEvent &event)
