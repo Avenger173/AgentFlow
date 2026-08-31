@@ -159,6 +159,17 @@ ACTION_ADMISSIONS: dict[tuple[str, str], AgentActionAdmission] = {
         recovery_hint="确认数据文件和目标后重新规划；任何失败都不会修改原始 CSV/XLSX 或覆盖已有图表。",
         additional_permissions=("file_write",),
     ),
+    ("data_agent", "export_analysis_workbook"): AgentActionAdmission(
+        agent_id="data_agent",
+        action="export_analysis_workbook",
+        execution_mode="execute",
+        requires_runtime_ready=True,
+        material_kind="dataset",
+        expected_output="基于一份已导入数据新建并回读验证的分析 Excel 工作簿。",
+        verification_scope="数据版本哈希、D2 白名单计算、原生表格/图表/指标回读、受控 outputs 路径与任务 artifact 审计。",
+        recovery_hint="确认数据文件和目标后重新规划；任何失败都不会修改原始 CSV/XLSX 或覆盖已有工作簿。",
+        additional_permissions=("file_write",),
+    ),
 }
 
 

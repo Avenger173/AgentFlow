@@ -774,7 +774,7 @@ python -m uvicorn main:app --host 127.0.0.1 --port 8765
 
 总指挥已确认且协议已部分落地，后续只随真实专业 Agent 的能力扩大路由；通用代码工坊不再开发，命令治理作为平台能力保留。数据工作台已统一使用“数据工作台”导航、渐变背景与渐进披露的独立结果阅读：D1 受控导入/画像，D2 本地预览，D3-D4.3A 可恢复异步交付，D5.1 建议，D5.2 PNG 看板，D5.3 字段加工新副本、D5.4 总指挥单数据集只读分析，以及 R5.3 总指挥受控 PNG 图表交付均已实现。
 
-**2026-08-28 R5.4A 图表会话交付：**AI 调度台不再把“图表或 Excel 交付”推回数据工作台确认。客户已绑定 CSV/XLSX 后可依次说“分析当前数据”“生成图表”“开始执行”；Runtime 完成 PNG 像素回读和 artifact 审计后，会向同一会话持久化一次“图表交付已完成”的客户可读结论，列出图表标题、类型、尺寸与“源 CSV/XLSX 没有被修改”。任务历史仍保留完整产物与审计入口，但不再作为普通交付的强制跳转。`verify_commander_data_chart_delivery.py`、`verify_commander_data_delegate.py`、Python 编译、Qt Debug 构建和 `ctest` 均通过，未调用真实模型、网络或客户文件。R5.4A 的“分析 Excel 工作簿”以及 R5.4B 的任意字段加工、多数据集自然语言写入和 R5.4D 通用图片预览/打开卡仍未开发，不能写成已完成。
+**2026-08-31 R5.4A 数据交付闭环完成：**AI 调度台不再把“图表或 Excel 交付”推回数据工作台确认。客户已绑定 CSV/XLSX 后可依次说“分析当前数据”“生成图表/分析 Excel”“开始执行”；Runtime 完成 PNG 或原生 Excel 回读验证和 artifact 审计后，会向同一会话持久化一次客户可读交付结论，列出图表/工作簿的已验证摘要与“源 CSV/XLSX 没有被修改”。任务历史仍保留完整产物与审计入口，但不再作为普通交付的强制跳转。`verify_commander_data_chart_delivery.py`、`verify_commander_data_workbook_delivery.py`、`verify_commander_data_delegate.py`、意图路由回归、Python 编译、Qt Debug 构建和 `ctest` 均通过，未调用真实模型、网络或客户文件。R5.4B 的自然语言字段加工、多数据集自然语言写入和 R5.4D 通用图片/文件预览打开卡仍未开发，不能写成已完成。
 
 ## 常用验证命令
 

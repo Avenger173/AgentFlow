@@ -113,6 +113,7 @@ private:
     bool isCurrentDispatchDirectKnowledgeAnswer() const;
     bool isCurrentDispatchDirectDataAnalysis() const;
     bool isCurrentDispatchDataChartDelivery() const;
+    bool isCurrentDispatchDataWorkbookDelivery() const;
     bool isCurrentDispatchAutoReadOnlyTask() const;
     bool isCurrentDispatchDirectConversation() const;
     QString currentDispatchAutoReadOnlyActivityText() const;
@@ -780,15 +781,20 @@ private:
     // 图表写入不是自动只读动作：客户在会话中明确确认后才进入 Runtime。完成后仍应在聊天
     // 中即时交付结果，而不是要求用户切回数据工作台或翻找任务历史。
     bool currentDispatchDataChartDelivery = false;
+    // Excel 导出同样由客户自然语言确认后才进入 Runtime；完成后在当前会话立即展示回读摘要，
+    // 不再让用户切回数据工作台确认文件是否生成。
+    bool currentDispatchDataWorkbookDelivery = false;
     bool currentDispatchAutoExecutePending = false;
     bool currentDispatchKnowledgeAnswerResultRequested = false;
     bool currentDispatchKnowledgeAnswerDelivered = false;
     bool currentDispatchDataAnalysisDelivered = false;
     bool currentDispatchDataChartDeliveryDelivered = false;
+    bool currentDispatchDataWorkbookDeliveryDelivered = false;
     // 只读知识库问答自动执行时，失败也要成为明确终态；不能让客户一直看到“正在检索”。
     bool currentDispatchKnowledgeAnswerFailed = false;
     bool currentDispatchDataAnalysisFailed = false;
     bool currentDispatchDataChartDeliveryFailed = false;
+    bool currentDispatchDataWorkbookDeliveryFailed = false;
     QString currentDispatchKnowledgeAnswerChildTaskId;
     // 暂存请求同时冻结本轮显式路由偏好，避免后端启动期间客户编辑输入后改变已排队任务。
     QJsonArray pendingDispatchAgentHints;

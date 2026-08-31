@@ -48,6 +48,12 @@ DATA_CHART_DELIVERY_KEYWORDS = (
     "生成饼图", "制作饼图", "导出饼图",
     "生成环形图", "制作环形图", "导出环形图",
 )
+DATA_WORKBOOK_DELIVERY_KEYWORDS = (
+    "生成分析excel", "生成分析 excel", "导出分析excel", "导出分析 excel",
+    "生成分析xlsx", "生成分析 xlsx", "导出分析xlsx", "导出分析 xlsx",
+    "生成分析工作簿", "导出分析工作簿", "生成数据工作簿", "导出数据工作簿",
+    "生成excel报表", "生成 excel 报表", "导出excel报表", "导出 excel 报表",
+)
 PRESENTATION_ROUTE_KEYWORDS = (
     "ppt", "pptx", "演示文稿", "幻灯片", "幻灯",
 )
@@ -181,6 +187,7 @@ def create_commander_plan(
         )
     )
     data_chart_delivery_requested = data_requested and _requests_data_chart_delivery(lowered)
+    data_workbook_delivery_requested = data_requested and _requests_data_workbook_delivery(lowered)
     needs_document_understanding = _needs_document_understanding(message)
     clarifying_questions: list[str] = []
     steps: list[WorkflowStep] = [
@@ -349,7 +356,7 @@ def create_commander_plan(
                 },
                 reason=(
                     "已绑定一份导入数据；数据工作台将复用本地画像和白名单聚合生成只读结论。"
-                    "客户明确要求图表时会进入单独的受控 PNG 交付步骤；字段加工与 Excel 交付仍需单独确认。"
+                    "客户明确要求图表或分析 Excel 时会进入单独的受控交付步骤；字段加工仍需单独确认。"
                 ),
                 agents=available_agent_list,
                 materials=material_bindings,
@@ -381,6 +388,30 @@ def create_commander_plan(
                     )
                     if chart_decision is not None:
                         specialist_step_ids.append(chart_step_id)
+                        next_index += 1
+                if data_workbook_delivery_requested:
+                    workbook_step_id = f"step_{next_index}"
+                    workbook_decision = _append_admitted_step(
+                        steps=steps,
+                        step_id=workbook_step_id,
+                        agent_id="data_agent",
+                        action="export_analysis_workbook",
+                        title="生成可编辑的分析 Excel 工作簿",
+                        depends_on=[specialist_step_id],
+                        step_input={
+                            "task_goal": message,
+                            "dataset_name": dataset_refs[0],
+                            "dataset_refs": dataset_refs,
+                            "cleaning_policy": "safe",
+                            "max_chart_count": 4,
+                        },
+                        reason="客户明确要求生成分析 Excel；先完成同一份数据的只读分析，再在受控 outputs 中新建并回读工作簿。",
+                        agents=available_agent_list,
+                        materials=material_bindings,
+                        timeout_ms=150_000,
+                    )
+                    if workbook_decision is not None:
+                        specialist_step_ids.append(workbook_step_id)
                         next_index += 1
             else:
                 clarifying_questions.append("数据工作台当前不可用，请检查数据文件或后端状态。")
@@ -866,6 +897,14 @@ def _requests_data_chart_delivery(message: str) -> bool:
     return _matches_any(message, DATA_CHART_DELIVERY_KEYWORDS)
 
 
+def _requests_data_workbook_delivery(message: str) -> bool:
+    """区分“讨论 Excel”与“现在新建一份受控分析工作簿”。"""
+
+    if any(marker in message for marker in ("可导出excel", "可导出 excel", "建议导出excel", "建议导出 excel")):
+        return False
+    return _matches_any(message, DATA_WORKBOOK_DELIVERY_KEYWORDS)
+
+
 def _normalize_material_bindings(
     message: str,
     supplied: Iterable[WorkflowMaterialBinding],
@@ -1122,6 +1161,12 @@ def _retry_policy_for_step(agent_id: str, action: str) -> WorkflowRetryPolicy:
             retryable=False,
             stop_condition="图表写入前后都会验证数据版本和 PNG 像素；失败时不覆盖旧产物，客户可调整目标后重新规划。",
         )
+    if agent_id == "data_agent" and action == "export_analysis_workbook":
+        return WorkflowRetryPolicy(
+            max_attempts=1,
+            retryable=False,
+            stop_condition="工作簿写入前后都会验证数据版本和原生对象回读；失败时不覆盖旧产物，客户可调整目标后重新规划。",
+        )
     if action in {"read_text", "search_text", "generate_code", "generate_report"}:
         return WorkflowRetryPolicy(max_attempts=3, retryable=True, stop_condition="同类错误连续失败后停止自动重试。")
     return WorkflowRetryPolicy()
@@ -1151,13 +1196,19 @@ def _success_criteria_for_step(agent_id: str, action: str) -> list[str]:
             "仅读取一份客户明确绑定的导入数据",
             "本地白名单计算只生成有限指标、聚合与图表建议",
             "原始行不进入模型或父任务，保留关联子任务与源哈希",
-            "不导出或修改 CSV/XLSX/PNG；正式交付仍需数据工作台确认",
+            "不导出或修改 CSV/XLSX/PNG；图表或分析 Excel 需在本会话明确确认后单独交付",
         ]
     if agent_id == "data_agent" and action == "export_chart_dashboard":
         return [
             "仅读取一份客户明确绑定的数据文件及其已验证聚合结果",
             "仅在受控 outputs 中新建 PNG 图表，不修改 CSV/XLSX",
             "每张 PNG 都通过像素回读验证并登记可打开产物",
+        ]
+    if agent_id == "data_agent" and action == "export_analysis_workbook":
+        return [
+            "仅读取一份客户明确绑定的数据文件及其已验证聚合结果",
+            "仅在受控 outputs 中新建 Excel 工作簿，不修改原始 CSV/XLSX",
+            "原生工作表、表格、图表与关键指标都通过回读验证并登记 artifact",
         ]
     if agent_id == "document_agent":
         return ["生成结构化需求摘要", "输出可供后续 Agent 使用的文档上下文"]

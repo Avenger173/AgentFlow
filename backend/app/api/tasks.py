@@ -878,15 +878,18 @@ async def cancel_task(task_id: str) -> TaskControlResponse:
     未登记文件。其它任务仍沿用既有 dry-run/Runtime 控制语义。
     """
 
-    runtime_response = await asyncio.to_thread(request_runtime_cancel, task_id)
-    if runtime_response is not None:
-        return _runtime_control_response(runtime_response, action="cancel")
-
+    # 数据交付任务在统一历史中也使用 ``mode=runtime``，但它们有自己的协作式取消协议：
+    # 导出线程不能被强杀，专用处理器需要先落 cancelled、清理未登记文件，再让后台线程安全返回。
+    # 因此这里必须先尝试专用任务，不能让通用 Runtime 分支提前返回 ``running``。
     response = await cancel_data_transformation_task(task_id)
     if response is None:
         response = await cancel_data_chart_export_task(task_id)
     if response is None:
         response = await cancel_data_workbook_export_task(task_id)
+    if response is None:
+        runtime_response = await asyncio.to_thread(request_runtime_cancel, task_id)
+        if runtime_response is not None:
+            return _runtime_control_response(runtime_response, action="cancel")
     if response is None:
         response = request_cancel(task_id)
     if response is None:

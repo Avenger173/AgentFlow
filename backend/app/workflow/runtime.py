@@ -23,7 +23,7 @@ from app.database.task_repository import (
     set_runtime_execution_control,
 )
 from app.schemas.chat import WorkflowPlan, WorkflowStep
-from app.schemas.data_agent import DataAnalysisPreviewRequest, DataChartExportRequest
+from app.schemas.data_agent import DataAnalysisPreviewRequest, DataChartExportRequest, DataWorkbookExportRequest
 from app.schemas.document_agent import DocumentAgentRunRequest
 from app.schemas.knowledge import KnowledgeAnswerRequest, KnowledgeDeepTaskRequest
 from app.schemas.events import TaskLogEvent, TaskLogLevel
@@ -53,6 +53,11 @@ from app.services.data_chart_delivery import (
     create_data_chart_queued_run,
     get_data_chart_export_task_result,
     run_data_chart_export_task,
+)
+from app.services.data_analysis_delivery import (
+    create_data_workbook_queued_run,
+    get_data_workbook_export_task_result,
+    run_data_workbook_export_task,
 )
 from app.services.data_workspace import get_data_dataset_profile
 from app.services.knowledge_answer import (
@@ -106,6 +111,7 @@ _NON_RETRYABLE_ERROR_CODES = {
     "file_not_found",
     "file_too_large",
     "data_chart_export_failed",
+    "data_workbook_export_failed",
 }
 
 RuntimeEventReporter = Callable[[TaskLogEvent], None]
@@ -307,6 +313,7 @@ def run_prepared_workflow_runtime(
     _persist_direct_knowledge_answer_delivery(plan=plan, run=run)
     _persist_direct_data_analysis_delivery(plan=plan, run=run)
     _persist_data_chart_delivery(plan=plan, run=run)
+    _persist_data_workbook_delivery(plan=plan, run=run)
     return run
 
 
@@ -540,6 +547,74 @@ def _persist_data_chart_delivery(*, plan: WorkflowPlan, run: WorkflowRun) -> Non
         )
     except Exception:
         # 会话归档失败不能撤销已经经过 PNG 回读验证的本地交付；任务历史仍保留完整 artifact。
+        return
+
+
+def _is_data_workbook_delivery_plan(plan: WorkflowPlan) -> bool:
+    """识别“单份数据分析 -> 新建 Excel 工作簿”的已确认交付闭环。"""
+
+    specialists = [step for step in plan.steps if step.agent != "commander_agent"]
+    if len(specialists) != 2:
+        return False
+    analysis_step = next(
+        (step for step in specialists if step.agent == "data_agent" and step.action == "analyze_dataset"),
+        None,
+    )
+    workbook_step = next(
+        (step for step in specialists if step.agent == "data_agent" and step.action == "export_analysis_workbook"),
+        None,
+    )
+    if analysis_step is None or workbook_step is None or analysis_step.id not in workbook_step.depends_on:
+        return False
+    dataset_name = str(analysis_step.input.get("dataset_name", "")).strip()
+    return bool(dataset_name and dataset_name == str(workbook_step.input.get("dataset_name", "")).strip())
+
+
+def _persist_data_workbook_delivery(*, plan: WorkflowPlan, run: WorkflowRun) -> None:
+    """把已回读验证的分析工作簿作为同一会话的最终交付。
+
+    Excel 任务与 PNG 任务均有独立子任务和 artifact 审计。父 Runtime 只根据已登记的
+    `delegated_task_id` 回读受控摘要，不读取任何工作簿单元格或源数据。
+    """
+
+    if run.status != "completed" or not plan.conversation_id or not _is_data_workbook_delivery_plan(plan):
+        return
+    workbook_step = next(step for step in plan.steps if step.action == "export_analysis_workbook")
+    step_run = next((item for item in run.steps if item.step_id == workbook_step.id), None)
+    result = step_run.output.get("result") if step_run is not None else None
+    delegated_task_id = str(result.get("delegated_task_id", "")).strip() if isinstance(result, dict) else ""
+    if not delegated_task_id:
+        return
+
+    try:
+        delegated = get_data_workbook_export_task_result(delegated_task_id)
+        if (
+            delegated is None
+            or delegated.status != "completed"
+            or delegated.artifact is None
+            or delegated.verification is None
+            or not delegated.verification.passed
+        ):
+            return
+        verification = delegated.verification
+        dataset_name = str(workbook_step.input.get("dataset_name", "当前数据")).strip() or "当前数据"
+        delivery = (
+            "## 分析 Excel 已交付\n\n"
+            f"已基于 **{dataset_name}** 生成 **{delegated.artifact.name}**，并通过工作簿回读验证。\n\n"
+            "### 包含内容\n"
+            f"- {len(verification.sheet_names)} 个工作表\n"
+            f"- {verification.table_count} 个原生数据表\n"
+            f"- {verification.chart_count} 个原生图表\n"
+            f"- {verification.metric_count} 项关键指标\n\n"
+            "> 源 CSV/XLSX 没有被修改。该工作簿已作为本次会话的受控交付保存，可从任务历史打开。"
+        )
+        persist_async_assistant_delivery(
+            conversation_id=plan.conversation_id,
+            task_id=delegated_task_id,
+            assistant_message=delivery,
+        )
+    except Exception:
+        # 会话归档不能推翻已验证 artifact；子任务历史仍能作为恢复和审计入口。
         return
 
 
@@ -1855,6 +1930,12 @@ def _execute_safe_step(
             step=step,
             attempt=attempt,
         )
+    if step.agent == "data_agent" and step.action == "export_analysis_workbook":
+        return _execute_data_workbook_export_handoff(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            attempt=attempt,
+        )
     if step.agent == "document_agent" and step.action in {"extract_requirements", "summarize_document"}:
         return _execute_document_memory_tool(
             runtime_task_id=runtime_task_id,
@@ -2287,6 +2368,158 @@ def _execute_data_chart_export_handoff(
         action=step.action,
         status="completed",
         message=f"数据工作台已生成 {len(response.artifacts)} 张经像素回读验证的 PNG 图表。",
+        requires_confirmation=step.requires_confirmation,
+        risk_level=step.risk_level,
+        output={"runtime": True, "tool_name": _tool_name_for_step(step), "result": result},
+    )
+    tool_call = _completed_tool_call(
+        runtime_task_id=runtime_task_id,
+        step=step,
+        attempt=attempt,
+        timeout_ms=timeout_ms,
+        started_at=started_at,
+        finished_at=finished_at,
+        request={"action": step.action, "dataset_name": dataset_name, "goal_length": len(request.goal.strip())},
+        result=result,
+    )
+    return step_run, tool_call, [_delegated_agent_artifact(runtime_task_id, step, result)]
+
+
+def _execute_data_workbook_export_handoff(
+    *,
+    runtime_task_id: str,
+    step: WorkflowStep,
+    attempt: int,
+) -> tuple[WorkflowStepRun, WorkflowToolCall, list[WorkflowArtifact]]:
+    """委派客户确认过的分析 Excel 交付，并回传脱敏回读摘要。
+
+    Commander 不持有客户原始表格，也不把前一分析子任务的内存对象越界传给写入步骤。
+    工作簿服务会重新读取受控数据副本、冻结当前哈希、写入临时文件并完成原生对象回读。
+    """
+
+    started_at = datetime.now(UTC)
+    timeout_ms = step.timeout_ms or 150_000
+    raw_refs = step.input.get("dataset_refs")
+    dataset_refs = [str(item).strip() for item in raw_refs] if isinstance(raw_refs, list) else []
+    dataset_name = str(step.input.get("dataset_name", "")).strip()
+    if len(dataset_refs) != 1 or not dataset_name or dataset_refs[0] != dataset_name:
+        return _data_delegate_failure(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            started_at=started_at,
+            timeout_ms=timeout_ms,
+            attempt=attempt,
+            delegated_task_id="",
+            error_code="invalid_parameters",
+            message="分析 Excel 交付必须绑定一份与步骤一致的已导入数据文件。",
+            result={"reply": "分析 Excel 交付未开始。", "read_only": False},
+        )
+
+    try:
+        profile = get_data_dataset_profile(dataset_name)
+        request = DataWorkbookExportRequest.model_validate(
+            {
+                "dataset_name": dataset_name,
+                "source_sha256": profile.source_sha256,
+                "goal": step.input.get("task_goal", ""),
+                "cleaning_policy": step.input.get("cleaning_policy", "safe"),
+                "max_chart_count": step.input.get("max_chart_count", 4),
+                "confirmed": True,
+            }
+        )
+    except Exception:
+        return _data_delegate_failure(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            started_at=started_at,
+            timeout_ms=timeout_ms,
+            attempt=attempt,
+            delegated_task_id="",
+            error_code="invalid_parameters",
+            message="分析 Excel 交付参数或当前数据版本不符合受控输入契约。",
+            result={"reply": "分析 Excel 交付未开始。", "read_only": False},
+        )
+
+    delegated_task_id = f"task_data_workbook_{uuid4().hex[:12]}"
+    create_data_workbook_queued_run(task_id=delegated_task_id, request=request)
+
+    async def _run_with_timeout():
+        return await asyncio.wait_for(
+            run_data_workbook_export_task(task_id=delegated_task_id, request=request),
+            timeout=timeout_ms / 1000,
+        )
+
+    try:
+        response = asyncio.run(_run_with_timeout())
+    except TimeoutError:
+        return _data_delegate_failure(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            started_at=started_at,
+            timeout_ms=timeout_ms,
+            attempt=attempt,
+            delegated_task_id=delegated_task_id,
+            error_code="tool_timeout",
+            message="分析 Excel 在允许时间内没有完成；未修改源数据文件。",
+            result={"reply": "分析 Excel 交付未完成。", "read_only": False},
+        )
+    except Exception:
+        return _data_delegate_failure(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            started_at=started_at,
+            timeout_ms=timeout_ms,
+            attempt=attempt,
+            delegated_task_id=delegated_task_id,
+            error_code="data_workbook_export_failed",
+            message="分析 Excel 交付过程发生未预期错误；未修改源数据文件。",
+            result={"reply": "分析 Excel 交付未完成。", "read_only": False},
+        )
+
+    verification = response.verification
+    artifact = response.artifact
+    result = {
+        "delegated_task_id": response.task_id,
+        "agent_status": response.status,
+        "stop_reason": "completed" if response.status == "completed" else "data_workbook_export_failed",
+        "reply": response.message,
+        "artifact": (
+            {"name": artifact.name, "uri": artifact.uri, "size_bytes": artifact.size_bytes}
+            if artifact is not None
+            else None
+        ),
+        "verification": verification.model_dump() if verification is not None else None,
+        "source_sha256": request.source_sha256,
+        "read_only": False,
+    }
+    if (
+        response.status != "completed"
+        or artifact is None
+        or verification is None
+        or not verification.passed
+    ):
+        return _data_delegate_failure(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            started_at=started_at,
+            timeout_ms=timeout_ms,
+            attempt=attempt,
+            delegated_task_id=response.task_id,
+            error_code="data_workbook_export_failed",
+            message=response.message or "分析 Excel 未通过交付验证。",
+            result=result,
+        )
+
+    finished_at = datetime.now(UTC)
+    step_run = WorkflowStepRun(
+        step_id=step.id,
+        agent=step.agent,
+        action=step.action,
+        status="completed",
+        message=(
+            f"数据工作台已生成 {artifact.name}，"
+            f"{verification.table_count} 个原生表格、{verification.chart_count} 个原生图表已回读验证。"
+        ),
         requires_confirmation=step.requires_confirmation,
         risk_level=step.risk_level,
         output={"runtime": True, "tool_name": _tool_name_for_step(step), "result": result},
@@ -3792,6 +4025,8 @@ def _delegated_agent_artifact(
         name=(
             "知识库深度总结任务" if step.action == "deep_summary"
             else "知识库问答结果" if step.agent == "knowledge_agent"
+            else "数据图表交付" if step.action == "export_chart_dashboard"
+            else "数据分析 Excel 交付" if step.action == "export_analysis_workbook"
             else "数据工作台分析结果" if step.agent == "data_agent"
             else "文档助手运行结果"
         ),
