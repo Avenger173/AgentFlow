@@ -170,6 +170,27 @@ ACTION_ADMISSIONS: dict[tuple[str, str], AgentActionAdmission] = {
         recovery_hint="确认数据文件和目标后重新规划；任何失败都不会修改原始 CSV/XLSX 或覆盖已有工作簿。",
         additional_permissions=("file_write",),
     ),
+    ("data_agent", "plan_field_transform"): AgentActionAdmission(
+        agent_id="data_agent",
+        action="plan_field_transform",
+        execution_mode="execute",
+        requires_runtime_ready=True,
+        material_kind="dataset",
+        expected_output="依据当前数据画像生成受限字段加工预览，不修改源文件。",
+        verification_scope="数据版本哈希、字段画像、操作白名单、类型兼容性和结果字段冲突校验。",
+        recovery_hint="字段或类型不明确时请补充列名；预览失败不会修改源 CSV/XLSX。",
+    ),
+    ("data_agent", "export_field_transform"): AgentActionAdmission(
+        agent_id="data_agent",
+        action="export_field_transform",
+        execution_mode="execute",
+        requires_runtime_ready=True,
+        material_kind="dataset",
+        expected_output="在受控 outputs 中生成追加派生字段的新 CSV/XLSX 副本，并完成回读验证。",
+        verification_scope="源版本哈希、新字段、行数、输出格式和副本回读验证。",
+        recovery_hint="确认字段加工预览后再执行；失败时不覆盖源文件或已有交付物。",
+        additional_permissions=("file_write",),
+    ),
 }
 
 

@@ -19,6 +19,7 @@ from app.schemas.chat import (
 )
 from app.schemas.memory import LongTermMemoryRecord
 from app.services.long_term_memory import build_memory_context_summary
+from app.services.data_transform_intent import DataTransformIntentError, build_data_transform_intent
 from app.workflow.action_admission import (
     ActionAdmissionDecision,
     evaluate_action_admission,
@@ -53,6 +54,12 @@ DATA_WORKBOOK_DELIVERY_KEYWORDS = (
     "生成分析xlsx", "生成分析 xlsx", "导出分析xlsx", "导出分析 xlsx",
     "生成分析工作簿", "导出分析工作簿", "生成数据工作簿", "导出数据工作簿",
     "生成excel报表", "生成 excel 报表", "导出excel报表", "导出 excel 报表",
+)
+DATA_TRANSFORM_KEYWORDS = (
+    "字段加工", "计算列", "新增字段", "增加字段", "加工字段", "派生字段",
+    "排名", "排行", "累计", "环比", "占比", "份额", "四舍五入", "保留小数",
+    "月份字段", "提取月份", "分段", "分档", "去空格", "清理空格", "规范化文本",
+    "相加", "相减", "相乘", "相除", "计算比率",
 )
 PRESENTATION_ROUTE_KEYWORDS = (
     "ppt", "pptx", "演示文稿", "幻灯片", "幻灯",
@@ -123,6 +130,7 @@ def create_commander_plan(
     knowledge_intent_requested = _matches_any(lowered, KNOWLEDGE_ROUTE_KEYWORDS) or knowledge_deep_requested
     document_intent_requested = _matches_any(lowered, DOCUMENT_ROUTE_KEYWORDS)
     data_intent_requested = _matches_any(lowered, DATA_ROUTE_KEYWORDS)
+    data_transform_intent_requested = _matches_any(lowered, DATA_TRANSFORM_KEYWORDS)
     explicit_specialist_intent = (
         knowledge_intent_requested
         or document_intent_requested
@@ -171,6 +179,7 @@ def create_commander_plan(
     )
     data_requested = not presentation_requested and (
         data_intent_requested
+        or data_transform_intent_requested
         or (
             bool(dataset_refs)
             and material_task_requested
@@ -188,6 +197,7 @@ def create_commander_plan(
     )
     data_chart_delivery_requested = data_requested and _requests_data_chart_delivery(lowered)
     data_workbook_delivery_requested = data_requested and _requests_data_workbook_delivery(lowered)
+    data_transform_requested = data_requested and data_transform_intent_requested
     needs_document_understanding = _needs_document_understanding(message)
     clarifying_questions: list[str] = []
     steps: list[WorkflowStep] = [
@@ -338,83 +348,137 @@ def create_commander_plan(
         elif len(dataset_refs) > 1:
             clarifying_questions.append("数据工作台一次只分析一份已明确选择的数据文件；请保留最相关的一份后重试。")
         else:
-            specialist_step_id = f"step_{next_index}"
-            decision = _append_admitted_step(
-                steps=steps,
-                step_id=specialist_step_id,
-                agent_id="data_agent",
-                action="analyze_dataset",
-                title="委派数据工作台生成只读分析预览",
-                depends_on=["step_1"],
-                parallel_group="specialist_read_only",
-                step_input={
-                    "task_goal": message,
-                    "dataset_name": dataset_refs[0],
-                    "dataset_refs": dataset_refs,
-                    "cleaning_policy": "safe",
-                    "max_chart_count": 4,
-                },
-                reason=(
-                    "已绑定一份导入数据；数据工作台将复用本地画像和白名单聚合生成只读结论。"
-                    "客户明确要求图表或分析 Excel 时会进入单独的受控交付步骤；字段加工仍需单独确认。"
-                ),
-                agents=available_agent_list,
-                materials=material_bindings,
-                timeout_ms=120000,
-            )
-            if decision is not None:
-                specialist_step_ids.append(specialist_step_id)
-                next_index += 1
-                if data_chart_delivery_requested:
-                    chart_step_id = f"step_{next_index}"
-                    chart_decision = _append_admitted_step(
+            dataset_name = dataset_refs[0]
+            if data_transform_requested:
+                try:
+                    intent = build_data_transform_intent(dataset_name, message)
+                except DataTransformIntentError as exc:
+                    clarifying_questions.append(str(exc))
+                else:
+                    transform_input = {
+                        "task_goal": message,
+                        "dataset_name": dataset_name,
+                        "dataset_refs": [dataset_name],
+                        "source_sha256": intent.source_sha256,
+                        "operations": [operation.model_dump(mode="json") for operation in intent.operations],
+                        "cleaning_policy": "safe",
+                        "intent_version": "agentflow.data_transform_intent.v1",
+                    }
+                    plan_step_id = f"step_{next_index}"
+                    plan_decision = _append_admitted_step(
                         steps=steps,
-                        step_id=chart_step_id,
+                        step_id=plan_step_id,
                         agent_id="data_agent",
-                        action="export_chart_dashboard",
-                        title="生成可保存的数据图表 PNG",
-                        depends_on=[specialist_step_id],
-                        step_input={
-                            "task_goal": message,
-                            "dataset_name": dataset_refs[0],
-                            "dataset_refs": dataset_refs,
-                            "cleaning_policy": "safe",
-                            "max_chart_count": 4,
-                        },
-                        reason="客户明确要求生成图表；先完成同一份数据的只读分析，再在受控 outputs 中写入并回读 PNG。",
+                        action="plan_field_transform",
+                        title="规划字段加工并生成预览",
+                        depends_on=["step_1"],
+                        parallel_group="specialist_read_only",
+                        step_input=transform_input,
+                        reason="已根据当前数据画像和客户目标生成受限字段加工计划；先预览，不写入源文件。",
                         agents=available_agent_list,
                         materials=material_bindings,
-                        timeout_ms=150_000,
+                        timeout_ms=120000,
                     )
-                    if chart_decision is not None:
-                        specialist_step_ids.append(chart_step_id)
+                    if plan_decision is not None:
+                        specialist_step_ids.append(plan_step_id)
                         next_index += 1
-                if data_workbook_delivery_requested:
-                    workbook_step_id = f"step_{next_index}"
-                    workbook_decision = _append_admitted_step(
-                        steps=steps,
-                        step_id=workbook_step_id,
-                        agent_id="data_agent",
-                        action="export_analysis_workbook",
-                        title="生成可编辑的分析 Excel 工作簿",
-                        depends_on=[specialist_step_id],
-                        step_input={
-                            "task_goal": message,
-                            "dataset_name": dataset_refs[0],
-                            "dataset_refs": dataset_refs,
-                            "cleaning_policy": "safe",
-                            "max_chart_count": 4,
-                        },
-                        reason="客户明确要求生成分析 Excel；先完成同一份数据的只读分析，再在受控 outputs 中新建并回读工作簿。",
-                        agents=available_agent_list,
-                        materials=material_bindings,
-                        timeout_ms=150_000,
-                    )
-                    if workbook_decision is not None:
-                        specialist_step_ids.append(workbook_step_id)
-                        next_index += 1
+                        export_step_id = f"step_{next_index}"
+                        export_decision = _append_admitted_step(
+                            steps=steps,
+                            step_id=export_step_id,
+                            agent_id="data_agent",
+                            action="export_field_transform",
+                            title="确认后生成字段加工副本",
+                            depends_on=[plan_step_id],
+                            step_input=transform_input,
+                            reason="客户确认后在受控 outputs 中新建 CSV/XLSX 副本，追加字段并完成回读验证。",
+                            agents=available_agent_list,
+                            materials=material_bindings,
+                            timeout_ms=150_000,
+                        )
+                        if export_decision is not None:
+                            specialist_step_ids.append(export_step_id)
+                            next_index += 1
+                    else:
+                        clarifying_questions.append("字段加工计划当前未通过总指挥动作准入，请检查数据工作台状态。")
             else:
-                clarifying_questions.append("数据工作台当前不可用，请检查数据文件或后端状态。")
+                specialist_step_id = f"step_{next_index}"
+                decision = _append_admitted_step(
+                    steps=steps,
+                    step_id=specialist_step_id,
+                    agent_id="data_agent",
+                    action="analyze_dataset",
+                    title="委派数据工作台生成只读分析预览",
+                    depends_on=["step_1"],
+                    parallel_group="specialist_read_only",
+                    step_input={
+                        "task_goal": message,
+                        "dataset_name": dataset_name,
+                        "dataset_refs": [dataset_name],
+                        "cleaning_policy": "safe",
+                        "max_chart_count": 4,
+                    },
+                    reason=(
+                        "已绑定一份导入数据；数据工作台将复用本地画像和白名单聚合生成只读结论。"
+                        "客户明确要求图表或分析 Excel 时会进入单独的受控交付步骤；字段加工仍需单独确认。"
+                    ),
+                    agents=available_agent_list,
+                    materials=material_bindings,
+                    timeout_ms=120000,
+                )
+                if decision is not None:
+                    specialist_step_ids.append(specialist_step_id)
+                    next_index += 1
+                    if data_chart_delivery_requested:
+                        chart_step_id = f"step_{next_index}"
+                        chart_decision = _append_admitted_step(
+                            steps=steps,
+                            step_id=chart_step_id,
+                            agent_id="data_agent",
+                            action="export_chart_dashboard",
+                            title="生成可保存的数据图表 PNG",
+                            depends_on=[specialist_step_id],
+                            step_input={
+                                "task_goal": message,
+                                "dataset_name": dataset_name,
+                                "dataset_refs": [dataset_name],
+                                "cleaning_policy": "safe",
+                                "max_chart_count": 4,
+                            },
+                            reason="客户明确要求生成图表；先完成同一份数据的只读分析，再在受控 outputs 中写入并回读 PNG。",
+                            agents=available_agent_list,
+                            materials=material_bindings,
+                            timeout_ms=150_000,
+                        )
+                        if chart_decision is not None:
+                            specialist_step_ids.append(chart_step_id)
+                            next_index += 1
+                    if data_workbook_delivery_requested:
+                        workbook_step_id = f"step_{next_index}"
+                        workbook_decision = _append_admitted_step(
+                            steps=steps,
+                            step_id=workbook_step_id,
+                            agent_id="data_agent",
+                            action="export_analysis_workbook",
+                            title="生成可编辑的分析 Excel 工作簿",
+                            depends_on=[specialist_step_id],
+                            step_input={
+                                "task_goal": message,
+                                "dataset_name": dataset_name,
+                                "dataset_refs": [dataset_name],
+                                "cleaning_policy": "safe",
+                                "max_chart_count": 4,
+                            },
+                            reason="客户明确要求生成分析 Excel；先完成同一份数据的只读分析，再在受控 outputs 中新建并回读工作簿。",
+                            agents=available_agent_list,
+                            materials=material_bindings,
+                            timeout_ms=150_000,
+                        )
+                        if workbook_decision is not None:
+                            specialist_step_ids.append(workbook_step_id)
+                            next_index += 1
+                else:
+                    clarifying_questions.append("数据工作台当前不可用，请检查数据文件或后端状态。")
 
     if len(steps) == 1:
         steps.append(
@@ -855,7 +919,7 @@ def _requests_bound_material_work(message: str) -> bool:
 
     lowered = message.casefold()
     task_markers = (
-        "分析", "看看", "查看", "读取", "检索", "搜索", "查找", "提取", "归纳",
+        "分析", "看看", "查看", "读取", "检索", "搜索", "查找", "提取", "归纳", "梳理",
         "总结", "整理", "审查", "核验", "比较", "解释", "回答", "问答", "统计",
         "计算", "生成", "制作", "导出", "保存", "加工", "清洗", "画图", "做图",
         "当前", "这份", "这个", "刚才", "上一步",
@@ -903,6 +967,12 @@ def _requests_data_workbook_delivery(message: str) -> bool:
     if any(marker in message for marker in ("可导出excel", "可导出 excel", "建议导出excel", "建议导出 excel")):
         return False
     return _matches_any(message, DATA_WORKBOOK_DELIVERY_KEYWORDS)
+
+
+def _requests_data_transform(message: str) -> bool:
+    """识别需要新增派生字段的自然语言目标。"""
+
+    return _matches_any(message, DATA_TRANSFORM_KEYWORDS)
 
 
 def _normalize_material_bindings(
@@ -1167,6 +1237,18 @@ def _retry_policy_for_step(agent_id: str, action: str) -> WorkflowRetryPolicy:
             retryable=False,
             stop_condition="工作簿写入前后都会验证数据版本和原生对象回读；失败时不覆盖旧产物，客户可调整目标后重新规划。",
         )
+    if agent_id == "data_agent" and action == "plan_field_transform":
+        return WorkflowRetryPolicy(
+            max_attempts=1,
+            retryable=False,
+            stop_condition="字段加工计划由本地画像和白名单操作生成；字段或类型不明确时直接澄清，不重复试算。",
+        )
+    if agent_id == "data_agent" and action == "export_field_transform":
+        return WorkflowRetryPolicy(
+            max_attempts=1,
+            retryable=False,
+            stop_condition="字段加工副本写入前后都会验证源哈希、新字段和行数；失败时不覆盖源文件或旧产物。",
+        )
     if action in {"read_text", "search_text", "generate_code", "generate_report"}:
         return WorkflowRetryPolicy(max_attempts=3, retryable=True, stop_condition="同类错误连续失败后停止自动重试。")
     return WorkflowRetryPolicy()
@@ -1210,6 +1292,18 @@ def _success_criteria_for_step(agent_id: str, action: str) -> list[str]:
             "仅在受控 outputs 中新建 Excel 工作簿，不修改原始 CSV/XLSX",
             "原生工作表、表格、图表与关键指标都通过回读验证并登记 artifact",
         ]
+    if agent_id == "data_agent" and action == "plan_field_transform":
+        return [
+            "仅使用一份客户明确绑定且哈希未变化的数据文件",
+            "操作来自有限白名单，字段和类型均通过本地画像校验",
+            "只生成脱敏加工预览，不写入源 CSV/XLSX",
+        ]
+    if agent_id == "data_agent" and action == "export_field_transform":
+        return [
+            "仅在客户确认后新建字段加工副本，不修改源 CSV/XLSX",
+            "按原文件类型追加所有确认字段，不添加无关样式",
+            "新副本通过字段、行数和源版本回读验证后再交付",
+        ]
     if agent_id == "document_agent":
         return ["生成结构化需求摘要", "输出可供后续 Agent 使用的文档上下文"]
     if agent_id == "code_agent":
@@ -1236,6 +1330,8 @@ def _infer_intent(steps: list[WorkflowStep]) -> str:
     if "knowledge_agent" in agents:
         return "knowledge_deep_summary" if any(step.action == "deep_summary" for step in steps) else "knowledge_answer"
     if "data_agent" in agents:
+        if any(step.action in {"plan_field_transform", "export_field_transform"} for step in steps):
+            return "data_transform"
         return "data_workspace"
     return "general"
 
@@ -1290,7 +1386,9 @@ def _build_definition_of_done(steps: list[WorkflowStep]) -> list[str]:
         else:
             done.append("知识库助手仅依据所选资料库的活动版本完成可信问答，关键结论可在关联子任务查看来源。")
     if "data_agent" in agents:
-        if any(step.action == "export_chart_dashboard" for step in steps):
+        if any(step.action == "export_field_transform" for step in steps):
+            done.append("数据工作台已按确认的白名单加工计划，在新副本中追加字段并完成回读验证；源文件未修改。")
+        elif any(step.action == "export_chart_dashboard" for step in steps):
             done.append("数据工作台已基于明确绑定的数据生成并回读 PNG 图表；源 CSV/XLSX 不会被修改，交付物可在任务历史直接打开。")
         elif any(step.action == "analyze_dataset" for step in steps):
             done.append(

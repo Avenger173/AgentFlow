@@ -23,7 +23,13 @@ from app.database.task_repository import (
     set_runtime_execution_control,
 )
 from app.schemas.chat import WorkflowPlan, WorkflowStep
-from app.schemas.data_agent import DataAnalysisPreviewRequest, DataChartExportRequest, DataWorkbookExportRequest
+from app.schemas.data_agent import (
+    DataAnalysisPreviewRequest,
+    DataChartExportRequest,
+    DataTransformPreviewRequest,
+    DataTransformationExportRequest,
+    DataWorkbookExportRequest,
+)
 from app.schemas.document_agent import DocumentAgentRunRequest
 from app.schemas.knowledge import KnowledgeAnswerRequest, KnowledgeDeepTaskRequest
 from app.schemas.events import TaskLogEvent, TaskLogLevel
@@ -58,6 +64,12 @@ from app.services.data_analysis_delivery import (
     create_data_workbook_queued_run,
     get_data_workbook_export_task_result,
     run_data_workbook_export_task,
+)
+from app.services.data_transformations import preview_data_transformation
+from app.services.data_transformation_delivery import (
+    create_data_transformation_queued_run,
+    get_data_transformation_task_result,
+    run_data_transformation_task,
 )
 from app.services.data_workspace import get_data_dataset_profile
 from app.services.knowledge_answer import (
@@ -103,6 +115,7 @@ _COMPOSITION_SAFE_ACTIONS = {
 }
 _NON_RETRYABLE_ERROR_CODES = {
     "artifact_verification_failed",
+    "data_transformation_failed",
     "empty_query",
     "invalid_parameters",
     "missing_document_context",
@@ -314,6 +327,7 @@ def run_prepared_workflow_runtime(
     _persist_direct_data_analysis_delivery(plan=plan, run=run)
     _persist_data_chart_delivery(plan=plan, run=run)
     _persist_data_workbook_delivery(plan=plan, run=run)
+    _persist_data_transformation_delivery(plan=plan, run=run)
     return run
 
 
@@ -615,6 +629,70 @@ def _persist_data_workbook_delivery(*, plan: WorkflowPlan, run: WorkflowRun) -> 
         )
     except Exception:
         # 会话归档不能推翻已验证 artifact；子任务历史仍能作为恢复和审计入口。
+        return
+
+
+def _is_data_transformation_delivery_plan(plan: WorkflowPlan) -> bool:
+    """识别“字段加工预览 -> 新建字段副本”的两步数据交付计划。"""
+
+    specialists = [step for step in plan.steps if step.agent != "commander_agent"]
+    if len(specialists) != 2:
+        return False
+    preview_step = next(
+        (step for step in specialists if step.agent == "data_agent" and step.action == "plan_field_transform"),
+        None,
+    )
+    export_step = next(
+        (step for step in specialists if step.agent == "data_agent" and step.action == "export_field_transform"),
+        None,
+    )
+    if preview_step is None or export_step is None or preview_step.id not in export_step.depends_on:
+        return False
+    dataset_name = str(preview_step.input.get("dataset_name", "")).strip()
+    return bool(dataset_name and dataset_name == str(export_step.input.get("dataset_name", "")).strip())
+
+
+def _persist_data_transformation_delivery(*, plan: WorkflowPlan, run: WorkflowRun) -> None:
+    """把字段加工副本的可读交付摘要追加到客户当前会话。"""
+
+    if run.status != "completed" or not plan.conversation_id or not _is_data_transformation_delivery_plan(plan):
+        return
+    export_step = next(step for step in plan.steps if step.action == "export_field_transform")
+    step_run = next((item for item in run.steps if item.step_id == export_step.id), None)
+    result = step_run.output.get("result") if step_run is not None else None
+    delegated_task_id = str(result.get("delegated_task_id", "")).strip() if isinstance(result, dict) else ""
+    if not delegated_task_id:
+        return
+
+    try:
+        delegated = get_data_transformation_task_result(delegated_task_id)
+        if (
+            delegated is None
+            or delegated.status != "completed"
+            or delegated.artifact is None
+            or delegated.verification is None
+            or not delegated.verification.passed
+        ):
+            return
+        verification = delegated.verification
+        dataset_name = str(export_step.input.get("dataset_name", "当前数据")).strip() or "当前数据"
+        result_columns = "、".join(verification.result_columns[:12]) or "新增字段"
+        delivery = (
+            "## 字段加工副本已交付\n\n"
+            f"已基于 **{dataset_name}** 生成 **{delegated.artifact.name}**，并通过副本回读验证。\n\n"
+            "### 本次新增\n"
+            f"- 字段：{result_columns}\n"
+            f"- 数据行：{verification.row_count}\n"
+            f"- 加工项：{len(delegated.plans)}\n\n"
+            "> 源 CSV/XLSX 没有被修改。副本已保存到受控输出并登记到任务历史，可直接打开。"
+        )
+        persist_async_assistant_delivery(
+            conversation_id=plan.conversation_id,
+            task_id=delegated_task_id,
+            assistant_message=delivery,
+        )
+    except Exception:
+        # 会话归档失败不影响已通过回读验证的副本，任务历史仍保留完整 artifact。
         return
 
 
@@ -1936,6 +2014,18 @@ def _execute_safe_step(
             step=step,
             attempt=attempt,
         )
+    if step.agent == "data_agent" and step.action == "plan_field_transform":
+        return _execute_data_field_transform_plan(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            attempt=attempt,
+        )
+    if step.agent == "data_agent" and step.action == "export_field_transform":
+        return _execute_data_field_transform_export(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            attempt=attempt,
+        )
     if step.agent == "document_agent" and step.action in {"extract_requirements", "summarize_document"}:
         return _execute_document_memory_tool(
             runtime_task_id=runtime_task_id,
@@ -2532,6 +2622,255 @@ def _execute_data_workbook_export_handoff(
         started_at=started_at,
         finished_at=finished_at,
         request={"action": step.action, "dataset_name": dataset_name, "goal_length": len(request.goal.strip())},
+        result=result,
+    )
+    return step_run, tool_call, [_delegated_agent_artifact(runtime_task_id, step, result)]
+
+
+def _execute_data_field_transform_plan(
+    *,
+    runtime_task_id: str,
+    step: WorkflowStep,
+    attempt: int,
+) -> tuple[WorkflowStepRun, WorkflowToolCall, list[WorkflowArtifact]]:
+    """执行字段加工只读预览，不创建文件也不把原始行带入父任务。"""
+
+    started_at = datetime.now(UTC)
+    timeout_ms = step.timeout_ms or 120_000
+    raw_refs = step.input.get("dataset_refs")
+    dataset_refs = [str(item).strip() for item in raw_refs] if isinstance(raw_refs, list) else []
+    dataset_name = str(step.input.get("dataset_name", "")).strip()
+    supplied_hash = str(step.input.get("source_sha256", "")).strip()
+    if len(dataset_refs) != 1 or not dataset_name or dataset_refs[0] != dataset_name:
+        return _failed_safe_step(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            started_at=started_at,
+            error_code="invalid_parameters",
+            message="字段加工预览必须绑定一份与步骤一致的已导入数据文件。",
+            timeout_ms=timeout_ms,
+            attempt=attempt,
+        )
+
+    try:
+        profile = get_data_dataset_profile(dataset_name)
+        if supplied_hash.casefold() != profile.source_sha256.casefold():
+            raise ValueError("数据文件在计划后发生变化，请重新生成字段加工预览。")
+        request = DataTransformPreviewRequest.model_validate(
+            {
+                "dataset_name": dataset_name,
+                "source_sha256": supplied_hash,
+                "goal": step.input.get("task_goal", ""),
+                "cleaning_policy": step.input.get("cleaning_policy", "safe"),
+                "operations": step.input.get("operations", []),
+            }
+        )
+        preview = preview_data_transformation(request)
+    except Exception as exc:
+        return _failed_safe_step(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            started_at=started_at,
+            error_code="data_transformation_failed",
+            message="字段加工预览未完成；请检查字段类型、日期列和加工目标。",
+            details={"reason": str(exc)[:240]},
+            timeout_ms=timeout_ms,
+            attempt=attempt,
+        )
+
+    result = {
+        "intent_version": step.input.get("intent_version", "agentflow.data_transform_intent.v1"),
+        "source_sha256": profile.source_sha256,
+        "plans": [plan.model_dump(mode="json") for plan in preview.plans],
+        "row_count": preview.row_count,
+        "affected_count": preview.affected_count,
+        "empty_result_count": preview.empty_result_count,
+        "warning_count": len(preview.warnings),
+        "read_only": True,
+        "reply": (
+            f"已生成 {len(preview.plans)} 个新增字段的加工预览，共 {preview.row_count} 行；"
+            "源文件尚未修改，确认后才会创建副本。"
+        ),
+    }
+    finished_at = datetime.now(UTC)
+    step_run = WorkflowStepRun(
+        step_id=step.id,
+        agent=step.agent,
+        action=step.action,
+        status="completed",
+        message=result["reply"],
+        requires_confirmation=step.requires_confirmation,
+        risk_level=step.risk_level,
+        output={"runtime": True, "tool_name": _tool_name_for_step(step), "result": result},
+    )
+    tool_call = _completed_tool_call(
+        runtime_task_id=runtime_task_id,
+        step=step,
+        attempt=attempt,
+        timeout_ms=timeout_ms,
+        started_at=started_at,
+        finished_at=finished_at,
+        request={"action": step.action, "dataset_name": dataset_name, "operation_count": len(preview.plans)},
+        result=result,
+    )
+    return step_run, tool_call, []
+
+
+def _execute_data_field_transform_export(
+    *,
+    runtime_task_id: str,
+    step: WorkflowStep,
+    attempt: int,
+) -> tuple[WorkflowStepRun, WorkflowToolCall, list[WorkflowArtifact]]:
+    """在 Runtime 已取得写入权限后生成字段加工副本，并回读子任务结果。"""
+
+    started_at = datetime.now(UTC)
+    timeout_ms = step.timeout_ms or 150_000
+    raw_refs = step.input.get("dataset_refs")
+    dataset_refs = [str(item).strip() for item in raw_refs] if isinstance(raw_refs, list) else []
+    dataset_name = str(step.input.get("dataset_name", "")).strip()
+    supplied_hash = str(step.input.get("source_sha256", "")).strip()
+    operations = step.input.get("operations")
+    first_operation = operations[0] if isinstance(operations, list) and operations else {}
+    if len(dataset_refs) != 1 or not dataset_name or dataset_refs[0] != dataset_name or not isinstance(first_operation, dict):
+        return _data_delegate_failure(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            started_at=started_at,
+            timeout_ms=timeout_ms,
+            attempt=attempt,
+            delegated_task_id="",
+            error_code="invalid_parameters",
+            message="字段加工副本必须绑定一份与步骤一致的数据文件和非空操作计划。",
+            result={"reply": "字段加工副本未开始。", "read_only": False},
+        )
+
+    try:
+        profile = get_data_dataset_profile(dataset_name)
+        if supplied_hash.casefold() != profile.source_sha256.casefold():
+            raise ValueError("数据文件在预览后发生变化，请重新规划字段加工。")
+        request = DataTransformationExportRequest.model_validate(
+            {
+                "dataset_name": dataset_name,
+                "source_sha256": supplied_hash,
+                "goal": step.input.get("task_goal", ""),
+                "operation_type": first_operation.get("operation_type"),
+                "primary_column": first_operation.get("primary_column"),
+                "secondary_column": first_operation.get("secondary_column"),
+                "result_column": first_operation.get("result_column"),
+                "date_part": first_operation.get("date_part", "month"),
+                "arithmetic_operator": first_operation.get("arithmetic_operator", "multiply"),
+                "round_digits": first_operation.get("round_digits", 2),
+                "operations": operations,
+                "confirmed": True,
+            }
+        )
+    except Exception as exc:
+        return _data_delegate_failure(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            started_at=started_at,
+            timeout_ms=timeout_ms,
+            attempt=attempt,
+            delegated_task_id="",
+            error_code="invalid_parameters",
+            message="字段加工副本参数或数据版本不符合受控输入契约。",
+            result={"reply": "字段加工副本未开始。", "read_only": False, "details": str(exc)[:240]},
+        )
+
+    delegated_task_id = f"task_data_transform_{uuid4().hex[:12]}"
+    create_data_transformation_queued_run(task_id=delegated_task_id, request=request)
+
+    async def _run_with_timeout():
+        return await asyncio.wait_for(
+            run_data_transformation_task(task_id=delegated_task_id, request=request),
+            timeout=timeout_ms / 1000,
+        )
+
+    try:
+        response = asyncio.run(_run_with_timeout())
+    except TimeoutError:
+        return _data_delegate_failure(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            started_at=started_at,
+            timeout_ms=timeout_ms,
+            attempt=attempt,
+            delegated_task_id=delegated_task_id,
+            error_code="tool_timeout",
+            message="字段加工副本在允许时间内没有完成；未修改源数据文件。",
+            result={"reply": "字段加工副本未完成。", "read_only": False},
+        )
+    except Exception:
+        return _data_delegate_failure(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            started_at=started_at,
+            timeout_ms=timeout_ms,
+            attempt=attempt,
+            delegated_task_id=delegated_task_id,
+            error_code="data_transformation_failed",
+            message="字段加工副本过程发生未预期错误；未修改源数据文件。",
+            result={"reply": "字段加工副本未完成。", "read_only": False},
+        )
+
+    artifact = response.artifact
+    verification = response.verification
+    result = {
+        "delegated_task_id": response.task_id,
+        "agent_status": response.status,
+        "stop_reason": "completed" if response.status == "completed" else "data_transformation_failed",
+        "reply": response.message,
+        "artifact": (
+            {"name": artifact.name, "uri": artifact.uri, "size_bytes": artifact.size_bytes}
+            if artifact is not None
+            else None
+        ),
+        "plans": [plan.model_dump(mode="json") for plan in response.plans],
+        "verification": verification.model_dump(mode="json") if verification is not None else None,
+        "source_sha256": request.source_sha256,
+        "read_only": False,
+    }
+    if (
+        response.status != "completed"
+        or artifact is None
+        or verification is None
+        or not verification.passed
+    ):
+        return _data_delegate_failure(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            started_at=started_at,
+            timeout_ms=timeout_ms,
+            attempt=attempt,
+            delegated_task_id=response.task_id,
+            error_code="data_transformation_failed",
+            message=response.message or "字段加工副本未通过回读验证。",
+            result=result,
+        )
+
+    finished_at = datetime.now(UTC)
+    step_run = WorkflowStepRun(
+        step_id=step.id,
+        agent=step.agent,
+        action=step.action,
+        status="completed",
+        message=(
+            f"数据工作台已生成 {artifact.name}，追加 {len(verification.result_columns)} 个字段，"
+            "并通过副本回读验证。"
+        ),
+        requires_confirmation=step.requires_confirmation,
+        risk_level=step.risk_level,
+        output={"runtime": True, "tool_name": _tool_name_for_step(step), "result": result},
+    )
+    tool_call = _completed_tool_call(
+        runtime_task_id=runtime_task_id,
+        step=step,
+        attempt=attempt,
+        timeout_ms=timeout_ms,
+        started_at=started_at,
+        finished_at=finished_at,
+        request={"action": step.action, "dataset_name": dataset_name, "operation_count": len(request.operations)},
         result=result,
     )
     return step_run, tool_call, [_delegated_agent_artifact(runtime_task_id, step, result)]
@@ -4027,6 +4366,7 @@ def _delegated_agent_artifact(
             else "知识库问答结果" if step.agent == "knowledge_agent"
             else "数据图表交付" if step.action == "export_chart_dashboard"
             else "数据分析 Excel 交付" if step.action == "export_analysis_workbook"
+            else "字段加工副本" if step.action == "export_field_transform"
             else "数据工作台分析结果" if step.agent == "data_agent"
             else "文档助手运行结果"
         ),
