@@ -40,6 +40,7 @@ from app.schemas.workflow import (
     WorkflowArtifact,
     WorkflowArtifactListResponse,
     WorkflowArtifactPreviewResponse,
+    WorkflowDeliveryCard,
     WorkflowRun,
     WorkflowRunListResponse,
     WorkflowRunMode,
@@ -83,6 +84,7 @@ from app.workflow.dry_run import (
     retry_workflow_dry_run,
 )
 from app.workflow.evaluation import evaluate_workflow_task
+from app.services.delivery_card import build_delivery_card
 from app.workflow.runtime import (
     execute_workflow_runtime,
     request_runtime_cancel,
@@ -812,6 +814,21 @@ async def get_task_updates(task_id: str) -> WorkflowTaskUpdateListResponse:
         events=get_task_log_events(task_id) or [],
         tool_calls=list_workflow_tool_calls(task_id),
         artifacts=list_workflow_artifacts(task_id),
+        permissions=list_runtime_permission_requests(task_id=task_id),
+    )
+
+
+@router.get("/{task_id}/delivery", response_model=WorkflowDeliveryCard)
+async def get_task_delivery(task_id: str) -> WorkflowDeliveryCard:
+    """返回结论优先的统一结果卡，供调度台和专业工作台共用。"""
+
+    run = get_workflow_run(task_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' was not found.")
+    return build_delivery_card(
+        run=run,
+        artifacts=list_workflow_artifacts(task_id),
+        tool_calls=list_workflow_tool_calls(task_id),
         permissions=list_runtime_permission_requests(task_id=task_id),
     )
 
