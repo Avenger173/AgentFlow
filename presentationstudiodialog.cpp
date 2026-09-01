@@ -219,6 +219,29 @@ void PresentationStudioDialog::setInitialGoal(const QString &goal)
     ui->intentEdit->moveCursor(QTextCursor::End);
 }
 
+void PresentationStudioDialog::startDirectGeneration(const QString &goal)
+{
+    const QString normalizedGoal = goal.trimmed();
+    if (normalizedGoal.size() < 4 || planning || exporting) {
+        return;
+    }
+
+    directGeneration = true;
+    setInitialGoal(normalizedGoal);
+    // 直出默认只使用内置视觉版式，但保留模型数据规划能力；这样明确的“数据 PPT”不会
+    // 因没有手工勾选开关而退化成没有图表的普通文本页，也不会暗中联网下载素材。
+    if (visualAssetProviderCombo) {
+        visualAssetProviderCombo->setCurrentIndex(0);
+    }
+    ui->licensedAssetsCheckBox->setChecked(true);
+    ui->licensedAssetsCheckBox->setEnabled(false);
+    ui->intentEdit->setEnabled(false);
+    ui->planButton->setEnabled(false);
+    ui->closeButton->setText(QStringLiteral("后台继续"));
+    ui->statusLabel->setText(QStringLiteral("正在准备 PPT 创作计划…"));
+    QTimer::singleShot(0, this, &PresentationStudioDialog::startPlanning);
+}
+
 void PresentationStudioDialog::startPlanning()
 {
     const QString intent = ui->intentEdit->toPlainText().trimmed();
@@ -279,6 +302,11 @@ void PresentationStudioDialog::handlePlanReceived(const PresentationStudioPlanRe
         result.warnings.isEmpty()
             ? QStringLiteral("创作计划已完成。确认内容与事实边界后即可导出 PPTX。")
             : QStringLiteral("创作计划已完成，包含需要留意的事项。请阅读后再导出。"));
+    if (directGeneration) {
+        // 用户已经在调度台明确提出“制作”，这里不再把同一份确认重复交给客户；
+        // 外部素材仍保持关闭，文件只会写入既有受控 outputs 目录。
+        QTimer::singleShot(0, this, &PresentationStudioDialog::exportPresentation);
+    }
 }
 
 void PresentationStudioDialog::handlePlanFailed(const QString &message)
@@ -290,6 +318,9 @@ void PresentationStudioDialog::handlePlanFailed(const QString &message)
     ui->licensedAssetsCheckBox->setEnabled(true);
     ui->statusLabel->setText(
         message.isEmpty() ? QStringLiteral("创作计划未能生成，请稍后重试。") : message);
+    if (directGeneration) {
+        emit directGenerationFailed(message);
+    }
 }
 
 void PresentationStudioDialog::exportPresentation()
@@ -355,17 +386,19 @@ void PresentationStudioDialog::exportPresentation()
                          .arg(qMax(visualCount, requestedVisuals.size()))
                          .arg(requestedVisuals.size());
     }
-    const auto decision = QMessageBox::question(
-        this,
-        QStringLiteral("确认导出 PPTX"),
-        QStringLiteral("将基于当前创作计划生成新的可编辑 PPTX。\n"
-                       "本次不会覆盖同名文件；数据图表会按当前计划生成，并可在 PowerPoint 中编辑。%1\n\n"
-                       "是否继续？")
-            .arg(assetNotice + researchNotice + dataNotice),
-        QMessageBox::Cancel | QMessageBox::Yes,
-        QMessageBox::Cancel);
-    if (decision != QMessageBox::Yes) {
-        return;
+    if (!directGeneration) {
+        const auto decision = QMessageBox::question(
+            this,
+            QStringLiteral("确认导出 PPTX"),
+            QStringLiteral("将基于当前创作计划生成新的可编辑 PPTX。\n"
+                           "本次不会覆盖同名文件；数据图表会按当前计划生成，并可在 PowerPoint 中编辑。%1\n\n"
+                           "是否继续？")
+                .arg(assetNotice + researchNotice + dataNotice),
+            QMessageBox::Cancel | QMessageBox::Yes,
+            QMessageBox::Cancel);
+        if (decision != QMessageBox::Yes) {
+            return;
+        }
     }
 
     exporting = true;
@@ -423,6 +456,9 @@ void PresentationStudioDialog::handlePresentationExported(const PresentationExpo
         result.message.isEmpty()
             ? QStringLiteral("已导出 %1 页 PPTX，并通过回读验证。可在任务历史打开交付物。").arg(result.slideCount)
             : result.message);
+    if (directGeneration) {
+        emit directGenerationCompleted(result);
+    }
 }
 
 void PresentationStudioDialog::handlePresentationExportFailed(const QString &message)
@@ -434,6 +470,9 @@ void PresentationStudioDialog::handlePresentationExportFailed(const QString &mes
     ui->licensedAssetsCheckBox->setEnabled(true);
     ui->statusLabel->setText(
         message.isEmpty() ? QStringLiteral("PPTX 导出失败，请修改后重试。") : message);
+    if (directGeneration) {
+        emit directGenerationFailed(message);
+    }
 }
 
 QString PresentationStudioDialog::visualAssetProvider() const
@@ -447,12 +486,18 @@ void PresentationStudioDialog::setPlanningState(const QString &message)
 {
     ui->statusLabel->setProperty("class", QStringLiteral("studio-status-running"));
     ui->statusLabel->setText(message);
+    if (directGeneration) {
+        emit directGenerationProgress(message);
+    }
 }
 
 void PresentationStudioDialog::setReadyState(const QString &message)
 {
     ui->statusLabel->setProperty("class", QStringLiteral("studio-status-ready"));
     ui->statusLabel->setText(message);
+    if (directGeneration) {
+        emit directGenerationProgress(message);
+    }
 }
 
 void PresentationStudioDialog::updatePlanPreview()

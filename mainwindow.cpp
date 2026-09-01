@@ -1974,6 +1974,8 @@ void MainWindow::selectDispatchConversation(const QString &conversationId)
     currentDispatchNeedsClarification = false;
     currentDispatchGuidedHandoff = false;
     currentDispatchPresentationHandoff = false;
+    currentDispatchPresentationRunning = false;
+    currentDispatchPresentationCompleted = false;
     currentDispatchRuntimeMode.clear();
     currentDispatchRuntimeStatus.clear();
     currentDispatchExecutionInProgress = false;
@@ -6240,12 +6242,18 @@ void MainWindow::openPresentationStudio()
     openPresentationStudioForPrompt({});
 }
 
-void MainWindow::openPresentationStudioForPrompt(const QString &prompt)
+void MainWindow::openPresentationStudioForPrompt(const QString &prompt, bool directGenerate)
 {
     // V2 从一句需求起步，不依赖当前材料选择。独立对话框承载较长的逐页计划，主工作台
     // 因而仍能专注于“已有材料的交付与审查”，也不会在窄窗口里挤压可阅读区域。
+    if (directGenerate && dispatchPresentationDialog) {
+        dispatchPresentationDialog->close();
+        dispatchPresentationDialog->deleteLater();
+        dispatchPresentationDialog.clear();
+    }
     auto *dialog = new PresentationStudioDialog(backendClient, this);
-    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    // 直出模式允许用户关闭窗口后继续后台制作；保留对象才能把完成/失败回执送回调度台。
+    dialog->setAttribute(Qt::WA_DeleteOnClose, !directGenerate);
     dialog->setInitialGoal(prompt);
     connect(dialog,
             &PresentationStudioDialog::openTaskHistoryRequested,
@@ -6254,7 +6262,84 @@ void MainWindow::openPresentationStudioForPrompt(const QString &prompt)
                 dialog->accept();
                 openTaskInHistory(taskId);
             });
+    if (directGenerate) {
+        dispatchPresentationDialog = dialog;
+        connect(dialog,
+                &PresentationStudioDialog::directGenerationProgress,
+                this,
+                [this](const QString &message) {
+                    if (!currentDispatchPresentationRunning) {
+                        return;
+                    }
+                    const QString status = message.trimmed().isEmpty()
+                        ? QStringLiteral("正在制作 PPT")
+                        : message.trimmed().left(72);
+                    ui->dispatchChatStatus->setText(status);
+                    ui->summaryVal3->setText(QStringLiteral("正在制作 PPT"));
+                    setDispatchActivityRunning(true);
+                    setProgressStep(3,
+                                    QStringLiteral("3 智能制作 PPT · %1").arg(status),
+                                    QStringLiteral("badgeBlue"));
+                });
+        connect(dialog,
+                &PresentationStudioDialog::directGenerationCompleted,
+                this,
+                [this](const PresentationExportResult &result) {
+                    if (!currentDispatchPresentationRunning) {
+                        return;
+                    }
+                    currentDispatchPresentationRunning = false;
+                    currentDispatchPresentationCompleted = true;
+                    ui->dispatchChatStatus->setText(QStringLiteral("PPT 已生成"));
+                    ui->summaryVal3->setText(QStringLiteral("PPT 已生成并通过验证"));
+                    setProgressStep(3, QStringLiteral("3 智能制作 PPT · 已完成"), QStringLiteral("badgeGreen"));
+                    setProgressStep(4, QStringLiteral("4 输出校验 · 已通过"), QStringLiteral("badgeGreen"));
+                    setProgressStep(5, QStringLiteral("5 当前结论 · PPT 已交付"), QStringLiteral("badgeGreen"));
+                    setDispatchActivityRunning(false);
+                    const QString deliveryMessage = result.message.trimmed().isEmpty()
+                        ? QStringLiteral("PPT 已完成并保存到受控输出目录。")
+                        : result.message.trimmed();
+                    const QString deliveryLocation = result.filename.trimmed().isEmpty()
+                        ? result.relativePath.trimmed()
+                        : result.filename.trimmed();
+                    appendConversationHtml(formatDispatchAssistantMessageHtml(
+                        QStringLiteral("## PPT 已生成\n\n%1\n\n"
+                                       "文件：`%3`\n\n"
+                                       "> 已生成 %2 页可编辑 PPTX，并完成文件回读验证。创作窗口中保留完整计划，"
+                                       "任务历史中保留交付记录。")
+                            .arg(deliveryMessage.toHtmlEscaped(),
+                                 QString::number(result.slideCount),
+                                 deliveryLocation.toHtmlEscaped())));
+                    updateDispatchActionButtons();
+                });
+        connect(dialog,
+                &PresentationStudioDialog::directGenerationFailed,
+                this,
+                [this](const QString &message) {
+                    if (!currentDispatchPresentationRunning) {
+                        return;
+                    }
+                    currentDispatchPresentationRunning = false;
+                    currentDispatchPresentationCompleted = false;
+                    ui->dispatchChatStatus->setText(QStringLiteral("PPT 制作未完成"));
+                    ui->summaryVal3->setText(QStringLiteral("请查看创作窗口后重试"));
+                    setProgressStep(5,
+                                    QStringLiteral("5 当前结论 · PPT 制作未完成"),
+                                    QStringLiteral("badgeOrange"));
+                    setDispatchActivityRunning(false);
+                    appendConversationHtml(
+                        QStringLiteral("<hr/><h3>AI 调度台</h3>"
+                                       "<p style=\"color:#B45309;\"><b>PPT 制作没有完成。</b></p>"
+                                       "<p>原有文件没有被修改。请查看创作窗口中的具体原因，修正主题后重新发送。</p>"
+                                       "<p style=\"color:#64748B;\">%1</p>")
+                            .arg(message.toHtmlEscaped()));
+                    updateDispatchActionButtons();
+                });
+    }
     dialog->open();
+    if (directGenerate) {
+        dialog->startDirectGeneration(prompt);
+    }
 }
 
 void MainWindow::beginDocumentPresentationDraft()
@@ -10392,7 +10477,11 @@ void MainWindow::updateDispatchActionButtons()
                                                                 : QStringLiteral("回答已完成"))
                            : currentDispatchAutoReadOnlyActivityText()));
         } else if (presentationHandoff) {
-            ui->dispatchExecuteButton->setText(QStringLiteral("已打开智能制作 PPT"));
+            ui->dispatchExecuteButton->setText(
+                currentDispatchPresentationRunning
+                    ? QStringLiteral("正在制作 PPT")
+                    : currentDispatchPresentationCompleted ? QStringLiteral("PPT 已生成")
+                                                            : QStringLiteral("PPT 制作已受理"));
         } else if (directConversation) {
             ui->dispatchExecuteButton->setText(QStringLiteral("回答已完成"));
         } else if (currentDispatchGuidedHandoff) {
@@ -10437,7 +10526,11 @@ void MainWindow::updateDispatchActionButtons()
                 QStringLiteral("这是普通对话，回答已经直接显示；不需要启动 Runtime。"));
         } else if (presentationHandoff) {
             ui->dispatchExecuteButton->setToolTip(
-                QStringLiteral("已打开智能制作 PPT 并带入主题；生成计划和导出由该工作台分别确认。"));
+                currentDispatchPresentationRunning
+                    ? QStringLiteral("PPT 正在独立创作窗口中生成；主对话不会被切走。")
+                    : currentDispatchPresentationCompleted
+                          ? QStringLiteral("PPT 已完成，可在创作窗口或任务历史查看交付物。")
+                          : QStringLiteral("PPT 制作已受理，可继续发送“开始制作”恢复创作窗口。"));
         } else if (currentDispatchNeedsClarification) {
             ui->dispatchExecuteButton->setToolTip(QStringLiteral("当前计划需要补充信息，暂不适合执行。"));
         } else if (compositionRuntimeRequired) {
@@ -18910,6 +19003,35 @@ void MainWindow::sendDispatchMessage()
         return;
     }
 
+    // PPT 已经是当前会话的明确目标时，客户说“开始/继续制作”或“你倒是制作啊”
+    // 不是一个新的泛化问题。恢复同一个创作窗口即可，避免又生成一张空的 dry-run 计划卡。
+    const bool presentationNudge = currentDispatchPresentationHandoff
+        && !currentDispatchPresentationCompleted
+        && (executionCommand.contains(QStringLiteral("制作"))
+            || executionCommand.contains(QStringLiteral("生成"))
+            || executionCommand.contains(QStringLiteral("做")))
+        && (executionCommand.contains(QStringLiteral("开始"))
+            || executionCommand.contains(QStringLiteral("继续"))
+            || executionCommand.contains(QStringLiteral("直接"))
+            || executionCommand.contains(QStringLiteral("倒是")));
+    if (presentationNudge) {
+        appendConversationHtml(formatDispatchUserMessageHtml(message));
+        ui->dispatchInputEdit->clear();
+        if (currentDispatchPresentationRunning) {
+            appendConversationHtml(formatDispatchAssistantMessageHtml(
+                QStringLiteral("PPT 正在制作中，创作窗口会持续显示计划、导出和回读验证进度。")));
+        } else {
+            currentDispatchPresentationRunning = true;
+            ui->dispatchChatStatus->setText(QStringLiteral("正在制作 PPT"));
+            setDispatchActivityRunning(true);
+            openPresentationStudioForPrompt(currentDispatchUserGoal, true);
+            appendConversationHtml(formatDispatchAssistantMessageHtml(
+                QStringLiteral("已继续制作 PPT，结果完成后会直接回到当前会话。")));
+        }
+        updateDispatchActionButtons();
+        return;
+    }
+
     const QJsonArray materials = buildDispatchMaterialBindings();
     const QJsonArray agentHints = buildDispatchAgentHints();
     const QString projectScope = currentDispatchProjectScope;
@@ -19151,6 +19273,8 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
     currentDispatchNeedsClarification = result.planSummary.nextAction == QStringLiteral("ask_clarifying_questions");
     currentDispatchGuidedHandoff = result.planSummary.nextAction == QStringLiteral("open_data_workspace");
     currentDispatchPresentationHandoff = result.planSummary.nextAction == QStringLiteral("open_presentation_studio");
+    currentDispatchPresentationRunning = currentDispatchPresentationHandoff;
+    currentDispatchPresentationCompleted = false;
     // /api/chat 当前生成的是 dry-run 任务；先记录模式，后续日志结束时才能正确区分“预演完成”和“执行完成”。
     currentDispatchRuntimeMode = QStringLiteral("dry_run");
     currentDispatchRuntimeStatus = currentDispatchNeedsClarification
@@ -19189,7 +19313,10 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
     if (currentDispatchNeedsClarification) {
         taskSummary = QStringLiteral("需要补充信息");
     } else if (currentDispatchPresentationHandoff) {
-        taskSummary = QStringLiteral("已打开智能制作 PPT");
+        taskSummary = currentDispatchPresentationRunning
+            ? QStringLiteral("正在制作 PPT")
+            : currentDispatchPresentationCompleted ? QStringLiteral("PPT 已生成")
+                                                    : QStringLiteral("PPT 制作已受理");
     } else if (currentDispatchGuidedHandoff) {
         taskSummary = QStringLiteral("待转入数据工作台");
     } else if (currentDispatchDirectDataAnalysis) {
@@ -19229,9 +19356,9 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
                            "原始数据不会被修改，完成后会在本对话展示交付入口。</p>"));
     } else if (currentDispatchPresentationHandoff) {
         appendConversationHtml(
-            QStringLiteral("<hr/><h3>AI 调度台</h3><p><b>已识别为 PPT 制作需求。</b></p>"
-                           "<p>主题已保留在当前会话。调度台不会擅自跳转或替你打开旧工作台；"
-                           "需要进入可视化创作页时，请点击文档助手中的“智能制作 PPT”。</p>"));
+            QStringLiteral("<hr/><h3>AI 调度台</h3><p><b>已开始制作 PPT。</b></p>"
+                           "<p>正在生成创作计划、整理页面并导出可编辑 PPTX；完整进度会显示在独立创作窗口，"
+                           "主对话不会被切走。</p>"));
     } else if (currentDispatchGuidedHandoff) {
         appendConversationHtml(
             QStringLiteral("<hr/><h3>AI 调度台</h3><p>已识别到需要在数据工作台继续处理。选择数据文件后，我会基于该文件给出可执行分析。</p>"));
@@ -19269,7 +19396,7 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
         dispatchStatus = QStringLiteral("回答完成");
     }
     ui->dispatchChatStatus->setText(dispatchStatus);
-    setDispatchActivityRunning(autoReadOnlyTask);
+    setDispatchActivityRunning(autoReadOnlyTask || currentDispatchPresentationRunning);
     setProgressStep(1, QStringLiteral("1 任务提交 · 已收到任务"), QStringLiteral("badgeGreen"));
     setProgressStep(2,
                     QStringLiteral("2 Commander 规划 · 已生成 %1 个步骤").arg(currentDispatchPlannedStepCount),
@@ -19300,9 +19427,21 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
         stageFour = QStringLiteral("4 权限 / 产物 · 已按本次请求执行");
         stageFive = QStringLiteral("5 当前结论 · 等待工作簿回读验证");
     } else if (currentDispatchPresentationHandoff) {
-        stageThree = QStringLiteral("3 智能制作 PPT · 已识别主题");
-        stageFour = QStringLiteral("4 权限 / 产物 · 等待进入创作工作区");
-        stageFive = QStringLiteral("5 当前结论 · 主题已保留在会话");
+        stageThree = currentDispatchPresentationRunning
+            ? QStringLiteral("3 智能制作 PPT · 正在生成")
+            : currentDispatchPresentationCompleted
+                  ? QStringLiteral("3 智能制作 PPT · 已完成")
+                  : QStringLiteral("3 智能制作 PPT · 已受理");
+        stageFour = currentDispatchPresentationRunning
+            ? QStringLiteral("4 输出校验 · 等待 PPTX 回读验证")
+            : currentDispatchPresentationCompleted
+                  ? QStringLiteral("4 输出校验 · 已通过")
+                  : QStringLiteral("4 输出校验 · 等待创作窗口");
+        stageFive = currentDispatchPresentationRunning
+            ? QStringLiteral("5 当前结论 · 正在制作")
+            : currentDispatchPresentationCompleted
+                  ? QStringLiteral("5 当前结论 · PPT 已交付")
+                  : QStringLiteral("5 当前结论 · PPT 制作已受理");
     } else if (currentDispatchGuidedHandoff) {
         stageThree = QStringLiteral("3 工作台交接 · 等待你选择数据");
         stageFour = QStringLiteral("4 权限 / 产物 · 尚未创建数据任务");
@@ -19318,7 +19457,11 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
     updateDispatchActionButtons();
     backendClient->connectTaskLog(result.taskId);
     refreshCurrentDispatchUpdates();
-
+    if (currentDispatchPresentationHandoff) {
+        // 明确的“制作 PPT”请求直接进入现有创作/导出链；主窗口不切页，也不要求客户
+        // 再重复点击“开始执行”。独立窗口负责展示计划、导出和回读验证进度。
+        openPresentationStudioForPrompt(currentDispatchUserGoal, true);
+    }
 }
 
 QString MainWindow::formatDispatchWorkflowPlanHtml(const ChatResult &result) const
@@ -20008,6 +20151,8 @@ void MainWindow::handleChatFailed(const QString &message)
     currentDispatchUpdates.clear();
     currentDispatchNeedsClarification = false;
     currentDispatchPresentationHandoff = false;
+    currentDispatchPresentationRunning = false;
+    currentDispatchPresentationCompleted = false;
     currentDispatchExecutionInProgress = false;
     currentDispatchExecutionSubmitted = false;
     currentDispatchDirectKnowledgeAnswer = false;
@@ -20183,7 +20328,8 @@ void MainWindow::handleTaskDeliveryCardReceived(const WorkflowDeliveryCardInfo &
                 : artifact.sourceTaskId;
         }
     }
-    ui->dispatchDeliveryCard->setVisible(true);
+    // 结果详情放在独立、可移动的知识卡片中；主对话区只保留简短交付摘要。
+    ui->dispatchDeliveryCard->setVisible(false);
     ui->dispatchDeliveryText->setHtml(formatDispatchDeliveryCardHtml(card));
     ui->dispatchDeliveryOpenButton->setVisible(!currentDispatchDeliveryOpenArtifactId.isEmpty());
     ui->dispatchDeliveryOpenButton->setEnabled(!currentDispatchDeliveryOpenArtifactId.isEmpty());
@@ -20228,7 +20374,7 @@ void MainWindow::handleTaskDeliveryCardFailed(const QString &taskId, const QStri
     currentDispatchDeliveryPreviewArtifactId.clear();
     currentDispatchDeliveryPreviewArtifactTaskId.clear();
     currentDispatchDeliveryImage = QPixmap{};
-    ui->dispatchDeliveryCard->setVisible(true);
+    ui->dispatchDeliveryCard->setVisible(false);
     ui->dispatchDeliveryStatus->setText(QStringLiteral("暂不可用"));
     polishBadge(ui->dispatchDeliveryStatus, QStringLiteral("badgeOrange"));
     ui->dispatchDeliveryText->setHtml(
@@ -20458,8 +20604,11 @@ void MainWindow::handleTaskLogReceived(const TaskLogEvent &event)
     scheduleDispatchUpdatesRefresh(250);
     if (isCurrentDispatchAutoReadOnlyTask()
         || currentDispatchDataChartDelivery
-        || currentDispatchDataWorkbookDelivery) {
-        ui->dispatchChatStatus->setText(currentDispatchAutoReadOnlyActivityText());
+        || currentDispatchDataWorkbookDelivery
+        || currentDispatchPresentationRunning) {
+        ui->dispatchChatStatus->setText(currentDispatchPresentationRunning
+                                            ? QStringLiteral("正在制作 PPT")
+                                            : currentDispatchAutoReadOnlyActivityText());
         setDispatchActivityRunning(true);
     }
 }
@@ -20526,7 +20675,10 @@ void MainWindow::handleTaskLogFinished(const QString &taskId)
             beginCurrentDispatchRuntime(true);
             return;
         }
-        if (autoStartAfterDryRun) {
+        if (currentDispatchPresentationRunning) {
+            ui->dispatchChatStatus->setText(QStringLiteral("正在制作 PPT"));
+            setDispatchActivityRunning(true);
+        } else if (autoStartAfterDryRun) {
             ui->dispatchChatStatus->setText(currentDispatchAutoReadOnlyActivityText());
             setDispatchActivityRunning(true);
         } else if (currentDispatchUpdates.isEmpty()) {

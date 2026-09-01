@@ -26,9 +26,15 @@ public:
     ~PresentationStudioDialog() override;
     // 调度台的主题创作引导只预填客户已经发送的文本，不自动发起模型请求或导出文件。
     void setInitialGoal(const QString &goal);
+    // 调度台对“帮我制作 PPT”的明确请求走低摩擦直出：自动生成计划并导出内置版式，
+    // 外部图片与联网资料仍不会被静默打开；独立窗口只展示真实进度和最终交付。
+    void startDirectGeneration(const QString &goal);
 
 signals:
     void openTaskHistoryRequested(const QString &taskId);
+    void directGenerationProgress(const QString &message);
+    void directGenerationCompleted(const PresentationExportResult &result);
+    void directGenerationFailed(const QString &message);
 
 private:
     void startPlanning();
@@ -56,6 +62,7 @@ private:
     PresentationStudioPlanResult currentPlan;
     bool planning = false;
     bool exporting = false;
+    bool directGeneration = false;
 };
 
 #endif // PRESENTATIONSTUDIODIALOG_H
