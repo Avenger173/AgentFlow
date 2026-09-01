@@ -132,7 +132,9 @@ def create_commander_plan(
     # “帮我做 PPT”也不能被错误解释成“分析当前数据/资料库”。
     presentation_requested = _matches_any(lowered, PRESENTATION_ROUTE_KEYWORDS)
     knowledge_intent_requested = _matches_any(lowered, KNOWLEDGE_ROUTE_KEYWORDS) or knowledge_deep_requested
-    document_intent_requested = _matches_any(lowered, DOCUMENT_ROUTE_KEYWORDS)
+    # “资料库”是知识库专属实体；不能因为 DOCUMENT_ROUTE_KEYWORDS 里的宽泛词“资料”
+    # 把一个明确的知识库问题同时路由成“请选择文档”。知识库意图优先于泛化的文档词。
+    document_intent_requested = not knowledge_intent_requested and _matches_any(lowered, DOCUMENT_ROUTE_KEYWORDS)
     data_intent_requested = _matches_any(lowered, DATA_ROUTE_KEYWORDS)
     data_transform_intent_requested = _matches_any(lowered, DATA_TRANSFORM_KEYWORDS)
     data_join_intent_requested = _matches_any(lowered, DATA_JOIN_KEYWORDS)
@@ -204,6 +206,7 @@ def create_commander_plan(
     )
     data_chart_delivery_requested = data_requested and _requests_data_chart_delivery(lowered)
     data_workbook_delivery_requested = data_requested and _requests_data_workbook_delivery(lowered)
+    requested_chart_count = _requested_chart_count(lowered)
     data_transform_requested = data_requested and data_transform_intent_requested
     data_join_requested = data_requested and data_join_intent_requested
     needs_document_understanding = _needs_document_understanding(message)
@@ -484,7 +487,7 @@ def create_commander_plan(
                         "dataset_name": dataset_name,
                         "dataset_refs": [dataset_name],
                         "cleaning_policy": "safe",
-                        "max_chart_count": 4,
+                        "max_chart_count": requested_chart_count,
                     },
                     reason=(
                         "已绑定一份导入数据；数据工作台将复用本地画像和白名单聚合生成只读结论。"
@@ -511,7 +514,8 @@ def create_commander_plan(
                                 "dataset_name": dataset_name,
                                 "dataset_refs": [dataset_name],
                                 "cleaning_policy": "safe",
-                                "max_chart_count": 4,
+                                "max_chart_count": requested_chart_count,
+                                "explicit_output_request": True,
                             },
                             reason="客户明确要求生成图表；先完成同一份数据的只读分析，再在受控 outputs 中写入并回读 PNG。",
                             agents=available_agent_list,
@@ -535,7 +539,8 @@ def create_commander_plan(
                                 "dataset_name": dataset_name,
                                 "dataset_refs": [dataset_name],
                                 "cleaning_policy": "safe",
-                                "max_chart_count": 4,
+                                "max_chart_count": requested_chart_count,
+                                "explicit_output_request": True,
                             },
                             reason="客户明确要求生成分析 Excel；先完成同一份数据的只读分析，再在受控 outputs 中新建并回读工作簿。",
                             agents=available_agent_list,
@@ -1026,7 +1031,32 @@ def _requests_data_chart_delivery(message: str) -> bool:
 
     if any(marker in message for marker in ("可生成图表", "图表建议", "建议图表", "能生成图表")):
         return False
-    return _matches_any(message, DATA_CHART_DELIVERY_KEYWORDS)
+    # 中文自然表达经常在动词和“图表”之间插入数量、量词或空格，例如“生成 3 张图表”。
+    # 先保留否定/建议过滤，再用紧凑文本和受控正则识别真实交付请求。
+    compact = re.sub(r"\s+", "", message.casefold())
+    if _matches_any(compact, DATA_CHART_DELIVERY_KEYWORDS):
+        return True
+    return bool(
+        re.search(r"(?:生成|制作|导出|保存)(?:\d+|[一二三四五六七八九十百]+)?(?:张|个|份)?(?:各)?(?:种)?图表", compact)
+        or re.search(r"(?:图表|折线图|柱状图|饼图|环形图|散点图).*(?:png|图片|文件)", compact)
+    )
+
+
+def _requested_chart_count(message: str) -> int:
+    """读取客户明确要求的图表数量，并限制在当前交付契约允许的 1~4 张。"""
+
+    compact = re.sub(r"\s+", "", message.casefold())
+    match = re.search(
+        r"(?:生成|制作|导出|保存)(\d+|[一二三四五六七八九十百]+)(?:张|个|份|种)?图表",
+        compact,
+    )
+    if not match:
+        return 4
+    token = match.group(1)
+    if token.isdigit():
+        return max(1, min(4, int(token)))
+    chinese_digits = {"一": 1, "二": 2, "三": 3, "四": 4}
+    return chinese_digits.get(token, 4)
 
 
 def _requests_data_workbook_delivery(message: str) -> bool:
@@ -1034,7 +1064,10 @@ def _requests_data_workbook_delivery(message: str) -> bool:
 
     if any(marker in message for marker in ("可导出excel", "可导出 excel", "建议导出excel", "建议导出 excel")):
         return False
-    return _matches_any(message, DATA_WORKBOOK_DELIVERY_KEYWORDS)
+    compact = re.sub(r"\s+", "", message.casefold())
+    if _matches_any(compact, DATA_WORKBOOK_DELIVERY_KEYWORDS):
+        return True
+    return bool(re.search(r"(?:生成|制作|导出|保存).{0,8}(?:分析)?(?:excel|xlsx|工作簿|报表)", compact))
 
 
 def _requests_data_transform(message: str) -> bool:

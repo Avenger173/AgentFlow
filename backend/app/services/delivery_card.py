@@ -204,6 +204,7 @@ def _artifact(artifact: WorkflowArtifact) -> WorkflowDeliveryArtifact:
             artifact.kind in {"text", "markdown", "report"}
             or artifact.mime_type.lower().startswith("image/")
         ),
+        source_task_id=artifact.task_id,
     )
 
 

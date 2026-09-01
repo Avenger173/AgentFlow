@@ -18,6 +18,10 @@ _SIDE_EFFECT_PERMISSIONS = {
 }
 _HIGH_RISK_PERMISSIONS = {"shell", "plugin_install"}
 _AUTO_APPROVE_DENYLIST = {"network", "shell", "database", "plugin_install"}
+_EXPLICIT_LOCAL_DELIVERY_ACTIONS = {
+    ("data_agent", "export_chart_dashboard"),
+    ("data_agent", "export_analysis_workbook"),
+}
 
 
 @dataclass(frozen=True)
@@ -62,6 +66,21 @@ def evaluate_permission_policy(
             policy=policy,
             action="confirm",
             reason="步骤包含高风险权限，必须由用户明确确认。",
+        )
+
+    # 图表/分析 Excel 的写入目标固定在受控 outputs，且只有规划器在识别到用户明确的
+    # “生成/导出/保存”请求时才会写入这个内部标记。它等价于用户已经在自然语言中给出
+    # 本次交付确认，不应再弹一次“开始执行”；路径、参数、像素/工作簿回读仍由专业 Tool
+    # 和 Runtime 验证，不能推广到任意 file_write。
+    if (
+        (step.agent, step.action) in _EXPLICIT_LOCAL_DELIVERY_ACTIONS
+        and step.input.get("explicit_output_request") is True
+        and permissions.issubset({"file_read", "file_write"})
+    ):
+        return PermissionPolicyDecision(
+            policy=policy,
+            action="allow",
+            reason="用户已明确要求本地受控交付，图表/工作簿仅写入 outputs 并保留审计。",
         )
 
     if policy == "always_ask":

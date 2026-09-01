@@ -1110,6 +1110,7 @@ WorkflowDeliveryCardInfo readWorkflowDeliveryCardInfo(const QJsonObject &payload
         artifact.mimeType = artifactPayload.value(QStringLiteral("mime_type")).toString();
         artifact.openable = artifactPayload.value(QStringLiteral("openable")).toBool();
         artifact.previewable = artifactPayload.value(QStringLiteral("previewable")).toBool();
+        artifact.sourceTaskId = artifactPayload.value(QStringLiteral("source_task_id")).toString();
         if (!artifact.artifactId.isEmpty() || !artifact.name.isEmpty()) {
             result.artifacts.append(artifact);
         }

@@ -349,6 +349,7 @@ private:
     void resetDispatchDeliveryCard();
     void requestCurrentDispatchDeliveryCardIfTerminal();
     void openDispatchDeliveryArtifact();
+    void showDispatchDeliveryDialog(const WorkflowDeliveryCardInfo &card);
     void renderDispatchDeliveryImage();
     QString formatDispatchDeliveryCardHtml(const WorkflowDeliveryCardInfo &card) const;
     QString formatDispatchWorkflowPlanHtml(const ChatResult &result) const;
@@ -756,7 +757,9 @@ private:
     bool currentDispatchDeliveryCardRequestInFlight = false;
     bool currentDispatchDeliveryCardTerminal = false;
     QString currentDispatchDeliveryOpenArtifactId;
+    QString currentDispatchDeliveryOpenArtifactTaskId;
     QString currentDispatchDeliveryPreviewArtifactId;
+    QString currentDispatchDeliveryPreviewArtifactTaskId;
     bool currentDispatchDeliveryOpenInProgress = false;
     QPixmap currentDispatchDeliveryImage;
     // 规划阶段返回的步骤数，方便后续把右侧 5 步进度解释成“已生成多少步骤”。
@@ -812,6 +815,14 @@ private:
     bool currentDispatchDataAnalysisFailed = false;
     bool currentDispatchDataChartDeliveryFailed = false;
     bool currentDispatchDataWorkbookDeliveryFailed = false;
+    // 终态结果卡在独立的非模态窗口中展示，允许客户拖动到不遮挡对话的位置；内嵌卡仍
+    // 保留为紧凑摘要和无窗口场景的回退入口。
+    QPointer<QDialog> dispatchDeliveryDialog;
+    QPointer<QTextBrowser> dispatchDeliveryDialogText;
+    QPointer<QLabel> dispatchDeliveryDialogImage;
+    QPointer<QLabel> dispatchDeliveryDialogStatus;
+    QPointer<QPushButton> dispatchDeliveryDialogOpenButton;
+    QPointer<QPushButton> dispatchDeliveryDialogHistoryButton;
     QString currentDispatchKnowledgeAnswerChildTaskId;
     // 暂存请求同时冻结本轮显式路由偏好，避免后端启动期间客户编辑输入后改变已排队任务。
     QJsonArray pendingDispatchAgentHints;
@@ -843,14 +854,13 @@ private:
     bool knowledgeVectorPreparing = false;
     bool knowledgeOcrPreparing = false;
     bool knowledgeDeletionPending = false;
-    // 调度台附件只保存后端确认的 workspace 相对引用。一次发送后会清空，避免下一任务
-    // 意外复用上一份材料；文件内容和绝对源路径不会留在 Qt 状态中。
+    // 调度台附件只保存后端确认的 workspace 相对引用。材料在当前会话内持续可见，客户可
+    // 通过材料条主动移除；新建会话时清空，避免跨会话意外复用私有材料。
     QString dispatchSelectedDocumentRef;
-    // 资料库委派只保存用户显式选择的稳定 ID。它不是本地路径，也不会触发列表扫描；
-    // 发送后立即清空，确保下一条任务不会意外读取上一份私有资料。
+    // 资料库委派只保存用户显式选择的稳定 ID。它不是本地路径，也不会触发列表扫描。
     QString dispatchSelectedKnowledgeBaseId;
-    // 数据工作台只会把当前画像通过的一份受控相对引用带入调度台；发送后立即清空，避免
-    // 后续任务隐式复用私有数据。文件内容、预览行和绝对路径不会写进 Qt 状态。
+    // 数据工作台只会把当前画像通过的一份受控相对引用带入调度台；同一会话后续追问会
+    // 继续携带它。文件内容、预览行和绝对路径不会写进 Qt 状态。
     QString dispatchSelectedDatasetRef;
     // 默认全局范围；项目范围只是记忆检索隔离标识，不能被解释成用户磁盘路径或 Runtime 授权。
     QString currentDispatchProjectScope = QStringLiteral("global");

@@ -191,6 +191,7 @@ struct WorkflowDeliveryArtifactInfo
     QString mimeType;
     bool openable = false;
     bool previewable = false;
+    QString sourceTaskId;
 };
 
 struct WorkflowDeliveryFactInfo

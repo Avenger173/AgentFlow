@@ -181,6 +181,32 @@ def _find_artifact(task_id: str, artifact_id: str) -> WorkflowArtifact | None:
     return None
 
 
+def _artifacts_with_delegated_children(task_id: str) -> list[WorkflowArtifact]:
+    """把父任务登记过的子任务交付并入展示面，不改变父子仓储关系。
+
+    Commander 父任务只保存 ``agentflow-task://`` 关联，真实 PNG/Excel 留在专业子任务中。
+    历史和结果卡若只读父表，就会出现“任务完成但没有产物”。这里只展开一层、只信任父
+    artifact 的稳定 delegated_task_id，并按任务和产物 ID 去重；不会扫描目录或任意任务。
+    """
+
+    roots = list_workflow_artifacts(task_id)
+    expanded: list[WorkflowArtifact] = []
+    seen: set[tuple[str, str]] = set()
+    for root in roots:
+        delegated_task_id = str(root.metadata.get("delegated_task_id", "")).strip()
+        if delegated_task_id and delegated_task_id != task_id:
+            for child in list_workflow_artifacts(delegated_task_id):
+                key = (child.task_id, child.artifact_id)
+                if key not in seen:
+                    expanded.append(child)
+                    seen.add(key)
+        key = (root.task_id, root.artifact_id)
+        if key not in seen:
+            expanded.append(root)
+            seen.add(key)
+    return expanded
+
+
 def _artifact_preview_metadata(artifact: WorkflowArtifact) -> dict[str, object]:
     """返回给 UI 的元数据去掉本机绝对路径，避免把内部目录结构暴露成产品界面细节。"""
 
@@ -627,7 +653,7 @@ async def get_task_artifacts(task_id: str) -> WorkflowArtifactListResponse:
     if get_workflow_run(task_id) is None:
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' was not found.")
 
-    artifacts = list_workflow_artifacts(task_id)
+    artifacts = _artifacts_with_delegated_children(task_id)
     return WorkflowArtifactListResponse(
         task_id=task_id,
         total=len(artifacts),
@@ -813,7 +839,7 @@ async def get_task_updates(task_id: str) -> WorkflowTaskUpdateListResponse:
         run=run,
         events=get_task_log_events(task_id) or [],
         tool_calls=list_workflow_tool_calls(task_id),
-        artifacts=list_workflow_artifacts(task_id),
+        artifacts=_artifacts_with_delegated_children(task_id),
         permissions=list_runtime_permission_requests(task_id=task_id),
     )
 
@@ -827,7 +853,7 @@ async def get_task_delivery(task_id: str) -> WorkflowDeliveryCard:
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' was not found.")
     return build_delivery_card(
         run=run,
-        artifacts=list_workflow_artifacts(task_id),
+        artifacts=_artifacts_with_delegated_children(task_id),
         tool_calls=list_workflow_tool_calls(task_id),
         permissions=list_runtime_permission_requests(task_id=task_id),
     )

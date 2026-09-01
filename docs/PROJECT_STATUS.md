@@ -799,6 +799,13 @@ python -m uvicorn main:app --host 127.0.0.1 --port 8765
 - 已通过 `verify_delivery_card.py`，验证结果卡版本、终态、产物能力标记、数据表/图表/指标摘要和路径脱敏。Qt 调度台已接入默认收起的结果卡：规划受理后显示状态，任务进入终态后自动补读同一卡，并渲染结论、有限事实、警告、数据交付摘要、产物和下一步动作；图表 PNG 会加载首张受控缩略图，已登记产物可直接打开；旧任务响应按 task_id 丢弃，完整过程仍留在历史页。文档/知识库引用来源只展示数量和证据状态，不展示内部 source ID 或正文。
 - Qt Debug 已通过自动 MOC/UIC、编译与最终链接；本轮未调用真实模型或网络。
 
+## 2026-09-01 总指挥 R5.4D 回归修复：调度台统一交付闭环
+
+- 修复“生成 3 张图表并保存为 PNG”被误判为只读分析的问题：自然语言中的明确图表数量会进入受控图表交付，图表/Excel 在 dry-run 事件流收束后自动进入 Runtime，不要求客户重复点击或发送“开始执行”。联网、命令和通用写入仍不因此放宽权限。
+- 修复同一会话发送第二条数据请求时 CSV/XLSX 材料丢失的问题；修复知识库跳转被宽泛“资料/具体操作”误路由到文档助手的问题；修复 PPT 请求未经客户操作自动打开旧版 PPT 页面的问题。
+- 父任务的交付卡、产物列表和更新时间线会展开一层已登记的专业子任务产物，因此实际 PNG/Excel 能在 AI 调度台和历史任务中显示；打开与预览使用真实子任务来源，避免 404。终态交付另提供可移动的非模态“本次结果”窗口，主对话保留简洁摘要。
+- 已通过：`verify_commander_data_chart_delivery.py`、`verify_commander_data_workbook_delivery.py`、`verify_commander_knowledge_route.py`、`verify_delivery_card.py`、`python -m compileall -q backend/app backend/scripts`、Qt Debug 构建、`ctest --test-dir build/codex-debug -C Debug --output-on-failure`。本轮为临时数据与 Mock 验证，未调用真实模型、网络或客户文件；下一步是客户桌面端手工验收，不代表 AgentFlow 全部完成。
+
 ## 常用验证命令
 
 ## 2026-08-27 调度台可靠性与体验整改计划（进行中）

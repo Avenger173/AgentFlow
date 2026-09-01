@@ -319,6 +319,8 @@ class WorkflowDeliveryArtifact(BaseModel):
     mime_type: str = "text/plain"
     openable: bool = False
     previewable: bool = False
+    # 组合任务的父卡展示子任务已验证的真实交付时，客户端需要把请求发回真实来源任务。
+    source_task_id: str = ""
 
 
 class WorkflowDeliveryFact(BaseModel):

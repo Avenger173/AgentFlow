@@ -123,6 +123,15 @@ def main() -> None:
         assert len(artifacts) == 1
         assert artifacts[0]["mime_type"].endswith("spreadsheetml.sheet")
         assert artifacts[0]["metadata"].get("output_path") == "<hidden>"
+        delivery = client.get(f"/api/tasks/{payload['runtime_task_id']}/delivery")
+        assert delivery.status_code == 200, delivery.text
+        workbook_artifacts = [
+            item for item in delivery.json()["artifacts"]
+            if item["mime_type"].endswith("spreadsheetml.sheet")
+        ]
+        assert len(workbook_artifacts) == 1, delivery.json()
+        assert workbook_artifacts[0]["openable"] is True
+        assert workbook_artifacts[0]["source_task_id"] == delegated_task_id
 
         assert sha256(source_path.read_bytes()).hexdigest() == source_hash_before
         conversation_id = prepared_conversation.context.session.conversation_id

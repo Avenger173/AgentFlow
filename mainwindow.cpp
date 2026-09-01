@@ -3358,8 +3358,14 @@ void MainWindow::delegateKnowledgeBaseToCommander()
         return;
     }
 
-    // C6.3 允许客户明确组合资料库、文档和数据集；此处只添加当前资料库，不会清除
-    // 已在材料条中可见的其它客户选择，也不会自动提交问题。
+    // 从知识库工作台跳转时，当前资料库是客户刚刚明确选择的唯一知识来源。替换掉旧的
+    // 文档/数据绑定和 @ 偏好，避免“资料库”被宽泛的“资料”词误路由到文档助手；需要
+    // 多材料协作时仍可从调度台材料选择器显式添加。
+    dispatchSelectedDocumentRef.clear();
+    dispatchSelectedDatasetRef.clear();
+    removeDispatchAgentHint(QStringLiteral("document_agent"));
+    removeDispatchAgentHint(QStringLiteral("data_agent"));
+    insertDispatchAgentHint(QStringLiteral("knowledge_agent"));
     dispatchSelectedKnowledgeBaseId = selectedBase->knowledgeBaseId;
     updateDispatchMaterialBindingsUi();
     switchPage(1);
@@ -4068,8 +4074,10 @@ void MainWindow::delegateDataDatasetToCommander()
         return;
     }
 
-    // C6.3 允许客户显式组合多个只读材料。数据工作台只添加当前已画像的数据引用；其它
-    // 材料会保留在调度台的可移除标签中，不会被静默混入或覆盖。
+    // 从数据工作台跳转时，当前数据集是客户刚刚明确选择的唯一数据来源；清掉上一轮的
+    // 文档/资料库绑定，防止数据请求被旧材料干扰。多材料任务通过调度台选择器显式组合。
+    dispatchSelectedDocumentRef.clear();
+    dispatchSelectedKnowledgeBaseId.clear();
     dispatchSelectedDatasetRef = datasetRef;
     updateDispatchMaterialBindingsUi();
     switchPage(1);
@@ -4098,6 +4106,8 @@ void MainWindow::handleDataDatasetImported(const DataDatasetInfo &dataset)
     if (dispatchTarget) {
         ui->attachButton->setEnabled(true);
         const QString datasetRef = dataset.relativePath.isEmpty() ? dataset.name : dataset.relativePath;
+        dispatchSelectedDocumentRef.clear();
+        dispatchSelectedKnowledgeBaseId.clear();
         dispatchSelectedDatasetRef = datasetRef;
         updateDispatchMaterialBindingsUi();
         removeDispatchAgentHint(QStringLiteral("document_agent"));
@@ -5094,7 +5104,7 @@ void MainWindow::handleDataChartImageReceived(
     const QString &artifactId,
     const QByteArray &imageBytes)
 {
-    if (taskId == currentDispatchTaskId
+    if (taskId == currentDispatchDeliveryPreviewArtifactTaskId
         && artifactId == currentDispatchDeliveryPreviewArtifactId
         && ui->dispatchDeliveryImage) {
         QPixmap pixmap;
@@ -5152,7 +5162,8 @@ void MainWindow::renderDataChartDashboardPixmap(const QPixmap &pixmap)
 
 void MainWindow::handleDataChartImageFailed(const QString &taskId, const QString &artifactId, const QString &message)
 {
-    if (taskId == currentDispatchTaskId && artifactId == currentDispatchDeliveryPreviewArtifactId
+    if (taskId == currentDispatchDeliveryPreviewArtifactTaskId
+        && artifactId == currentDispatchDeliveryPreviewArtifactId
         && ui->dispatchDeliveryImage) {
         ui->dispatchDeliveryImage->setText(
             QStringLiteral("图表缩略图暂时无法读取，可点击“打开交付物”。"));
@@ -11048,6 +11059,12 @@ bool MainWindow::isCurrentDispatchDirectConversation() const
 
 QString MainWindow::currentDispatchAutoReadOnlyActivityText() const
 {
+    if (currentDispatchDataChartDelivery) {
+        return QStringLiteral("正在生成图表");
+    }
+    if (currentDispatchDataWorkbookDelivery) {
+        return QStringLiteral("正在生成分析 Excel");
+    }
     return currentDispatchDirectDataAnalysis ? QStringLiteral("正在分析")
                                              : QStringLiteral("正在检索");
 }
@@ -11542,9 +11559,7 @@ void MainWindow::beginCurrentDispatchRuntime(bool automaticallyApproved)
     setDispatchActivityRunning(true);
     setProgressStep(5,
                     automaticallyApproved
-                        ? (currentDispatchDirectDataAnalysis
-                               ? QStringLiteral("5 当前结论 · 正在分析已选数据")
-                               : QStringLiteral("5 当前结论 · 正在检索已选资料库"))
+                        ? QStringLiteral("5 当前结论 · %1").arg(currentDispatchAutoReadOnlyActivityText())
                         : QStringLiteral("5 当前结论 · 正在提交执行请求"),
                     QStringLiteral("badgeBlue"));
     if (!automaticallyApproved) {
@@ -15178,11 +15193,19 @@ void MainWindow::handleTaskArtifactOpened(
     const QString &artifactId,
     const QString &message)
 {
-    if (taskId == currentDispatchTaskId && artifactId == currentDispatchDeliveryOpenArtifactId) {
+    if (taskId == currentDispatchDeliveryOpenArtifactTaskId
+        && artifactId == currentDispatchDeliveryOpenArtifactId) {
         currentDispatchDeliveryOpenInProgress = false;
         ui->dispatchDeliveryOpenButton->setEnabled(true);
         ui->dispatchDeliveryStatus->setText(QStringLiteral("已打开"));
         polishBadge(ui->dispatchDeliveryStatus, QStringLiteral("badgeGreen"));
+        if (dispatchDeliveryDialogOpenButton) {
+            dispatchDeliveryDialogOpenButton->setEnabled(true);
+        }
+        if (dispatchDeliveryDialogStatus) {
+            dispatchDeliveryDialogStatus->setText(QStringLiteral("已打开"));
+            polishBadge(dispatchDeliveryDialogStatus, QStringLiteral("badgeGreen"));
+        }
     }
 
     const bool matchesHistoryOpen = taskId == pendingHistoryArtifactOpenTaskId
@@ -15208,11 +15231,19 @@ void MainWindow::handleTaskArtifactOpenFailed(
     const QString &artifactId,
     const QString &message)
 {
-    if (taskId == currentDispatchTaskId && artifactId == currentDispatchDeliveryOpenArtifactId) {
+    if (taskId == currentDispatchDeliveryOpenArtifactTaskId
+        && artifactId == currentDispatchDeliveryOpenArtifactId) {
         currentDispatchDeliveryOpenInProgress = false;
         ui->dispatchDeliveryOpenButton->setEnabled(true);
         ui->dispatchDeliveryStatus->setText(QStringLiteral("打开失败"));
         polishBadge(ui->dispatchDeliveryStatus, QStringLiteral("badgeOrange"));
+        if (dispatchDeliveryDialogOpenButton) {
+            dispatchDeliveryDialogOpenButton->setEnabled(true);
+        }
+        if (dispatchDeliveryDialogStatus) {
+            dispatchDeliveryDialogStatus->setText(QStringLiteral("打开失败"));
+            polishBadge(dispatchDeliveryDialogStatus, QStringLiteral("badgeOrange"));
+        }
     }
 
     const bool matchesHistoryOpen = taskId == pendingHistoryArtifactOpenTaskId
@@ -19083,10 +19114,9 @@ void MainWindow::submitDispatchMessage(const QString &message,
     appendConversationHtml(formatDispatchUserMessageHtml(message));
 
     currentDispatchUserGoal = message;
-    dispatchSelectedDocumentRef.clear();
-    dispatchSelectedKnowledgeBaseId.clear();
-    dispatchSelectedDatasetRef.clear();
-    updateDispatchMaterialBindingsUi();
+    // 材料属于当前会话上下文，而不是单条消息的一次性附件。保留材料条让“分析后生成
+    // 图表/Excel”“继续追问”等自然语言后续请求仍能拿到同一份数据；客户可随时点击
+    // 材料条上的移除按钮，新建会话时才会整体清空。
     backendClient->sendChatMessage(
         message,
         QString(),
@@ -19142,7 +19172,11 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
     currentDispatchDataAnalysisFailed = false;
     currentDispatchDataChartDeliveryFailed = false;
     currentDispatchDataWorkbookDeliveryFailed = false;
-    currentDispatchAutoExecutePending = isCurrentDispatchAutoReadOnlyTask();
+    // 纯只读问答和明确要求的本地交付都在 dry-run 收束后自动转 Runtime；后者的
+    // 文件写入仍由后端 outputs、参数和回读验证保护，但不再要求客户重复点击确认。
+    currentDispatchAutoExecutePending = isCurrentDispatchAutoReadOnlyTask()
+        || currentDispatchDataChartDelivery
+        || currentDispatchDataWorkbookDelivery;
 
     // 规划响应到达后先拉取一张轻量结果卡。Runtime 完成时会复用同一入口刷新为最终交付，
     // 让客户始终在调度台看到结果，而不是被迫翻到历史页寻找结论。
@@ -19161,9 +19195,9 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
     } else if (currentDispatchDirectDataAnalysis) {
         taskSummary = QStringLiteral("正在准备数据分析");
     } else if (currentDispatchDataChartDelivery) {
-        taskSummary = QStringLiteral("等待确认图表交付");
+        taskSummary = QStringLiteral("正在生成图表");
     } else if (currentDispatchDataWorkbookDelivery) {
-        taskSummary = QStringLiteral("等待确认分析 Excel");
+        taskSummary = QStringLiteral("正在生成分析 Excel");
     }
     ui->summaryVal3->setText(taskSummary);
 
@@ -19185,17 +19219,19 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
             QStringLiteral("<hr/><h3>AI 调度台</h3><p>正在分析已选数据，完成后会直接给出主要趋势、差异和图表建议。</p>"));
     } else if (currentDispatchDataChartDelivery) {
         appendConversationHtml(
-            QStringLiteral("<hr/><h3>AI 调度台</h3><p><b>图表交付计划已准备。</b></p>"
-                           "<p>我会先复用当前数据的受控分析，再生成新的 PNG 图表；原始数据不会被修改。"
-                           "请直接回复“开始执行”确认写入。</p>"));
+            QStringLiteral("<hr/><h3>AI 调度台</h3><p><b>正在生成数据图表。</b></p>"
+                           "<p>已按你的明确要求复用当前数据并写入新的 PNG；原始数据不会被修改。"
+                           "完成后会在本对话展示缩略图和交付入口。</p>"));
     } else if (currentDispatchDataWorkbookDelivery) {
         appendConversationHtml(
-            QStringLiteral("<hr/><h3>AI 调度台</h3><p><b>分析 Excel 交付计划已准备。</b></p>"
-                           "<p>我会先复用当前数据的受控分析，再新建一份包含分析表、原生图表和关键指标的 Excel；原始数据不会被修改。"
-                           "请直接回复“开始执行”确认写入。</p>"));
+            QStringLiteral("<hr/><h3>AI 调度台</h3><p><b>正在生成分析 Excel。</b></p>"
+                           "<p>已按你的明确要求新建包含分析表、原生图表和关键指标的工作簿；"
+                           "原始数据不会被修改，完成后会在本对话展示交付入口。</p>"));
     } else if (currentDispatchPresentationHandoff) {
         appendConversationHtml(
-            QStringLiteral("<hr/><h3>AI 调度台</h3><p>已打开“智能制作 PPT”，并带入你的主题。你可以先查看或调整创作计划，再确认导出 PPTX。</p>"));
+            QStringLiteral("<hr/><h3>AI 调度台</h3><p><b>已识别为 PPT 制作需求。</b></p>"
+                           "<p>主题已保留在当前会话。调度台不会擅自跳转或替你打开旧工作台；"
+                           "需要进入可视化创作页时，请点击文档助手中的“智能制作 PPT”。</p>"));
     } else if (currentDispatchGuidedHandoff) {
         appendConversationHtml(
             QStringLiteral("<hr/><h3>AI 调度台</h3><p>已识别到需要在数据工作台继续处理。选择数据文件后，我会基于该文件给出可执行分析。</p>"));
@@ -19222,11 +19258,11 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
     } else if (autoReadOnlyTask) {
         dispatchStatus = currentDispatchAutoReadOnlyActivityText();
     } else if (currentDispatchDataChartDelivery) {
-        dispatchStatus = QStringLiteral("等待确认图表交付");
+        dispatchStatus = QStringLiteral("正在生成图表");
     } else if (currentDispatchDataWorkbookDelivery) {
-        dispatchStatus = QStringLiteral("等待确认分析 Excel");
+        dispatchStatus = QStringLiteral("正在生成分析 Excel");
     } else if (currentDispatchPresentationHandoff) {
-        dispatchStatus = QStringLiteral("已打开智能制作 PPT");
+        dispatchStatus = QStringLiteral("已识别 PPT 制作需求");
     } else if (currentDispatchGuidedHandoff) {
         dispatchStatus = QStringLiteral("待转入工作台");
     } else if (directConversation) {
@@ -19256,17 +19292,17 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
         stageThree = QStringLiteral("3 数据分析 · 正在准备");
         stageFour = QStringLiteral("4 权限 / 产物 · 无需额外确认");
     } else if (currentDispatchDataChartDelivery) {
-        stageThree = QStringLiteral("3 图表交付 · 等待你的自然语言确认");
-        stageFour = QStringLiteral("4 权限 / 产物 · 确认后新建 PNG");
-        stageFive = QStringLiteral("5 当前结论 · 图表计划已准备");
+        stageThree = QStringLiteral("3 图表交付 · 正在生成 PNG");
+        stageFour = QStringLiteral("4 权限 / 产物 · 已按本次请求执行");
+        stageFive = QStringLiteral("5 当前结论 · 等待图表回读验证");
     } else if (currentDispatchDataWorkbookDelivery) {
-        stageThree = QStringLiteral("3 分析 Excel · 等待你的自然语言确认");
-        stageFour = QStringLiteral("4 权限 / 产物 · 确认后新建工作簿");
-        stageFive = QStringLiteral("5 当前结论 · 分析 Excel 计划已准备");
+        stageThree = QStringLiteral("3 分析 Excel · 正在生成工作簿");
+        stageFour = QStringLiteral("4 权限 / 产物 · 已按本次请求执行");
+        stageFive = QStringLiteral("5 当前结论 · 等待工作簿回读验证");
     } else if (currentDispatchPresentationHandoff) {
-        stageThree = QStringLiteral("3 智能制作 PPT · 已带入主题");
-        stageFour = QStringLiteral("4 权限 / 产物 · 导出前单独确认");
-        stageFive = QStringLiteral("5 当前结论 · 创作主题已带入");
+        stageThree = QStringLiteral("3 智能制作 PPT · 已识别主题");
+        stageFour = QStringLiteral("4 权限 / 产物 · 等待进入创作工作区");
+        stageFive = QStringLiteral("5 当前结论 · 主题已保留在会话");
     } else if (currentDispatchGuidedHandoff) {
         stageThree = QStringLiteral("3 工作台交接 · 等待你选择数据");
         stageFour = QStringLiteral("4 权限 / 产物 · 尚未创建数据任务");
@@ -19280,17 +19316,9 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
     setProgressStep(4, stageFour, QStringLiteral("badgeGray"));
     setProgressStep(5, stageFive, stageFiveBadge);
     updateDispatchActionButtons();
-    if (currentDispatchPresentationHandoff) {
-        const QString prompt = currentDispatchUserGoal;
-        // 用户已明确请求创作 PPT；只打开并预填现有工作台，不替客户点击“生成计划”或“导出”。
-        QTimer::singleShot(0, this, [this, prompt]() {
-            if (currentDispatchPresentationHandoff) {
-                openPresentationStudioForPrompt(prompt);
-            }
-        });
-    }
     backendClient->connectTaskLog(result.taskId);
     refreshCurrentDispatchUpdates();
+
 }
 
 QString MainWindow::formatDispatchWorkflowPlanHtml(const ChatResult &result) const
@@ -20008,11 +20036,16 @@ void MainWindow::handleChatFailed(const QString &message)
 void MainWindow::resetDispatchDeliveryCard()
 {
     // 结果卡只属于当前任务。清空时同时撤销请求状态，避免上一轮慢响应覆盖新会话。
+    if (dispatchDeliveryDialog) {
+        dispatchDeliveryDialog->close();
+    }
     currentDispatchDeliveryCardTaskId.clear();
     currentDispatchDeliveryCardRequestInFlight = false;
     currentDispatchDeliveryCardTerminal = false;
     currentDispatchDeliveryOpenArtifactId.clear();
+    currentDispatchDeliveryOpenArtifactTaskId.clear();
     currentDispatchDeliveryPreviewArtifactId.clear();
+    currentDispatchDeliveryPreviewArtifactTaskId.clear();
     currentDispatchDeliveryOpenInProgress = false;
     currentDispatchDeliveryImage = QPixmap{};
     if (!ui->dispatchDeliveryCard) {
@@ -20128,18 +20161,26 @@ void MainWindow::handleTaskDeliveryCardReceived(const WorkflowDeliveryCardInfo &
     currentDispatchDeliveryCardRequestInFlight = false;
     currentDispatchDeliveryCardTerminal = card.terminal;
     currentDispatchDeliveryOpenArtifactId.clear();
+    currentDispatchDeliveryOpenArtifactTaskId.clear();
     currentDispatchDeliveryPreviewArtifactId.clear();
+    currentDispatchDeliveryPreviewArtifactTaskId.clear();
     currentDispatchDeliveryOpenInProgress = false;
     currentDispatchDeliveryImage = QPixmap{};
     for (const WorkflowDeliveryArtifactInfo &artifact : card.artifacts) {
         if (currentDispatchDeliveryOpenArtifactId.isEmpty() && artifact.openable) {
             currentDispatchDeliveryOpenArtifactId = artifact.artifactId;
+            currentDispatchDeliveryOpenArtifactTaskId = artifact.sourceTaskId.isEmpty()
+                ? card.taskId
+                : artifact.sourceTaskId;
         }
         if (currentDispatchDeliveryPreviewArtifactId.isEmpty()
             && artifact.previewable
             && artifact.mimeType.startsWith(QStringLiteral("image/"), Qt::CaseInsensitive)
             && artifact.uri.startsWith(QStringLiteral("agentflow-output://data_charts/"))) {
             currentDispatchDeliveryPreviewArtifactId = artifact.artifactId;
+            currentDispatchDeliveryPreviewArtifactTaskId = artifact.sourceTaskId.isEmpty()
+                ? card.taskId
+                : artifact.sourceTaskId;
         }
     }
     ui->dispatchDeliveryCard->setVisible(true);
@@ -20150,7 +20191,11 @@ void MainWindow::handleTaskDeliveryCardReceived(const WorkflowDeliveryCardInfo &
     ui->dispatchDeliveryImage->setVisible(!currentDispatchDeliveryPreviewArtifactId.isEmpty());
     if (!currentDispatchDeliveryPreviewArtifactId.isEmpty()) {
         ui->dispatchDeliveryImage->setText(QStringLiteral("正在读取已验证图表预览…"));
-        backendClient->requestDataChartImage(card.taskId, currentDispatchDeliveryPreviewArtifactId);
+        backendClient->requestDataChartImage(
+            currentDispatchDeliveryPreviewArtifactTaskId.isEmpty()
+                ? card.taskId
+                : currentDispatchDeliveryPreviewArtifactTaskId,
+            currentDispatchDeliveryPreviewArtifactId);
     }
 
     const bool failed = card.status == QStringLiteral("failed")
@@ -20163,6 +20208,12 @@ void MainWindow::handleTaskDeliveryCardReceived(const WorkflowDeliveryCardInfo &
     polishBadge(ui->dispatchDeliveryStatus,
                 card.terminal ? (failed ? QStringLiteral("badgeOrange") : QStringLiteral("badgeGreen"))
                               : QStringLiteral("badgeBlue"));
+
+    // 终态结果不是一条挤在对话底部的小字条：弹出可移动的非模态知识卡片。它只展示已
+    // 通过后端交付卡协议的摘要和交付物，客户仍可拖到屏幕边缘查看对话，不会被迫切页。
+    if (card.terminal && card.mode != QStringLiteral("dry_run")) {
+        showDispatchDeliveryDialog(card);
+    }
 }
 
 void MainWindow::handleTaskDeliveryCardFailed(const QString &taskId, const QString &message)
@@ -20173,7 +20224,9 @@ void MainWindow::handleTaskDeliveryCardFailed(const QString &taskId, const QStri
 
     currentDispatchDeliveryCardRequestInFlight = false;
     currentDispatchDeliveryOpenArtifactId.clear();
+    currentDispatchDeliveryOpenArtifactTaskId.clear();
     currentDispatchDeliveryPreviewArtifactId.clear();
+    currentDispatchDeliveryPreviewArtifactTaskId.clear();
     currentDispatchDeliveryImage = QPixmap{};
     ui->dispatchDeliveryCard->setVisible(true);
     ui->dispatchDeliveryStatus->setText(QStringLiteral("暂不可用"));
@@ -20200,22 +20253,141 @@ void MainWindow::openDispatchDeliveryArtifact()
     ui->dispatchDeliveryOpenButton->setEnabled(false);
     ui->dispatchDeliveryStatus->setText(QStringLiteral("正在打开"));
     polishBadge(ui->dispatchDeliveryStatus, QStringLiteral("badgeBlue"));
-    backendClient->requestTaskArtifactOpen(currentDispatchTaskId, currentDispatchDeliveryOpenArtifactId);
+    if (dispatchDeliveryDialogStatus) {
+        dispatchDeliveryDialogStatus->setText(QStringLiteral("正在打开"));
+        polishBadge(dispatchDeliveryDialogStatus, QStringLiteral("badgeBlue"));
+    }
+    backendClient->requestTaskArtifactOpen(
+        currentDispatchDeliveryOpenArtifactTaskId.isEmpty()
+            ? currentDispatchTaskId
+            : currentDispatchDeliveryOpenArtifactTaskId,
+        currentDispatchDeliveryOpenArtifactId);
+}
+
+void MainWindow::showDispatchDeliveryDialog(const WorkflowDeliveryCardInfo &card)
+{
+    if (!dispatchDeliveryDialog) {
+        auto *dialog = new QDialog(this, Qt::Tool | Qt::WindowTitleHint | Qt::WindowCloseButtonHint);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->setWindowTitle(QStringLiteral("本次结果"));
+        dialog->setMinimumSize(620, 440);
+        dialog->resize(760, 600);
+        dialog->setObjectName(QStringLiteral("dispatchDeliveryDialog"));
+
+        auto *layout = new QVBoxLayout(dialog);
+        layout->setContentsMargins(18, 16, 18, 14);
+        layout->setSpacing(10);
+
+        auto *header = new QHBoxLayout;
+        auto *title = new QLabel(dialog);
+        title->setObjectName(QStringLiteral("sectionTitle"));
+        title->setMinimumWidth(0);
+        header->addWidget(title, 1);
+        auto *status = new QLabel(dialog);
+        status->setObjectName(QStringLiteral("badgeGreen"));
+        header->addWidget(status, 0, Qt::AlignRight | Qt::AlignTop);
+        layout->addLayout(header);
+
+        auto *textBrowser = new QTextBrowser(dialog);
+        textBrowser->setObjectName(QStringLiteral("subtlePanel"));
+        textBrowser->setOpenExternalLinks(false);
+        textBrowser->setOpenLinks(false);
+        textBrowser->setMinimumHeight(230);
+        layout->addWidget(textBrowser, 1);
+
+        auto *image = new QLabel(dialog);
+        image->setObjectName(QStringLiteral("subtlePanel"));
+        image->setAlignment(Qt::AlignCenter);
+        image->setMinimumHeight(90);
+        image->setMaximumHeight(190);
+        image->setVisible(false);
+        layout->addWidget(image);
+
+        auto *actions = new QHBoxLayout;
+        actions->addStretch(1);
+        auto *openButton = new QPushButton(QStringLiteral("打开交付物"), dialog);
+        openButton->setObjectName(QStringLiteral("secondaryButton"));
+        openButton->setVisible(false);
+        actions->addWidget(openButton);
+        auto *historyButton = new QPushButton(QStringLiteral("查看任务详情"), dialog);
+        historyButton->setObjectName(QStringLiteral("ghostButton"));
+        actions->addWidget(historyButton);
+        auto *closeButton = new QPushButton(QStringLiteral("关闭"), dialog);
+        closeButton->setObjectName(QStringLiteral("ghostButton"));
+        actions->addWidget(closeButton);
+        layout->addLayout(actions);
+
+        dispatchDeliveryDialog = dialog;
+        dispatchDeliveryDialogText = textBrowser;
+        dispatchDeliveryDialogImage = image;
+        dispatchDeliveryDialogStatus = status;
+        dispatchDeliveryDialogOpenButton = openButton;
+        dispatchDeliveryDialogHistoryButton = historyButton;
+        connect(openButton, &QPushButton::clicked, this, &MainWindow::openDispatchDeliveryArtifact);
+        connect(historyButton, &QPushButton::clicked, this, &MainWindow::openCurrentDispatchTaskInHistory);
+        connect(closeButton, &QPushButton::clicked, dialog, &QDialog::close);
+    }
+
+    const QString headline = card.headline.trimmed().isEmpty()
+        ? QStringLiteral("本次结果")
+        : card.headline.trimmed();
+    if (dispatchDeliveryDialog) {
+        dispatchDeliveryDialog->setWindowTitle(headline);
+        dispatchDeliveryDialog->show();
+        dispatchDeliveryDialog->raise();
+        dispatchDeliveryDialog->activateWindow();
+    }
+    if (dispatchDeliveryDialogText) {
+        dispatchDeliveryDialogText->setHtml(formatDispatchDeliveryCardHtml(card));
+    }
+    if (dispatchDeliveryDialogStatus) {
+        const bool failed = card.status == QStringLiteral("failed")
+            || card.status == QStringLiteral("cancelled")
+            || card.status == QStringLiteral("blocked");
+        dispatchDeliveryDialogStatus->setText(card.terminal
+                                                   ? (failed ? QStringLiteral("未完成") : QStringLiteral("已完成"))
+                                                   : QStringLiteral("处理中"));
+        polishBadge(dispatchDeliveryDialogStatus,
+                    card.terminal ? (failed ? QStringLiteral("badgeOrange") : QStringLiteral("badgeGreen"))
+                                  : QStringLiteral("badgeBlue"));
+    }
+    if (dispatchDeliveryDialogOpenButton) {
+        const bool available = !currentDispatchDeliveryOpenArtifactId.isEmpty();
+        dispatchDeliveryDialogOpenButton->setVisible(available);
+        dispatchDeliveryDialogOpenButton->setEnabled(available);
+    }
+    if (dispatchDeliveryDialogImage) {
+        const bool hasPreview = !currentDispatchDeliveryPreviewArtifactId.isEmpty();
+        dispatchDeliveryDialogImage->setVisible(hasPreview);
+        dispatchDeliveryDialogImage->setPixmap(QPixmap{});
+        dispatchDeliveryDialogImage->setText(
+            hasPreview ? QStringLiteral("正在读取已验证图表预览…") : QString());
+    }
+    renderDispatchDeliveryImage();
 }
 
 void MainWindow::renderDispatchDeliveryImage()
 {
-    if (!ui->dispatchDeliveryImage || currentDispatchDeliveryImage.isNull()
-        || !ui->dispatchDeliveryImage->isVisible()) {
+    if (currentDispatchDeliveryImage.isNull()) {
         return;
     }
 
-    const int availableWidth = qMax(120, ui->dispatchDeliveryImage->width() - 16);
-    const QSize targetSize(availableWidth, 88);
-    const QPixmap rendered = currentDispatchDeliveryImage.scaled(
-        targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-    ui->dispatchDeliveryImage->setPixmap(rendered);
-    ui->dispatchDeliveryImage->setText(QString());
+    if (ui->dispatchDeliveryImage && ui->dispatchDeliveryImage->isVisible()) {
+        const int availableWidth = qMax(120, ui->dispatchDeliveryImage->width() - 16);
+        const QSize targetSize(availableWidth, 88);
+        const QPixmap rendered = currentDispatchDeliveryImage.scaled(
+            targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        ui->dispatchDeliveryImage->setPixmap(rendered);
+        ui->dispatchDeliveryImage->setText(QString());
+    }
+
+    if (dispatchDeliveryDialogImage && dispatchDeliveryDialogImage->isVisible()) {
+        const int dialogWidth = qMax(180, dispatchDeliveryDialogImage->width() - 20);
+        const QPixmap dialogRendered = currentDispatchDeliveryImage.scaled(
+            QSize(dialogWidth, 170), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        dispatchDeliveryDialogImage->setPixmap(dialogRendered);
+        dispatchDeliveryDialogImage->setText(QString());
+    }
 }
 
 void MainWindow::handleTaskLogReceived(const TaskLogEvent &event)
@@ -20284,7 +20456,9 @@ void MainWindow::handleTaskLogReceived(const TaskLogEvent &event)
     // 聊天面只承担“正在做什么”和最终交付；逐条事件属于可追溯审计，继续保留在任务历史。
     updateDispatchProgressFromLogEvent(event);
     scheduleDispatchUpdatesRefresh(250);
-    if (isCurrentDispatchAutoReadOnlyTask()) {
+    if (isCurrentDispatchAutoReadOnlyTask()
+        || currentDispatchDataChartDelivery
+        || currentDispatchDataWorkbookDelivery) {
         ui->dispatchChatStatus->setText(currentDispatchAutoReadOnlyActivityText());
         setDispatchActivityRunning(true);
     }
@@ -20339,16 +20513,20 @@ void MainWindow::handleTaskLogFinished(const QString &taskId)
 
     if (taskId == currentDispatchTaskId) {
         scheduleDispatchUpdatesRefresh(0);
-        if (isCurrentDispatchAutoReadOnlyTask()
+        const bool autoStartAfterDryRun = isCurrentDispatchAutoReadOnlyTask()
+            || currentDispatchDataChartDelivery
+            || currentDispatchDataWorkbookDelivery;
+        if (autoStartAfterDryRun
             && currentDispatchAutoExecutePending
             && currentDispatchRuntimeMode == QStringLiteral("dry_run")) {
-            // 单材料只读任务已通过前后端准入；dry-run 固化后自动转 Runtime，客户无需为
-            // 一次普通分析额外点击确认，写入、联网与多 Agent 任务仍沿用原有确认入口。
+            // 计划已完整落库后才转 Runtime，避免 /start 与 dry-run 的异步收束产生竞态。
+            // 明确图表/Excel 请求的本地写入由后端专门策略放行；联网、命令和其它写入仍
+            // 保留原有确认入口。
             currentDispatchAutoExecutePending = false;
             beginCurrentDispatchRuntime(true);
             return;
         }
-        if (isCurrentDispatchAutoReadOnlyTask()) {
+        if (autoStartAfterDryRun) {
             ui->dispatchChatStatus->setText(currentDispatchAutoReadOnlyActivityText());
             setDispatchActivityRunning(true);
         } else if (currentDispatchUpdates.isEmpty()) {

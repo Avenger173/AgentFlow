@@ -74,14 +74,14 @@ def main() -> None:
         prepared_conversation = prepare_conversation(
             conversation_id="",
             project_scope="global",
-            message="请分析当前 CSV 的月度趋势和区域差异，并制作可保存的图表 PNG。",
+            message="请分析当前 CSV 的月度趋势和区域差异，生成 3 张图表并保存为 PNG。",
             supplied_materials=[material],
         )
 
         # `auto_approve` 仅用于离线验收“客户已经回复开始执行”的后续权限策略；生产环境
         # 默认 smart_confirm 仍会保留文件写入确认。图表节点本身继续把 file_write 写入计划。
         plan = create_commander_plan(
-            "请分析当前 CSV 的月度趋势和区域差异，并制作可保存的图表 PNG。",
+            "请分析当前 CSV 的月度趋势和区域差异，生成 3 张图表并保存为 PNG。",
             available_agents=agents,
             materials=[material],
             preferences=WorkflowPlanPreferences(permission_policy="auto_approve"),
@@ -92,6 +92,8 @@ def main() -> None:
         chart_step = next(step for step in plan.steps if step.action == "export_chart_dashboard")
         assert chart_step.depends_on == [analysis_step.id]
         assert chart_step.required_permissions == ["file_read", "file_write"]
+        assert chart_step.input["max_chart_count"] == 3
+        assert chart_step.input["explicit_output_request"] is True
         assert plan.workspace_scope.write_paths == ["data/outputs/<runtime_task_id>/"]
 
         source_task_id = "verify_commander_chart_parent"
@@ -132,6 +134,13 @@ def main() -> None:
             item["uri"] == f"agentflow-task://{delegated_task_id}"
             for item in parent_artifacts.json()["artifacts"]
         )
+        delivery = client.get(f"/api/tasks/{payload['runtime_task_id']}/delivery")
+        assert delivery.status_code == 200, delivery.text
+        delivery_artifacts = delivery.json()["artifacts"]
+        chart_artifacts = [item for item in delivery_artifacts if item["mime_type"] == "image/png"]
+        assert len(chart_artifacts) == result["chart_count"], delivery_artifacts
+        assert all(item["openable"] and item["previewable"] for item in chart_artifacts)
+        assert all(item["source_task_id"] == delegated_task_id for item in chart_artifacts)
         assert sha256(source_path.read_bytes()).hexdigest() == source_hash_before
 
         # 图表是客户明确确认后的写入型交付，但完成后也必须回到同一段调度会话，不能只让
