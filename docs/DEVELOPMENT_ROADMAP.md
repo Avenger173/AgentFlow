@@ -1,6 +1,6 @@
 # AgentFlow 分阶段开发路线
 
-最后更新：2026-08-26
+最后更新：2026-09-03
 
 本文用于约束 AgentFlow 后续开发顺序。`AgentFlow_初版规划.md` 是长期愿景，`docs/PROJECT_STATUS.md` 是当前状态，本文件负责把愿景拆成可交付阶段，防止 MVP、商业版、插件市场、RAG、视觉和打包目标混在一起导致失控。
 
@@ -316,14 +316,22 @@ K0-K6 的既有知识库闭环不包含 OCR；K7 仅按已批准范围新增扫�
 - K3 之后的长期记忆语义召回、跨项目治理和大规模知识库部署增强；阶段 5K 已覆盖本地知识库的基础混合检索与可信问答。
 - 数据工作台 MVP 之外的多表关联、数据库连接、周期刷新，以及 OCR、复杂 DOCX/PDF 写入和更多格式交付。
 - Vision / Media Agent。
-- MCP / A2A。
+- MCP 已转入获批的 LGM 平台集成支线；A2A 仍属于更后期候选。
 - DeepSeek Harness 等外部 Agent Runtime 的可插拔 Adapter。它不能替换 AgentFlow 的 Commander、ModelGateway、权限、任务历史和 Verifier；H2 可做隔离只读真实试点，Router 只为已确认的专业能力开放，H3/H4 按写入或 MCP 的实际需要启动，Python Windows Runtime 发布后再按相同 Adapter 协议评估。
 - 在线插件市场和商业授权。
 - 多平台发布。
 
+## 平台集成支线 LGM：LangGraph、LangChain 与 MCP
+
+状态：**方向已由用户确认，尚未实施。**详细架构、阶段出口、回退条件和官方依据见 `docs/LANGGRAPH_LANGCHAIN_MCP_INTEGRATION_PLAN.md`。
+
+该支线不会为了增加技术名词重写 AgentFlow。MCP 先作为独立且受治理的外部 Tool Gateway；LangGraph 只通过 `ExecutionBackend` 接入复杂、可恢复工作流；LangChain 只复用经实测有价值的模型、消息和 Tool 适配组件。Commander、ModelGateway、权限、审计、任务历史、产物、Verifier，以及现有 FTS5/Chroma/BGE/RRF/Evidence Gate 继续由 AgentFlow 持有。
+
+实施顺序固定为：LGM0 基线与依赖探针 -> LGM1 MCP Gateway 内核 -> LGM2 首个客户 MCP 闭环 -> LGM3 LangGraph 后端骨架 -> LGM4 K4 影子迁移 -> LGM5 Commander 组合任务试点 -> LGM6 LangChain 组件收敛 -> LGM7 打包与默认策略。每阶段未达到出口时不得前移，也不得把“已安装”写成“已产生客户价值”。
+
 ## 当前下一步
 
-> **当前状态：总指挥 C6 当前已批准范围已收尾。**C6.1-C6.6 现已具备自动会话、组合 Native Runtime、显式模型路由、`@Agent` 路由约束与专业子任务实际模型审计。C6.5.3 已把文档、数据、知识库任务的脱敏阶段快照按需展示在历史 Inspector；旧任务保持“历史版本未记录”，不会被当前配置回填。该项没有增加客户能力、调用模型、读取客户材料或改写旧任务。下一步必须先讨论一项有明确客户交付价值的能力，再按既有“方案确认 -> 规格 -> 纵向闭环”进入开发；详细合同和回归见 `docs/COMMANDER_C6_PRODUCT_PLAN.md` 的 C6.5.3。
+> **当前状态：用户已确认 LangGraph、LangChain 与 MCP 的平台集成方向。下一步只启动 LGM0。**LGM0 先冻结 Native Runtime、K4、启动耗时和打包体积基线，再隔离验证官方 MCP Python SDK、LangGraph 及其 SQLite Checkpointer、必要的 LangChain Core 组件；不连接真实外部服务、不读取客户材料、不调用真实模型、不迁移客户任务。LGM0 通过后才进入 LGM1 的 MCP Gateway 内核。详细计划见 `docs/LANGGRAPH_LANGCHAIN_MCP_INTEGRATION_PLAN.md`。
 
 下方为各模块的历史里程碑与回归基线，不表示当前会并行启动这些事项。
 

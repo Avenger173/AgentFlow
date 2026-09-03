@@ -1,6 +1,6 @@
 # DeepSeek Harness 集成评估与实施方案
 
-最后更新：2026-08-19
+最后更新：2026-09-03
 
 状态：**H0 项目内 Node Runtime、H1 最小权限 profile、fake 执行契约与受控单任务 Node Bridge 均已通过；RuntimeRouter 尚未接入，未授权任何客户任务委派。现有 Native Runtime 仍是默认执行路径。**
 
@@ -204,7 +204,7 @@ Harness 的 `read-only`、`workspace-write`、`danger-full-access` 是执行能�
 - 网络访问单独授权。官方沙箱术语不能替代网络、进程、域名和成本治理；
 - Tool schema、参数、超时、输出预算和风险等级先由 AgentFlow Registry 校验，再交给 Harness。
 
-MCP 只通过统一 Tool Registry 接入。当前官方 MCP Client 以 Tools 为主；Node CLI 虽包含 MCP Client 依赖，但首轮试点不装配 MCP。后续仅接一项只读、价值明确的官方 MCP 做验收，不能因为包已下载就自动开放外部能力。
+MCP 只通过统一 Tool Registry 和 AgentFlow `MCPGateway` 接入。当前官方 MCP Client 以 Tools 为主；Node CLI 虽包含 MCP Client 依赖，但首轮试点不装配 MCP。后续仅接一项只读、价值明确的 MCP 做验收，不能因为包已下载就自动开放外部能力。2026-09-03 起，MCP 的独立控制面、实施顺序和验收归入 `docs/LANGGRAPH_LANGCHAIN_MCP_INTEGRATION_PLAN.md`；Harness 只能消费已获准 Tool，不再单独拥有一套 MCP 配置、权限或审计。
 
 ## 9. 上下文缓存与成本指标
 
@@ -277,8 +277,8 @@ cache_hit_ratio = hit / (hit + miss)
 
 - 启动门槛：已批准的客户工作流有明确数据源或外部系统，通用 HTTP/API Tool 不能更简单、稳定地满足需求；
 - 先验证自定义 Cordis 配置及捆绑运行时闭包；
-- 接入一项只读官方 MCP，验证命名、超时、断线重连、权限和审计；
-- 不建设无目标的 MCP 市场，不按客户临时主题不断堆 MCP；所有 MCP 统一经过 Tool Registry、能力路由、权限和审计。
+- 复用 LGM 支线已经验收的 `MCPGateway`，接入一项只读 MCP，验证 Harness 侧 Tool 映射、命名、超时、断线重连、权限和审计；
+- 不建设无目标的 MCP 市场，不按客户临时主题不断堆 MCP；所有 MCP 统一经过 `MCPGateway`、Tool Registry、能力路由、权限和审计。
 
 ### H5：条件式正式发行评估
 

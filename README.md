@@ -12,6 +12,7 @@ AgentFlow 是一个 C++ Qt 桌面端 + Python FastAPI 后端的多 Agent 工作�
 - K7 扫描件 / 图片型 PDF OCR 计划：[docs/K7_OCR_PRODUCT_PLAN.md](docs/K7_OCR_PRODUCT_PLAN.md)
 - 知识库 K0.3 契约与迁移设计：[docs/KNOWLEDGE_BASE_K0_CONTRACT.md](docs/KNOWLEDGE_BASE_K0_CONTRACT.md)
 - Agent / Harness 工程方法：[docs/AGENT_ENGINEERING_GUIDE.md](docs/AGENT_ENGINEERING_GUIDE.md)
+- LangGraph、LangChain 与 MCP 平台集成计划：[docs/LANGGRAPH_LANGCHAIN_MCP_INTEGRATION_PLAN.md](docs/LANGGRAPH_LANGCHAIN_MCP_INTEGRATION_PLAN.md)
 
 ## 当前阶段
 
@@ -82,8 +83,9 @@ AgentFlow 是一个 C++ Qt 桌面端 + Python FastAPI 后端的多 Agent 工作�
 2. 文档助手后续聚焦三个已认可方向：文件转换与处理、智能文档/PPT 制作、文档审查；摘要、问答、提取、大纲和整合作为内部能力或兼容入口。
 3. PPT V3 第三步已完成；第四步已交付原生淡入转场，正文点击入场未通过客户实际放映验收并暂停。后续功能继续按确认顺序推进；若恢复动画，先完成真实 PowerPoint 最小样本验收，再讨论有限的动效偏好和主题化节奏，同时保持无动画降级和可编辑性。
 4. 数据工作台 D1-D5.4 已完成工程 MVP：单个 Excel/CSV 的受控导入、画像、白名单聚合、可编辑 Excel 交付、下一步建议、确认后的 PNG 图表看板、安全字段加工新副本，以及 Commander 的单数据集只读委派。D5.3 支持四则计算、日期拆分、排名/占比、分段、累计/环比和文本首尾清理；所有加工先在内存预览，确认后才以 `202 -> 事件流 -> 终态补读` 新建 `output/data_transformations/` 下经过工作簿回读验证的 Excel 副本。D5.4 仅允许总指挥显式绑定一份已导入数据集，创建本地只读分析子任务并回传脱敏结论、源哈希和统计数量；不传递原始/预览行，不生成或修改文件。数据 Agent 的 `runtime_ready` 仅对该 action 生效，Qt 客户交互复核仍待完成。
-5. 原报告助手并入文档助手；RAG 算法和索引作为平台 Retrieval Service，获批的 Knowledge Agent 持有资料生命周期、可信问答和深度任务，Evaluator/Verifier 继续作为共用验证层。通用 Code Agent 已取消自研；LangGraph、插件、Shell、Redis 和真正单文件 exe 只按已确认专业能力的实际需求推进。
-6. DeepSeek Harness H2 可做隔离只读真实试点；数据工作台 MVP 使用 Native Runtime，Router、H3 写入/批准、H4 MCP 和 H5 发行继续按真实场景进入。
+5. 原报告助手并入文档助手；RAG 算法和索引作为平台 Retrieval Service，获批的 Knowledge Agent 持有资料生命周期、可信问答和深度任务，Evaluator/Verifier 继续作为共用验证层。通用 Code Agent 已取消自研；插件、Shell、Redis 和真正单文件 exe 只按已确认专业能力的实际需求推进。
+6. 2026-09-03 已确认 LangGraph、LangChain 与 MCP 的平台集成方向。下一轮先做 LGM0 基线与依赖探针，再做独立 MCP Gateway；LangGraph 先影子运行 K4 深度任务，LangChain 只引入能减少实际重复代码的组件。当前尚未安装相关 Python 依赖，也未切换任何客户任务。
+7. DeepSeek Harness H2 可做隔离只读真实试点；数据工作台 MVP 使用 Native Runtime，Router、H3 写入/批准和 H5 发行继续按真实场景进入。Harness 后续使用 MCP 时也必须经过 AgentFlow 统一 MCPGateway、Tool Registry、权限和审计。
 
 ## 技术路线
 

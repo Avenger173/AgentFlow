@@ -1,6 +1,6 @@
 # AgentFlow Agent 工程方法
 
-最后更新：2026-08-14
+最后更新：2026-09-03
 
 本文记录 AgentFlow 后续开发 Agent Runtime、Tool Registry、评估系统和记忆系统时采用的工程原则。它不是立即引入所有复杂组件的清单，而是避免项目走向“模型裸奔”的长期约束。
 
@@ -8,7 +8,7 @@
 
 AgentFlow 的 Agent 不应只追求“模型回答得像人”，而要追求用户任务真的完成、过程可控、失败可解释、成本可管理。
 
-当前阶段仍以本地桌面应用和 SQLite 为主，不急着引入 Redis、向量库或在线评估平台。LangGraph / LangChain 仍属于 AgentFlow 长期技术栈候选，但阶段 5 先用现有 Workflow、状态持久化、权限确认和 Qt 观察面完成一个正式 Agent 闭环，再决定把框架接到哪一层。
+当前阶段仍以本地桌面应用和 SQLite 为主，不急着引入 Redis 或在线评估平台。2026-09-03 已确认 LangGraph、LangChain 与 MCP 的平台集成方向，但仍坚持先以现有 Native Runtime 为行为基线：LangGraph 只作为可选 `ExecutionBackend`，MCP 通过独立 Gateway 接入，LangChain 只复用有实际收益的组件。详细边界见 `docs/LANGGRAPH_LANGCHAIN_MCP_INTEGRATION_PLAN.md`。
 
 阶段 5 的核心目标不是继续收集更多 Agent 名称，而是完成第一个真正的模型工具循环。现有 manifest、Node Contract 和 Runtime action 只能说明 Harness 已有插槽，不能自动证明某个 Agent 已经实现。
 
@@ -184,6 +184,18 @@ LangGraph 不是废弃项，而是阶段 5/6 之后要认真评估的编排框�
 - 需要把模型事件、工具事件、interrupt 和 checkpoint 统一成更标准的运行轨迹。
 
 接入时不应推翻现有 `ModelGateway`、权限审计、SQLite 任务历史和 Qt 协议，而是把 LangGraph 当作后端编排实现之一，外部 API 继续保持稳定。
+
+2026-09-03 评估结论：知识库 K4 已出现递归 Map-Reduce、逐节点 checkpoint、失败恢复和多阶段状态映射，达到 LangGraph 试点门槛。试点仍必须先经过 LGM0 依赖探针与 LGM3 后端骨架，并在 LGM4 以相同冻结输入做 Native/LangGraph 影子对照；在恢复语义、来源闭合、产物哈希和事件终态一致前，不允许切换默认执行路径。
+
+## MCP 接入原则
+
+MCP 是外部能力协议，不等于新的 Agent，也不归某个模型框架或 DeepSeek Harness 独占。AgentFlow 使用独立 `MCPGateway` 持有服务器配置、连接、能力发现、Tool 命名、权限、审计、超时和结果裁剪；LangChain 或 Harness 只能消费 Gateway 已准入的 Tool。
+
+- 首期只开放 Tools，优先本地 `stdio`，远程只采用当前官方支持的 Streamable HTTP；Resources、Prompts、Sampling、Elicitation 后续逐项评审。
+- 本地 MCP server 本质上是受控子进程：可执行文件、参数、工作目录和环境变量必须白名单化，凭据只保存 `secret_ref`，不得继承完整 `.env`。
+- Tool 统一命名为 `mcp.<server_id>.<tool_name>`，先通过 Node Contract、权限和参数校验，再进入 MCP Client。
+- MCP 返回内容必须受大小、类型和敏感信息检查；不能把外部工具的“成功”直接等同于客户任务完成，产物仍需 AgentFlow Verifier 回读。
+- 不为临时主题堆服务，不做无目标的 MCP 市场；LGM2 的首个真实连接必须先由用户确认客户价值。
 
 ## 评估指标
 

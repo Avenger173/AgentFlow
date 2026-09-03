@@ -1,6 +1,6 @@
 # AgentFlow 项目状态
 
-最后更新：2026-08-31
+最后更新：2026-09-03
 
 ## 当前仓库状态
 
@@ -879,7 +879,7 @@ cmd /c ""D:\IDE\VS2022\buildtools\VC\Auxiliary\Build\vcvars64.bat" && "D:\IDE\qt
 - 文档以中文为主，英文仅保留必要技术名词。
 - 新增代码要在关键异步流程、协议转换、安全边界处添加适量中文注释。
 - `PowerShell Invoke-RestMethod` 有时会让中文显示/请求体编码异常；后端 UTF-8 检查优先使用 Python 验证脚本。
-- 不要急着把核心 Runtime 迁到 LangChain / LangGraph；先把本地闭环做稳，并保留后续接入点。
+- 不要直接把核心 Runtime 整体迁到 LangChain / LangGraph；按 `docs/LANGGRAPH_LANGCHAIN_MCP_INTEGRATION_PLAN.md` 先做隔离探针、可选后端与影子对照，Native Runtime 在达到切换门槛前保持默认。
 - 不要急着移动 Qt 目录结构；等前端文件明显变多后再重构。
 
 ## 2026-09-01 调度台 PPT 直出与结果呈现修复
@@ -892,3 +892,12 @@ cmd /c ""D:\IDE\VS2022\buildtools\VC\Auxiliary\Build\vcvars64.bat" && "D:\IDE\qt
 - 验证通过：Qt Debug 构建、`ctest`、PPT 计划/导出回归、结果卡协议、知识库路由、数据图表和分析 Excel 交付回归；未调用需要 `--live` 的真实 Provider 脚本。
 
 本次仅完成调度台 PPT 直出和呈现层修复，不代表 AgentFlow 全部 Agent 或 PPT 高级动画已经完成；下一步仍以桌面端真实模型验收结果为准。
+
+## 2026-09-03 LangGraph、LangChain 与 MCP 平台集成计划
+
+- 用户已确认三项技术进入 AgentFlow 的长期方向；本轮只完成架构与实施计划，**尚未安装 Python 依赖、连接 MCP server、切换客户任务或宣称框架能力已经交付**。
+- MCP 定位为独立 `MCPGateway`：统一处理服务器配置、连接、能力发现、Tool 命名、权限、审计、超时与结果裁剪。首期只开放 Tools 和本地 `stdio`，远程连接后续采用 Streamable HTTP；LangChain 与 DeepSeek Harness 都不能绕过该 Gateway。
+- LangGraph 定位为可选 `ExecutionBackend`，Native Runtime 继续默认。首个候选是已经具备 Map-Reduce、checkpoint 与恢复复杂度的知识库 K4；正式迁移前必须使用相同冻结输入做影子对照，验证状态、来源闭合、产物哈希、恢复语义和终态一致。
+- LangChain 不作为整套业务框架接管 AgentFlow，只评估 `langchain-core` 消息/Tool 适配及确实减少重复代码的 MCP 适配组件；现有 ModelGateway、AgentRunner、RAG、权限、审计、任务历史和 Verifier 不迁移。
+- 下一步固定为 LGM0：冻结 Native/K4/启动耗时/包体基线，在隔离环境验证官方 MCP Python SDK、LangGraph SQLite Checkpointer 和必要 LangChain 组件。LGM0 不调用真实模型、不读取客户材料、不连接真实外部服务；通过后才进入 LGM1 MCP Gateway 内核。
+- 完整阶段、退出条件、回退开关、依赖纪律与官方依据见 [LANGGRAPH_LANGCHAIN_MCP_INTEGRATION_PLAN.md](LANGGRAPH_LANGCHAIN_MCP_INTEGRATION_PLAN.md)。
