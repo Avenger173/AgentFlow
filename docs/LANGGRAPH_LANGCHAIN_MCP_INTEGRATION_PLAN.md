@@ -479,6 +479,24 @@ LGM1 交付的是受控协议内核，不是面向客户的“已支持 MCP”�
 - 经过真实材料验收后，才讨论是否将 K4 默认切换；
 - Native K4 至少保留一个发布周期作为回退。
 
+#### LGM4.1 实施记录（2026-09-04）
+
+- 新增仅供离线对照使用的 `LangGraphK4ShadowBackend`。它不注册 API、Qt 入口、
+  `RuntimeRouter` 客户准入或功能开关；客户 K4 任务仍全部由 Native Runtime 执行。
+- 影子图固定为“范围冻结 -> Map -> Reduce -> 交付资格核验”。它直接调用既有
+  `knowledge_deep_task` 服务，不复制任何章节读取、模型调用、来源闭合、覆盖判定或报告资格
+  代码；因此 Native 与影子路径共享同一份 `KnowledgeDeepTaskScope`、Model fixture、Tool
+  边界和最终输出契约。
+- LangGraph SQLite checkpoint 仅保存 task ID、图 ID/版本、范围摘要哈希、资料库/generation
+  引用、完成节点和结果摘要哈希。冻结 scope、Model Runtime、数据库连接、章节正文和模型输入
+  均不进入 Graph State；进程重启时 scope 仍从 Native K4 task checkpoint 恢复并再次校验。
+- `verify_lgm4_k4_shadow.py` 在临时目录覆盖：Native/Graph 最终 `KnowledgeDeepReduceResult`
+  摘要一致、Map 失败后只重跑失败章节、Reduce 失败后不再进入 Map、协作式取消保留部分
+  checkpoint、活动 generation 改变时在范围节点拒绝旧任务，以及 Graph SQLite 中不含夹具正文。
+  该脚本不读取客户材料、不调用真实模型、网络或 MCP。
+- LGM4 尚未完成：下一步要补齐影子执行的阶段/调用/耗时比较与限流等待投影，确认维护复杂度
+  真的下降后，才讨论受开发开关保护的客户主动试点；Native K4 继续是唯一正式路径。
+
 ### LGM5：Commander 组合任务试点
 
 前置：LGM4 完成并证明 LangGraph 有收益。

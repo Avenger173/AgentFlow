@@ -46,6 +46,8 @@
 
 > **2026-08-28 调度台 R5.3 任务意图与数据图表交付：**总指挥已改为“任务意图优先、材料按需使用”：上轮残留的 CSV、文档或资料库不会劫持普通聊天；`@Agent` 只保留路由偏好，不过滤其它客户已选材料、更不扩大权限。明确 PPT 主题始终进入智能制作 PPT；明确“分析当前数据”自动委派只读数据分析；明确“制作/导出图表”则生成“分析 -> PNG 图表交付”的受控计划，客户回复“开始执行”后才写入 outputs。图表委派已接入 Action Admission、Node Contract、Runtime、源哈希、PNG 像素回读与父子 artifact 审计。AI 调度台取消固定“开始执行”按钮，改由自然语言确认；过程面板默认收起以让对话/结果占据主空间，应用启动默认最大化。`verify_commander_intent_routing.py`、`verify_commander_data_chart_delivery.py`、既有 C6.6/D5.4 回归、Python 编译和 Qt CMake/Ninja Debug 构建均通过；未调用真实模型、网络或客户材料。
 
+> **2026-09-04 LGM4.1 K4 LangGraph 影子对照：**新增仅用于离线夹具的 `LangGraphK4ShadowBackend`，以“范围冻结 -> Map -> Reduce -> 交付资格核验”直接调用既有 K4 服务；它不复制正文、模型 Runtime 或 K4 业务算法，LangGraph checkpoint 只保留 task、图版本、范围哈希、generation 引用、完成节点和结果哈希。`verify_lgm4_k4_shadow.py` 已对照 Native 与影子路径的最终 Reduce 结果，覆盖 Map/Reduce 失败恢复不重跑已完成工作、取消、旧 generation 拒绝和无正文 checkpoint。`verify_knowledge_deep_task_map.py`、`verify_knowledge_deep_task_scope.py`、`verify_lgm3_langgraph_execution_backend.py`、`compileall` 与 `pip check` 已通过。该能力尚未注册 API、Qt、客户 Router 或开关，Native K4 仍是唯一正式执行路径；下一步补齐影子阶段/调用/耗时与限流等待比较，再判断是否值得进入客户主动试点。
+
 ## 2026-08-25 知识库 K5.4：索引性能事实与解析复用核验
 
 - `KnowledgeIndexJobRecord` 与 SQLite migration 已新增解析/分块、向量、关键词、总耗时，以及本次复用的已解析版本数。计量不写正文、路径、向量、模型输入、缓存键或凭据，旧数据库只前向增列，不重建资料。
