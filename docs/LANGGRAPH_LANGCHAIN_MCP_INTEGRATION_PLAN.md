@@ -2,7 +2,7 @@
 
 最后更新：2026-09-04
 
-状态：**LGM0、LGM1 与 LGM2 已完成。MCP、LangGraph 与 LangChain 依赖已在开发后端环境锁定；项目已提供一个默认停用、固定边界的 Wikimedia 公开资料 MCP 客户闭环。Native Runtime 仍是唯一默认执行路径；尚未创建 LangGraph 图或 Checkpointer，也未引入通用远程 MCP 连接。**
+状态：**LGM0、LGM1、LGM2 与 LGM3 已完成。MCP、LangGraph 与 LangChain 依赖已在开发后端环境锁定；项目已提供一个默认停用、固定边界的 Wikimedia 公开资料 MCP 客户闭环，以及一张仅用于开发验证的 LangGraph 确定性测试图。Native Runtime 仍是唯一默认执行路径；尚未迁移客户任务，也未引入通用远程 MCP 连接。**
 
 本文是三项技术进入 AgentFlow 的实施依据。目标不是为简历增加名词，而是用成熟框架和开放协议改善复杂工作流恢复、外部工具接入、组件复用和长期可维护性。任何阶段只有产生可验证的客户价值并通过回归后，才能写入“已实现”状态。
 
@@ -446,6 +446,13 @@ LGM1 交付的是受控协议内核，不是面向客户的“已支持 MCP”�
 - 任务历史只有一套客户状态，不暴露框架内部对象；
 - 功能开关关闭后完全走 Native Runtime。
 
+实施结果（2026-09-04，已完成）：
+
+- 新增确定性 RuntimeRouter；它不读取自然语言、不接受模型选后端，只允许显式启用、已准入、只读且无副作用的 lgm3_deterministic_fixture:v1 内部图进入 LangGraph。任何客户任务、未知图版本或写入任务均明确回退 Native Runtime。
+- LangGraphExecutionBackend 只接受固定夹具，不注册 API 或 Qt 入口，不读取客户材料，不调用模型、MCP 或外部服务。它以独立 SQLite 文件维护不透明 task/thread 映射，图内覆盖准备、并行分支、无副作用 Tool、Interrupt、失败、恢复、取消和关闭。
+- HarnessRuntimeEvent 已补齐等待确认与取消语义，并可投影为既有 TaskLogEvent 形状；投影不携带框架节点名、SDK 对象或原始消息。LGM3 尚未把测试事件写入客户历史或 WebSocket，真实落库与 UI 投影只能在 LGM4 业务影子试点中随同一个受控任务链实现。
+- verify_lgm3_langgraph_execution_backend.py 已在临时目录真实创建 SQLite checkpoint，覆盖客户任务拒绝路由、并行、同 task/thread 的 Interrupt 恢复、关闭并重建后恢复、失败节点不重跑已完成分支、协作式取消和事件投影。未使用模型额度、网络、客户文件或主任务数据库。
+
 ### LGM4：知识库深度任务影子迁移
 
 目标：用最适合 LangGraph 的既有 K4 Map-Reduce 证明真实收益。
@@ -626,8 +633,8 @@ AGENTFLOW_LANGCHAIN_ADAPTERS_ENABLED=false
 
 ## 13. 下一次开发起点
 
-LGM0、LGM1 与 LGM2 已完成。下一阶段候选是 **LGM3：LangGraph ExecutionBackend 骨架**，但它
-只允许在确定性测试图和影子对照中验证状态、事件与恢复，不能直接迁移客户任务或替换 Native Runtime。
+LGM0、LGM1、LGM2 与 LGM3 已完成。下一阶段候选是 **LGM4：知识库深度任务影子迁移**；它
+只能使用冻结输入、模型 fake 和影子结果验证状态、事件与恢复，不能直接切换客户任务或替换 Native Runtime。
 新的 MCP 连接、远程 MCP、LangGraph 客户路由与 LangChain 适配仍必须先由用户确认具体产品价值。
 
 推荐顺序：

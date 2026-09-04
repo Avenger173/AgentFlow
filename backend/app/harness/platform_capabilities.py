@@ -43,6 +43,7 @@ def probe_runtime_platform(
     langgraph_versions = _package_versions(langgraph_packages, probe)
     mcp_versions = _package_versions(mcp_packages, probe)
     langchain_versions = _package_versions(langchain_packages, probe)
+    langgraph_installed = _versions_match(langgraph_versions, langgraph_packages)
 
     return RuntimePlatformProbe(
         backends=(
@@ -59,10 +60,14 @@ def probe_runtime_platform(
                 backend_id="langgraph",
                 label="LangGraph ExecutionBackend",
                 enabled=settings.langgraph_enabled,
-                installed=_versions_match(langgraph_versions, langgraph_packages),
-                ready=False,
+                installed=langgraph_installed,
+                ready=settings.langgraph_enabled and langgraph_installed,
                 message=_langgraph_message(langgraph_versions),
-                capabilities=("probe_only", "checkpoint_candidate", "no_customer_routing"),
+                capabilities=(
+                    "isolated_test_graph",
+                    "sqlite_checkpoint",
+                    "no_customer_routing",
+                ),
                 versions=langgraph_versions,
             ),
             RuntimeBackendDescriptor(
@@ -146,7 +151,7 @@ def _versions_match(versions: dict[str, str], required: tuple[str, ...]) -> bool
 
 def _langgraph_message(versions: dict[str, str]) -> str:
     if _versions_match(versions, ("langgraph", "langgraph-checkpoint-sqlite")):
-        return "依赖已准备，默认关闭；LGM3 前不创建图、Checkpoint 或客户路由。"
+        return "LGM3 隔离测试图已准备；客户任务仍禁止路由，Native Runtime 继续默认。"
     return "LangGraph 或 SQLite Checkpointer 未按 LGM0 锁定版本准备；Native Runtime 继续可用。"
 
 

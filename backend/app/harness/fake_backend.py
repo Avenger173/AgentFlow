@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.harness.contracts import (
+    HarnessControlResult,
     HarnessEventSink,
     HarnessExecutionRequest,
     HarnessExecutionResult,
@@ -49,3 +50,30 @@ class FakeNodeHarnessBackend:
             session_id=f"fake-{request.task_id}",
             metadata={"backend": self.backend_id, "provider": request.provider_id},
         )
+
+    async def resume_task(
+        self,
+        task_id: str,
+        resume_input: dict[str, object],
+        event_sink: HarnessEventSink,
+    ) -> HarnessExecutionResult:
+        await event_sink(
+            HarnessRuntimeEvent(
+                kind="runtime_failed",
+                message="Fake Node Harness 未保存检查点，不能恢复任务。",
+            )
+        )
+        return HarnessExecutionResult(
+            status="failed",
+            failure_code="resume_not_supported",
+            metadata={"backend": self.backend_id, "task_id": task_id},
+        )
+
+    async def cancel_task(self, task_id: str) -> HarnessControlResult:
+        return HarnessControlResult(
+            status="unsupported",
+            message="Fake Node Harness 不维护后台任务，不能取消。",
+        )
+
+    async def close(self) -> None:
+        return None

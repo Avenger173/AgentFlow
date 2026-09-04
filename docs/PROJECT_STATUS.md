@@ -908,6 +908,13 @@ cmd /c ""D:\IDE\VS2022\buildtools\VC\Auxiliary\Build\vcvars64.bat" && "D:\IDE\qt
 - `verify_lgm2_public_reference.py` 已覆盖连接默认状态、启停、真实 stdio Tool 发现、Commander 准入、权限、来源契约、Runtime 与 DeliveryCard 投影；`--live` 已实际请求固定 Wikimedia 接口并得到受限页面来源。过程中修正了 Wikimedia 对无项目地址 User-Agent 的 `403` 拒绝。LGM1 回归、Python 编译和依赖检查均通过；Qt Debug 构建通过。下一阶段仅可讨论 LGM3 隔离测试图，不能直接替换 Native Runtime。
 - 已修复调度台把“最近新闻资料”等时效外部信息误路由为本地文档的问题：新会话继续清空材料、`@` 偏好和短期上下文；后端将新闻、实时动态、行情、天气、赛程等识别为独立未开放能力，并给出明确边界，不再伪称客户点名文档、数据或知识库助手。只有客户实际输入 `@Agent` 时，缺少材料的提示才会显示“已点名”。
 
+## 2026-09-04 LGM3：LangGraph 隔离 ExecutionBackend 骨架
+
+- 已新增确定性 RuntimeRouter 与 LangGraphExecutionBackend，但其白名单只允许内部 lgm3_deterministic_fixture:v1 夹具。Router 不读取自然语言或模型建议；客户任务、未知图版本、写入任务和已产生副作用的任务始终拒绝 LangGraph 并保持 Native Runtime。
+- 测试图使用独立 SQLite Checkpointer，覆盖并行分支、无副作用 Tool、Interrupt、失败、同 task/thread 恢复、关闭重建后恢复和取消。State 只保存 task、图 ID/版本、fixture scenario、有限节点/Tool 摘要；不保存 Key、路径、客户材料、DataFrame、Embedding、模型对象或原始思考。
+- 外部 Runtime 契约已补齐 resume_task、cancel_task、close、等待确认和取消事件；测试图事件可投影到既有 TaskLogEvent 模型，投影不泄漏框架节点名。此阶段没有 API/Qt/客户任务入口，也没有写入客户任务历史或 WebSocket；真实业务投影留待 LGM4 与 K4 影子链一并验证。
+- verify_lgm3_langgraph_execution_backend.py 已通过：客户任务拒绝路由、分支、Interrupt 恢复、失败后进程重建恢复且不重跑已完成节点、取消、SQLite 清理与事件投影均在临时目录完成。Python 编译、LGM0/LGM1/LGM2 和 Native 回归将在提交前一并复验；未调用真实模型、联网、MCP 或客户资料。
+
 ## 2026-09-04 LGM1：确定性 MCP Gateway 内核
 
 - 已完成项目内 `agentflow-test` stdio Server、短生命周期 `McpClientManager` 与测试专用 `McpGateway`。测试服务只包含回显、求和、延迟、超大结果和自终止回归 Tool；没有 API/Qt/Commander 入口，不读取客户文件、环境变量、网络或模型。

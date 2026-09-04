@@ -32,7 +32,15 @@ def main() -> None:
         "mcp_gateway",
         "langchain_adapter",
     }
-    assert all(item.ready is False and item.enabled is False for item in platform_probe.capabilities)
+    capabilities_by_id = {
+        item.capability_id: item
+        for item in platform_probe.capabilities
+    }
+    # LGM2 已允许 MCPGateway 作为平台连接总开关启用，但不等于存在通用客户 Tool；
+    # LGM0 仍必须保证它没有就绪为任意 MCP 路由，LangChain 也继续默认关闭。
+    assert capabilities_by_id["mcp_gateway"].ready is False
+    assert capabilities_by_id["langchain_adapter"].ready is False
+    assert capabilities_by_id["langchain_adapter"].enabled is False
     assert all(
         module_name not in sys.modules for module_name in ("mcp", "langgraph", "langchain_core")
     ), "版本探针不应 eager import 可选 SDK"

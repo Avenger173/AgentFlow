@@ -15,10 +15,13 @@ from typing import Literal, Protocol
 HarnessEventKind = Literal[
     "runtime_started",
     "runtime_heartbeat",
+    "permission_required",
     "assistant_final",
     "runtime_failed",
+    "runtime_cancelled",
 ]
-HarnessRunStatus = Literal["completed", "failed", "cancelled"]
+HarnessRunStatus = Literal["completed", "failed", "cancelled", "waiting_permission"]
+HarnessControlStatus = Literal["accepted", "not_found", "already_terminal", "unsupported", "closed"]
 RuntimeBackendId = Literal[
     "native",
     "node_harness",
@@ -126,6 +129,18 @@ class HarnessExecutionResult:
     metadata: dict[str, str] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class HarnessControlResult:
+    """取消或关闭请求的最小回执。
+
+    控制面只需要知道请求是否被当前后端接受；具体 SDK 的 task、thread 或 checkpoint
+    细节留在后端内部，避免把框架私有对象扩散到 Workflow 和 Qt。
+    """
+
+    status: HarnessControlStatus
+    message: str
+
+
 HarnessEventSink = Callable[[HarnessRuntimeEvent], Awaitable[None]]
 
 
@@ -144,3 +159,17 @@ class ExecutionBackend(Protocol):
         event_sink: HarnessEventSink,
     ) -> HarnessExecutionResult:
         """执行一次已获准的任务，并按时间顺序发送规范化事件。"""
+
+    async def resume_task(
+        self,
+        task_id: str,
+        resume_input: dict[str, object],
+        event_sink: HarnessEventSink,
+    ) -> HarnessExecutionResult:
+        """从同一后端已保存的检查点恢复任务。"""
+
+    async def cancel_task(self, task_id: str) -> HarnessControlResult:
+        """请求取消当前后端中的指定任务。"""
+
+    async def close(self) -> None:
+        """释放后端自己的进程、连接或检查点句柄。"""

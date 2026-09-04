@@ -8,6 +8,7 @@ import subprocess
 
 from app.core.config import settings
 from app.harness.contracts import (
+    HarnessControlResult,
     HarnessEventSink,
     HarnessExecutionRequest,
     HarnessExecutionResult,
@@ -82,6 +83,31 @@ class NodeHarnessBridge:
             final_text=final_text,
             metadata={"backend": "node_harness", "profile": _PROFILE_NAME},
         )
+
+    async def resume_task(
+        self,
+        task_id: str,
+        resume_input: dict[str, object],
+        event_sink: HarnessEventSink,
+    ) -> HarnessExecutionResult:
+        """官方 headless CLI 当前不暴露可恢复 session，明确拒绝而非伪造恢复。"""
+
+        await event_sink(
+            HarnessRuntimeEvent(
+                kind="runtime_failed",
+                message="Node Harness 当前 headless 模式不支持从检查点恢复。",
+            )
+        )
+        return _failure("resume_not_supported", "Node Harness 当前 headless 模式不支持恢复。")
+
+    async def cancel_task(self, task_id: str) -> HarnessControlResult:
+        return HarnessControlResult(
+            status="unsupported",
+            message="Node Harness 当前只支持受控单任务批处理，尚无安全取消协议。",
+        )
+
+    async def close(self) -> None:
+        return None
 
 
 class NodeHarnessBridgeError(RuntimeError):
