@@ -17,6 +17,7 @@ from app.schemas.chat import (
     WorkflowStep,
     WorkflowWorkspaceScope,
 )
+from app.schemas.commander_intent import CommanderIntentCandidate, CommanderIntentResolution
 from app.schemas.memory import LongTermMemoryRecord
 from app.services.long_term_memory import build_memory_context_summary
 from app.services.data_join import DataJoinError, build_data_join_intent
@@ -119,6 +120,9 @@ def create_commander_plan(
     project_scope: str = "global",
     conversation_id: str = "",
     conversation_context_summary: list[str] | None = None,
+    has_conversation_context: bool = False,
+    semantic_intent: CommanderIntentCandidate | None = None,
+    semantic_intent_note: str = "",
 ) -> WorkflowPlan:
     """生成具备材料绑定与动作准入边界的 Commander 计划。
 
@@ -140,20 +144,30 @@ def create_commander_plan(
     dataset_refs = _material_refs(material_bindings, kind="dataset")
     knowledge_base_refs = _material_refs(material_bindings, kind="knowledge_base")
     lowered = message.lower()
+    # 语义候选来自受限 JSON 契约。它可以补足自然语言理解，但置信度不足时绝不覆盖
+    # 确定性边界，更不能直接产生未准入的 Tool、路径或权限。
+    accepted_semantic_intent = (
+        semantic_intent if semantic_intent is not None and semantic_intent.confidence >= 0.60 else None
+    )
+    semantic_kind = accepted_semantic_intent.intent if accepted_semantic_intent is not None else ""
     search_query = _extract_workspace_search_query(message)
     knowledge_deep_requested = _matches_any(lowered, KNOWLEDGE_DEEP_ROUTE_KEYWORDS)
     # PPT 创作拥有最高的显式意图优先级。即使调度台仍挂着上一次的数据集或资料库，
     # “帮我做 PPT”也不能被错误解释成“分析当前数据/资料库”。
     presentation_requested = _matches_any(lowered, PRESENTATION_ROUTE_KEYWORDS)
     fresh_external_information_requested = (
-        not presentation_requested and _requests_fresh_external_information(lowered)
+        not presentation_requested
+        and _requests_fresh_external_information(lowered)
     )
     public_reference_requested = (
         not presentation_requested
         and not fresh_external_information_requested
         and _matches_any(lowered, PUBLIC_REFERENCE_ROUTE_KEYWORDS)
     )
-    knowledge_intent_requested = _matches_any(lowered, KNOWLEDGE_ROUTE_KEYWORDS) or knowledge_deep_requested
+    knowledge_intent_requested = (
+        _matches_any(lowered, KNOWLEDGE_ROUTE_KEYWORDS)
+        or knowledge_deep_requested
+    )
     # “资料库”是知识库专属实体；不能因为 DOCUMENT_ROUTE_KEYWORDS 里的宽泛词“资料”
     # 把一个明确的知识库问题同时路由成“请选择文档”。知识库意图优先于泛化的文档词。
     document_intent_requested = not (
@@ -161,7 +175,34 @@ def create_commander_plan(
         or public_reference_requested
         or fresh_external_information_requested
     ) and _matches_any(lowered, DOCUMENT_ROUTE_KEYWORDS)
-    data_intent_requested = not (public_reference_requested or fresh_external_information_requested) and _matches_any(lowered, DATA_ROUTE_KEYWORDS)
+    data_intent_requested = not (public_reference_requested or fresh_external_information_requested) and (
+        _matches_any(lowered, DATA_ROUTE_KEYWORDS)
+    )
+    raw_specialist_intent = any(
+        (
+            presentation_requested,
+            fresh_external_information_requested,
+            public_reference_requested,
+            knowledge_intent_requested,
+            document_intent_requested,
+            data_intent_requested,
+        )
+    )
+    # 用户原句已经清楚表达专业任务时，以原句为准。语义候选用于补足“把这些结果做得
+    # 更直观”这类省略表达，不能把一个明确的文档/PPT/资料库请求再扩展成第二个 Agent。
+    if not raw_specialist_intent:
+        if semantic_kind == "presentation":
+            presentation_requested = True
+        elif semantic_kind == "fresh_external_information":
+            fresh_external_information_requested = True
+        elif semantic_kind == "public_reference":
+            public_reference_requested = True
+        elif semantic_kind == "knowledge":
+            knowledge_intent_requested = True
+        elif semantic_kind == "document":
+            document_intent_requested = True
+        elif semantic_kind == "data":
+            data_intent_requested = True
     data_transform_intent_requested = _matches_any(lowered, DATA_TRANSFORM_KEYWORDS)
     data_join_intent_requested = _matches_any(lowered, DATA_JOIN_KEYWORDS)
     explicit_specialist_intent = (
@@ -175,7 +216,12 @@ def create_commander_plan(
     # 已选材料是“本轮可用的候选上下文”，而非隐式命令。否则客户从数据页跳到调度台
     # 后随口问一个普通问题，也会被残留 CSV 强行劫持。只有目标本身出现处理意图时，
     # 才把已选材料交给对应专业 Agent；`@` 在没有冲突目标时提供一个温和的偏好兜底。
-    material_task_requested = _requests_bound_material_work(message)
+    material_task_requested = _requests_bound_material_work(message) or bool(
+        accepted_semantic_intent
+        and accepted_semantic_intent.is_follow_up
+        and semantic_kind in {"document", "data", "knowledge"}
+        and material_bindings
+    )
     knowledge_requested = not (presentation_requested or fresh_external_information_requested) and (
         knowledge_intent_requested
         or (
@@ -232,8 +278,14 @@ def create_commander_plan(
             )
         )
     )
-    data_chart_delivery_requested = data_requested and _requests_data_chart_delivery(lowered)
-    data_workbook_delivery_requested = data_requested and _requests_data_workbook_delivery(lowered)
+    data_chart_delivery_requested = data_requested and (
+        _requests_data_chart_delivery(lowered)
+        or bool(accepted_semantic_intent and accepted_semantic_intent.delivery == "chart_png")
+    )
+    data_workbook_delivery_requested = data_requested and (
+        _requests_data_workbook_delivery(lowered)
+        or bool(accepted_semantic_intent and accepted_semantic_intent.delivery == "analysis_workbook")
+    )
     requested_chart_count = _requested_chart_count(lowered)
     data_transform_requested = data_requested and data_transform_intent_requested
     data_join_requested = data_requested and data_join_intent_requested
@@ -694,7 +746,14 @@ def create_commander_plan(
 
     max_risk_level = _max_risk_level(steps)
     requires_confirmation = any(step.requires_confirmation for step in steps)
-    clarifying_questions.extend(_build_clarifying_questions(message, steps, material_bindings))
+    clarifying_questions.extend(
+        _build_clarifying_questions(
+            message,
+            steps,
+            material_bindings,
+            has_conversation_context=has_conversation_context,
+        )
+    )
     clarifying_questions = list(dict.fromkeys(clarifying_questions))[:3]
     has_guided_handoff = any(step.execution_mode == "guided_handoff" for step in steps)
     guided_handoff_action = next(
@@ -704,10 +763,25 @@ def create_commander_plan(
     requires_composition_runtime = (
         len(specialist_agent_ids) > 1 and not native_composition_supported
     )
+    plan_intent = "fresh_external_information" if fresh_external_information_requested else _infer_intent(steps)
+    intent_resolution = CommanderIntentResolution(
+        source="model" if accepted_semantic_intent is not None else "deterministic",
+        candidate=accepted_semantic_intent,
+        final_intent=plan_intent,
+        applied=accepted_semantic_intent is not None,
+        note=(
+            semantic_intent_note
+            or (
+                "模型候选已由 Harness 与当前材料、能力和权限边界共同裁决。"
+                if accepted_semantic_intent is not None
+                else "本轮使用确定性意图识别。"
+            )
+        ),
+    )
     plan = WorkflowPlan(
         workflow_name="commander_manager_plan",
         description="Commander 基于显式材料绑定与 Agent action 准入生成的结构化计划。",
-        intent="fresh_external_information" if fresh_external_information_requested else _infer_intent(steps),
+        intent=plan_intent,
         user_goal=message,
         summary=_build_plan_summary(steps),
         clarifying_questions=clarifying_questions,
@@ -726,6 +800,7 @@ def create_commander_plan(
         conversation_id=conversation_id,
         memory_context_summary=memory_context_summary,
         conversation_context_summary=(conversation_context_summary or [])[:2],
+        intent_resolution=intent_resolution,
         steps=steps,
         max_risk_level=max_risk_level,
         requires_confirmation=requires_confirmation,
@@ -1584,10 +1659,13 @@ def _build_clarifying_questions(
     message: str,
     steps: list[WorkflowStep],
     materials: list[WorkflowMaterialBinding],
+    *,
+    has_conversation_context: bool = False,
 ) -> list[str]:
     """信息明显不足时先问少量关键问题。
 
-    MVP 先只识别非常含糊的“这个/这些/它”类输入，避免 Commander 看似很聪明地乱猜。
+    只有缺少可承接的会话语义时才对短句澄清。相同会话中的“思想演变”“第二种”这类
+    省略主语的追问，应交给已获得近轮上下文的表达模型继续回答，不能因字数短就截断。
     """
 
     stripped = message.strip()
@@ -1595,7 +1673,7 @@ def _build_clarifying_questions(
         return []
     if any(token in stripped for token in ("这个", "这些", "它", "那份")) and not materials:
         return ["你说的材料或对象是哪一个？请先选择文档或数据文件，或在任务中写出受控材料名称。"]
-    if len(stripped) <= 6:
+    if len(stripped) <= 6 and not has_conversation_context:
         return ["你希望 AgentFlow 完成什么具体结果？例如生成报告、整理文档、生成代码或回答问题。"]
     return []
 

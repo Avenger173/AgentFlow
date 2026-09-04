@@ -893,6 +893,13 @@ cmd /c ""D:\IDE\VS2022\buildtools\VC\Auxiliary\Build\vcvars64.bat" && "D:\IDE\qt
 
 本次仅完成调度台 PPT 直出和呈现层修复，不代表 AgentFlow 全部 Agent 或 PPT 高级动画已经完成；下一步仍以桌面端真实模型验收结果为准。
 
+## 2026-09-04 R5.5：总指挥语义意图与连续会话首版
+
+- 已修复同一调度会话的短续话断链：计划器不再只因“思想演变”“第二种”等输入过短而要求客户重复说明目标；它只接收是否存在受控会话语义的布尔事实，表达模型继续读取有界摘要和近轮脱敏消息。新建会话仍清空材料、`@` 偏好和短期上下文。
+- 已新增 `CommanderIntent v1`：对于续话或可能涉及专业能力的输入，总指挥通过现有 `commander_planning` 路由发起一次最多 360 token 的 JSON 意图候选；候选限定为普通问答、文档、数据、知识库、PPT、受控公开资料、时效外部信息或澄清，并声明期望交付和材料类型。普通聊天不额外调用；候选 JSON/连接/超时失败或低置信度时保守回退确定性路由。
+- Harness 继续拥有最终决策权：候选必须通过材料类型、Action Admission、权限和 Runtime 边界校验；用户原句已明确 PPT、资料库或数据任务时优先，模型候选不得顺带增加第二个 Agent。`@Agent` 是弱偏好而非调用前提。`WorkflowPlan.intent_resolution` 仅保存候选来源、最终意图和采用状态，不保存 Prompt、推理或完整会话正文。
+- `verify_commander_intent_routing.py` 已覆盖连续短续话、无材料澄清、数据图表候选、明确 PPT 冲突和时效信息边界；`verify_model_routes_c65.py` 验证 JSON mode、360 token 上限、请求级关闭思考及脱敏模型路由审计。Python 编译、LGM2 和全量后端验证均通过；未调用真实模型或客户材料。
+
 ## 2026-09-04 LGM2：受控公开资料检索 MCP 闭环
 
 - 已完成唯一首期客户连接 `Wikimedia 公开资料参考`：项目内 `stdio` Server 只提供 `search_wikimedia`，固定读取 `zh.wikipedia.org` Action API 并最多返回三条公开页面参考。它不接收 URL、Header、代理、命令、cwd、环境变量或密钥，也不充当通用网页抓取器。

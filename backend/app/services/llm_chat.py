@@ -14,6 +14,11 @@ from app.services.commander import (
     reply_conflicts_with_commander_plan,
 )
 from app.services.commander_memory import retrieve_commander_memory_context
+from app.services.commander_intent import (
+    CommanderIntentResolutionError,
+    resolve_commander_intent_candidate,
+    should_resolve_commander_intent,
+)
 from app.services.conversation_memory import (
     PreparedConversation,
     build_conversation_plan_summary,
@@ -87,8 +92,45 @@ async def create_llm_chat_response(
     conversation_plan_summary = (
         build_conversation_plan_summary(conversation) if conversation is not None else []
     )
+    has_conversation_context = bool(
+        conversation
+        and (
+            conversation.context.recent_messages
+            or conversation.context.session.summary.strip()
+        )
+    )
+    try:
+        # Commander 的语义候选与正式表达共用客户可见的 commander_planning 路由；候选
+        # 只使用很小的 JSON 预算，正式回答仍走独立正常文本回合。
+        route_resolution = resolve_model_runtime_for_route("commander_planning")
+        runtime = route_resolution.runtime
+    except ModelGatewayError as exc:
+        raise LlmChatError(str(exc)) from exc
+
+    semantic_intent = None
+    semantic_intent_note = ""
     if agent.id == COMMANDER_AGENT_ID:
         agents = list_agents()
+        should_resolve_intent = should_resolve_commander_intent(
+            message,
+            has_conversation_context=has_conversation_context,
+            agent_hints=request.agent_hints,
+            materials=request.materials,
+        )
+        if should_resolve_intent:
+            try:
+                semantic_intent = await resolve_commander_intent_candidate(
+                    runtime=runtime,
+                    message=message,
+                    conversation_context=conversation_prompt_context,
+                    agents=agents,
+                    materials=request.materials,
+                    agent_hints=request.agent_hints,
+                )
+            except CommanderIntentResolutionError:
+                # 语义候选只是路由增强。连接、超时、限流或 JSON 不规范时继续使用确定性
+                # 规划，不能让一次短候选调用中断客户正常问答或放宽现有安全边界。
+                semantic_intent_note = "模型语义候选不可用，已使用确定性意图识别。"
         workflow_plan = create_commander_plan(
             message,
             available_agents=agents,
@@ -99,16 +141,15 @@ async def create_llm_chat_response(
             project_scope=request.project_scope,
             conversation_id=request.conversation_id or "",
             conversation_context_summary=conversation_plan_summary,
+            has_conversation_context=has_conversation_context,
+            semantic_intent=semantic_intent,
+            semantic_intent_note=semantic_intent_note,
         )
         # C6.1：规划先于表达。真实模型只能解释已校验的计划，不能在不知道材料绑定的
         # 情况下先说“没有资料库工具”，随后又由规则规划器生成知识库委派。
         planning_context = build_commander_planning_context(workflow_plan)
 
     try:
-        # Commander 的客户回复是 C6.5 第一个实际接入显式 Profile 的作用域。路由解析失败
-        # 会明确失败，不会回退到 manifest 或全局默认模型伪装成用户的显式选择。
-        route_resolution = resolve_model_runtime_for_route("commander_planning")
-        runtime = route_resolution.runtime
         reply = await runtime.chat(
             system_prompt=_system_prompt_for_agent(
                 agent,
@@ -132,11 +173,14 @@ async def create_llm_chat_response(
         reply = build_commander_planning_reply(workflow_plan)
 
     if workflow_plan is not None:
+        model_routes = [route_resolution.audit_snapshot(stage="answer")]
+        if semantic_intent is not None:
+            model_routes.insert(0, route_resolution.audit_snapshot(stage="intent_resolution"))
         workflow_run = run_workflow_dry_run(
             task_id=task_id,
             plan=workflow_plan,
             available_agents=agents,
-            model_routes=[route_resolution.audit_snapshot()],
+            model_routes=model_routes,
         )
 
     return ChatResponse(
@@ -176,6 +220,9 @@ def _system_prompt_for_agent(
         "安全边界、工具能力和验证标准。"
         "当前系统仍处于 MVP 阶段，如涉及文件写入、命令执行、联网或数据库变更，"
         "只说明建议方案，不要声称已经实际执行。"
+        "客户可能在同一会话中用短句、省略主语或只补充一个方向继续上轮话题；"
+        "遇到这类表达时，先依据下方受控会话上下文承接语义并直接回答，"
+        "不要仅因句子短而泛化追问“希望完成什么”。"
     )
     if memory_context_summary:
         # 这里只提供用户确认过的短事实，且明确禁止把它们当作指令或覆盖权限规则。

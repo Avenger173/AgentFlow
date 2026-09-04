@@ -276,6 +276,29 @@ class ModelRuntime:
             user_message=user_message,
         )
 
+    async def chat_json(
+        self,
+        *,
+        system_prompt: str,
+        user_message: str,
+        maximum_tokens: int = 512,
+    ) -> str:
+        """执行一个有界 JSON 回合，用于意图等小型结构化决策。
+
+        结构化回合仍通过 Gateway 处理协议差异；DeepSeek/Kimi 会在该请求级别关闭思考，
+        不改变客户保存的模型偏好。供应商未声明 JSON mode 时保留提示词约束并由调用方
+        做 Pydantic 校验，因此不能把不兼容伪装成已通过的结构化输出。
+        """
+
+        bounded_tokens = max(128, min(int(maximum_tokens), self.max_tokens, 1024))
+        constrained_runtime = replace(self, max_tokens=bounded_tokens, temperature=0)
+        turn = await constrained_runtime.tool_turn(
+            system_prompt=system_prompt,
+            messages=[ModelConversationMessage(role="user", content=user_message)],
+            tools=[],
+        )
+        return turn.content
+
     async def tool_turn(
         self,
         *,
@@ -289,7 +312,7 @@ class ModelRuntime:
         工具白名单、参数校验、失败上限和审计都由 AgentRunner / Runtime 决定。
         """
 
-        if not self.supports_tool_calls:
+        if tools and not self.supports_tool_calls:
             raise ModelGatewayError(f"当前 {self.label} profile 未声明 Tool Calls 支持。")
         if self.transport == "anthropic":
             return await self._tool_turn_anthropic(

@@ -39,6 +39,13 @@ def create_mock_chat_response(
             project_scope=request.project_scope,
             conversation_id=request.conversation_id or "",
             conversation_context_summary=(build_conversation_plan_summary(conversation) if conversation else []),
+            has_conversation_context=bool(
+                conversation
+                and (
+                    conversation.context.recent_messages
+                    or conversation.context.session.summary.strip()
+                )
+            ),
         )
         workflow_run = run_workflow_dry_run(
             task_id=task_id,

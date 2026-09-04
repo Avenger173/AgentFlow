@@ -3,6 +3,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from app.schemas.commander_intent import CommanderIntentResolution
 from app.schemas.model import ModelRouteAuditSnapshot
 from app.schemas.workflow import WorkflowRun
 
@@ -199,6 +200,9 @@ class WorkflowPlan(BaseModel):
     # 仅保留本次真正注入的短摘要，便于计划/历史页审计；完整记录仍由记忆管理 API 管理。
     memory_context_summary: list[str] = Field(default_factory=list, max_length=3)
     conversation_context_summary: list[str] = Field(default_factory=list, max_length=2)
+    # 模型只能提出固定枚举的语义候选；Harness 最终是否采用仍由材料、权限和 Action
+    # Admission 裁决。该摘要不包含模型 Prompt、原始思考或完整会话正文。
+    intent_resolution: CommanderIntentResolution = Field(default_factory=CommanderIntentResolution)
     steps: list[WorkflowStep]
     max_risk_level: RiskLevel = "low"
     requires_confirmation: bool = False
