@@ -77,13 +77,15 @@ def main() -> None:
         assert verify_knowledge_deep_task_scope(scope).index_generation_id == scope.index_generation_id
 
         # 更新材料会创建新 generation。旧范围即使父块事实仍存在，也绝不能被误当作可恢复任务。
-        import_workspace_document(
+        updated_handbook = import_workspace_document(
             filename="deep_scope_handbook.md",
             content="# 交付范围\n\n第二版新增发布前演练与风险复核。\n",
         )
         _index_active_materials(
             knowledge_base_id=base.knowledge_base_id,
-            document_names=["deep_scope_handbook.md"],
+            # 同名导入会保留原材料并返回稳定的新相对路径；必须索引这个返回值，不能继续
+            # 指向旧版本后把“generation 没变”误判成 K4 范围失效逻辑出错。
+            document_names=[updated_handbook.relative_path],
         )
         try:
             verify_knowledge_deep_task_scope(scope)
