@@ -1,0 +1,13 @@
+# LGM0 平台集成依赖。默认 `requirements.txt` 不引用本文件，避免普通桌面启动
+# 因 LangGraph、MCP 或 LangChain 的可选能力而变慢或增加发行体积。
+#
+# 安装命令（必须使用桌面端实际解释器）：
+#   .\.venv\Scripts\python.exe -X utf8 -m pip --isolated install -r requirements-agent-runtime.txt
+#
+# 每次升级前先核对 docs/LANGGRAPH_LANGCHAIN_MCP_INTEGRATION_PLAN.md，并完成 LGM
+# 专项回归。这里固定的是 2026-09-04 在 Python 3.13 / Windows 上完成 dry-run 的版本。
+-r requirements.txt
+mcp==2.1.1
+langgraph==1.2.11
+langgraph-checkpoint-sqlite==3.1.1
+langchain-core==1.6.1

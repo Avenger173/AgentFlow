@@ -19,6 +19,56 @@ HarnessEventKind = Literal[
     "runtime_failed",
 ]
 HarnessRunStatus = Literal["completed", "failed", "cancelled"]
+RuntimeBackendId = Literal[
+    "native",
+    "node_harness",
+    "langgraph",
+]
+PlatformCapabilityId = Literal["mcp_gateway", "langchain_adapter"]
+
+
+@dataclass(frozen=True)
+class RuntimeBackendDescriptor:
+    """控制面可识别的执行后端描述，不携带 SDK 或客户任务对象。
+
+    LGM0 只用它报告 Native / Node Harness / LangGraph 的准备状态。真正的路由、
+    checkpoint 和恢复实现留到 LGM3，防止“依赖已安装”被误当成客户任务已经迁移。
+    """
+
+    backend_id: RuntimeBackendId
+    label: str
+    enabled: bool
+    installed: bool
+    ready: bool
+    message: str
+    capabilities: tuple[str, ...] = ()
+    versions: dict[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.label.strip() or not self.message.strip():
+            raise ValueError("RuntimeBackendDescriptor 必须包含标签和状态说明。")
+        if self.ready and (not self.enabled or not self.installed):
+            raise ValueError("就绪 Runtime 必须已安装且已启用。")
+
+
+@dataclass(frozen=True)
+class PlatformCapabilityDescriptor:
+    """非 Runtime 的可选平台能力描述，例如 MCP Gateway 或 LangChain Adapter。"""
+
+    capability_id: PlatformCapabilityId
+    label: str
+    enabled: bool
+    installed: bool
+    ready: bool
+    message: str
+    capabilities: tuple[str, ...] = ()
+    versions: dict[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.label.strip() or not self.message.strip():
+            raise ValueError("PlatformCapabilityDescriptor 必须包含标签和状态说明。")
+        if self.ready and (not self.enabled or not self.installed):
+            raise ValueError("就绪平台能力必须已安装且已启用。")
 
 
 @dataclass(frozen=True)

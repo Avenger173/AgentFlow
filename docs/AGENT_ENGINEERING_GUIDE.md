@@ -8,7 +8,7 @@
 
 AgentFlow 的 Agent 不应只追求“模型回答得像人”，而要追求用户任务真的完成、过程可控、失败可解释、成本可管理。
 
-当前阶段仍以本地桌面应用和 SQLite 为主，不急着引入 Redis 或在线评估平台。2026-09-03 已确认 LangGraph、LangChain 与 MCP 的平台集成方向，但仍坚持先以现有 Native Runtime 为行为基线：LangGraph 只作为可选 `ExecutionBackend`，MCP 通过独立 Gateway 接入，LangChain 只复用有实际收益的组件。详细边界见 `docs/LANGGRAPH_LANGCHAIN_MCP_INTEGRATION_PLAN.md`。
+当前阶段仍以本地桌面应用和 SQLite 为主，不急着引入 Redis 或在线评估平台。2026-09-04 已完成 LGM0 的可选依赖与无副作用探针，但仍坚持以现有 Native Runtime 为行为基线：LangGraph 只作为可选 `ExecutionBackend`，MCP 通过独立 Gateway 接入，LangChain 只复用有实际收益的组件。LGM0 依赖已安装不等于客户能力已开放；详细边界见 `docs/LANGGRAPH_LANGCHAIN_MCP_INTEGRATION_PLAN.md`。
 
 阶段 5 的核心目标不是继续收集更多 Agent 名称，而是完成第一个真正的模型工具循环。现有 manifest、Node Contract 和 Runtime action 只能说明 Harness 已有插槽，不能自动证明某个 Agent 已经实现。
 

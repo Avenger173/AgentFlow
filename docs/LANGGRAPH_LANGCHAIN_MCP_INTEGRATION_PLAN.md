@@ -1,8 +1,8 @@
 # LangGraph、LangChain 与 MCP 平台集成计划
 
-最后更新：2026-09-03
+最后更新：2026-09-04
 
-状态：**集成方向已由用户确认；当前仅完成方案与边界设计，尚未安装 Python 依赖、创建 MCP 连接或把客户任务切换到 LangGraph。现有 Native Runtime 仍是唯一默认执行路径。**
+状态：**LGM0 基线冻结与技术探针已完成。MCP、LangGraph 与 LangChain 依赖已在开发后端环境锁定并通过隔离探针，但仍未创建 MCP 连接、未创建 LangGraph 图或 Checkpointer、未切换任何客户任务。现有 Native Runtime 仍是唯一默认执行路径。**
 
 本文是三项技术进入 AgentFlow 的实施依据。目标不是为简历增加名词，而是用成熟框架和开放协议改善复杂工作流恢复、外部工具接入、组件复用和长期可维护性。任何阶段只有产生可验证的客户价值并通过回归后，才能写入“已实现”状态。
 
@@ -329,6 +329,30 @@ LangChain 不作为新的总控制层。以下条件满足时才引入对应组�
 - 依赖缺失只显示“能力未准备”，不让后端启动失败；
 - Native 全量回归保持通过。
 
+#### LGM0 实施记录（2026-09-04）
+
+- Windows 11 / CPython `3.13.13` 的实际后端 `.venv` 已按
+  `backend/requirements-agent-runtime.txt` 安装并锁定：`mcp==2.1.1`、
+  `langgraph==1.2.11`、`langgraph-checkpoint-sqlite==3.1.1`、
+  `langchain-core==1.6.1`；四项安装包元数据均为 MIT。默认
+  `requirements.txt` 不引用该可选文件，发行包体与正式 PyInstaller 验证仍留给 LGM7。
+- 新增无副作用 `RuntimeBackendDescriptor` 与 `PlatformCapabilityDescriptor`：
+  Native 为当前唯一 `ready` 后端；LangGraph、MCPGateway、LangChain Adapter
+  即使依赖已安装也保持 `ready=false`。`GET /health` 只通过包元数据报告状态，
+  不 import SDK、不创建图/SQLite Checkpointer、不启动子进程或连接 MCP。
+- MCP 首期稳定契约已冻结：服务器和 Tool 的规范化名称、允许传输类型以及错误码均已定义；
+  尚未接受 command、URL、密钥或客户 Tool schema，因此没有任何外部执行面。
+- 已新增独立进程启动基线脚本。当前同机连续 5 次 `total_ready_ms` 为
+  `2758/2455/2452/2456/2387`，中位数 `2455 ms`。此基线只用于后续同脚本、
+  同环境的回归比较，不能与并发或冷磁盘条件下的旧测量混为“优化结果”。
+- 已通过：`verify_lgm0_platform_probe.py`、`verify_backend.py`、
+  `verify_knowledge_deep_task_map.py`、`verify_node_harness_adapter.py`、
+  `compileall app scripts`、`pip check` 和 `git diff --check`。全部为本地确定性验证，
+  未调用真实模型、未读取客户材料、未连接外部 MCP Server。
+
+LGM0 通过的含义仅是“依赖可控、默认关闭、Native 基线未破坏”，不等于客户已经获得
+MCP、LangGraph 或 LangChain 功能。下一阶段仍从 LGM1 的确定性 MCP Gateway 内核开始。
+
 ### LGM1：MCP Client/Gateway 内核
 
 目标：完成无 LLM、无客户数据、无外部副作用的协议闭环。
@@ -573,7 +597,9 @@ AGENTFLOW_LANGCHAIN_ADAPTERS_ENABLED=false
 
 ## 13. 下一次开发起点
 
-下一次用户明确说“开始”后，只启动 **LGM0：基线冻结与技术探针**，不直接迁移 K4，也不创建真实外部连接。LGM0 完成并经用户查看状态后，再进入 LGM1 的 MCP Client/Gateway 内核。
+LGM0 已完成。下一次用户明确确认继续后，只启动 **LGM1：MCP Client/Gateway 内核**：
+先建立项目内确定性测试 MCP Server 与无 LLM、无客户数据、无外部副作用的 Gateway
+闭环；不直接迁移 K4，不创建真实外部连接。
 
 推荐顺序：
 

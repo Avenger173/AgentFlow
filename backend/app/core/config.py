@@ -90,6 +90,23 @@ class Settings:
         "yes",
         "on",
     }
+    # LGM 平台集成默认全部关闭。开关只允许准备已经验证的 Adapter，不能改变
+    # Commander 的 action 准入、权限策略或客户任务的默认 Native Runtime 路径。
+    mcp_enabled: bool = os.getenv("AGENTFLOW_MCP_ENABLED", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    langgraph_enabled: bool = os.getenv("AGENTFLOW_LANGGRAPH_ENABLED", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    langchain_adapters_enabled: bool = os.getenv(
+        "AGENTFLOW_LANGCHAIN_ADAPTERS_ENABLED", "false"
+    ).lower() in {"1", "true", "yes", "on"}
     node_harness_probe_timeout_seconds: float = float(
         os.getenv("AGENTFLOW_NODE_HARNESS_PROBE_TIMEOUT_SECONDS", "15")
     )

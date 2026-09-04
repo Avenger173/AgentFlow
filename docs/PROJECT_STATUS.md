@@ -1,6 +1,6 @@
 # AgentFlow 项目状态
 
-最后更新：2026-09-03
+最后更新：2026-09-04
 
 ## 当前仓库状态
 
@@ -893,11 +893,19 @@ cmd /c ""D:\IDE\VS2022\buildtools\VC\Auxiliary\Build\vcvars64.bat" && "D:\IDE\qt
 
 本次仅完成调度台 PPT 直出和呈现层修复，不代表 AgentFlow 全部 Agent 或 PPT 高级动画已经完成；下一步仍以桌面端真实模型验收结果为准。
 
+## 2026-09-04 LGM0：LangGraph、LangChain 与 MCP 基线冻结
+
+- 已在 Windows / CPython `3.13.13` 的开发后端环境锁定可选依赖：`mcp==2.1.1`、`langgraph==1.2.11`、`langgraph-checkpoint-sqlite==3.1.1` 与 `langchain-core==1.6.1`；默认 requirements 和客户启动路径不引用它们。四项包元数据为 MIT，发行版体积与 PyInstaller 共存验证仍按 LGM7 单独处理。
+- `RuntimeBackendDescriptor` 明确区分 Native/Node Harness/LangGraph 执行后端，`PlatformCapabilityDescriptor` 单列 MCPGateway 与 LangChain Adapter；`GET /health` 只做 metadata 探针。默认所有 LGM 开关关闭，未 import 可选 SDK、未创建图或 Checkpointer、未启动/连接 MCP Server，也未改变任何客户任务路由。
+- 新增 MCP 无副作用契约，固定规范化 server/tool 名称、传输候选与稳定错误码；尚未接收外部 command、URL、密钥或 Tool schema。LGM1 才会建立项目内确定性测试 Server 和 Gateway。
+- Native 全量、K4 Map/Reduce 恢复、Node Harness 事件契约、LGM0 专项探针、`compileall` 与 `pip check` 均通过。新独立进程启动基线连续 5 次中位数为 `2455 ms`，仅用于同环境后续回归，不宣称与历史不同条件测量的性能变化。
+- 下一步：LGM1 MCP Gateway 内核。仍不连接真实外部服务、不调用真实模型、不读取客户材料；LangGraph K4 影子迁移仍是 LGM3/LGM4 的后续工作。
+
 ## 2026-09-03 LangGraph、LangChain 与 MCP 平台集成计划
 
-- 用户已确认三项技术进入 AgentFlow 的长期方向；本轮只完成架构与实施计划，**尚未安装 Python 依赖、连接 MCP server、切换客户任务或宣称框架能力已经交付**。
+- 用户已确认三项技术进入 AgentFlow 的长期方向；LGM0 已完成依赖与边界验证，**仍未连接 MCP server、切换客户任务或宣称框架能力已经交付**。
 - MCP 定位为独立 `MCPGateway`：统一处理服务器配置、连接、能力发现、Tool 命名、权限、审计、超时与结果裁剪。首期只开放 Tools 和本地 `stdio`，远程连接后续采用 Streamable HTTP；LangChain 与 DeepSeek Harness 都不能绕过该 Gateway。
 - LangGraph 定位为可选 `ExecutionBackend`，Native Runtime 继续默认。首个候选是已经具备 Map-Reduce、checkpoint 与恢复复杂度的知识库 K4；正式迁移前必须使用相同冻结输入做影子对照，验证状态、来源闭合、产物哈希、恢复语义和终态一致。
 - LangChain 不作为整套业务框架接管 AgentFlow，只评估 `langchain-core` 消息/Tool 适配及确实减少重复代码的 MCP 适配组件；现有 ModelGateway、AgentRunner、RAG、权限、审计、任务历史和 Verifier 不迁移。
-- 下一步固定为 LGM0：冻结 Native/K4/启动耗时/包体基线，在隔离环境验证官方 MCP Python SDK、LangGraph SQLite Checkpointer 和必要 LangChain 组件。LGM0 不调用真实模型、不读取客户材料、不连接真实外部服务；通过后才进入 LGM1 MCP Gateway 内核。
+- 下一步固定为 LGM1：先用项目内确定性 MCP Server 完成 Gateway 协议闭环；不调用真实模型、不读取客户材料、不连接真实外部服务。
 - 完整阶段、退出条件、回退开关、依赖纪律与官方依据见 [LANGGRAPH_LANGCHAIN_MCP_INTEGRATION_PLAN.md](LANGGRAPH_LANGCHAIN_MCP_INTEGRATION_PLAN.md)。
