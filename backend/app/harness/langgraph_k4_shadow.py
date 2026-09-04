@@ -93,6 +93,28 @@ class K4ShadowExecutionResult:
     metrics: K4ShadowExecutionMetrics = K4ShadowExecutionMetrics()
 
 
+@dataclass(frozen=True)
+class K4ShadowComparisonReport:
+    """Native 与影子 K4 的无正文对照报告，供 LGM4 准入复盘使用。"""
+
+    native_task_id: str
+    shadow_task_id: str
+    outcome: Literal["passed", "failed"]
+    scope_digest_match: bool
+    result_digest_match: bool
+    coverage_match: bool
+    report_readiness_match: bool
+    source_closure_match: bool
+    native_step_total: int
+    shadow_checkpoint_node_total: int
+    native_duration_ms: int
+    shadow_duration_ms: int
+    native_provider_request_total: int
+    native_retry_total: int
+    developer_trial_ready: bool
+    blockers: tuple[str, ...]
+
+
 class _K4ShadowBlocked(RuntimeError):
     """K4 已保存可恢复 checkpoint，但当前 Graph 节点不能继续。"""
 
@@ -463,6 +485,89 @@ def k4_shadow_graph_identity() -> tuple[str, str]:
     return _GRAPH_ID, _GRAPH_VERSION
 
 
+def compare_k4_shadow_execution(
+    *,
+    native_task_id: str,
+    shadow_execution: K4ShadowExecutionResult,
+    recovery_verified: bool,
+    event_projection_verified: bool,
+    rate_limit_delegation_verified: bool,
+) -> K4ShadowComparisonReport:
+    """汇总一次已完成影子任务与 Native 基线的准入事实。
+
+    该函数只读取 K4 任务的受限结果/checkpoint 摘要，不生成文件、不写数据库、不读取章节正文。
+    ``developer_trial_ready`` 当前始终为 false：确定性夹具不是客户真实材料验收，也无法自动判断
+    Graph 是否降低了长期维护复杂度。这个保守结论防止“对照通过”被误解成可直接切换 Runtime。
+    """
+
+    native = get_knowledge_deep_task_result(native_task_id)
+    shadow = get_knowledge_deep_task_result(shadow_execution.task_id)
+    native_scope = native.scope if native is not None else None
+    shadow_scope = shadow.scope if shadow is not None else None
+    native_result_digest = _digest(native.result.model_dump(mode="json")) if native and native.result else ""
+    scope_digest_match = (
+        native_scope is not None
+        and shadow_scope is not None
+        and _digest(native_scope.model_dump(mode="json")) == _digest(shadow_scope.model_dump(mode="json"))
+        and shadow_execution.scope_digest == _digest(shadow_scope.model_dump(mode="json"))
+    )
+    result_digest_match = bool(
+        native_result_digest
+        and shadow_execution.result_digest
+        and native_result_digest == shadow_execution.result_digest
+    )
+    coverage_match = _coverage_signature(native) == _coverage_signature(shadow)
+    report_readiness_match = _readiness_signature(native) == _readiness_signature(shadow)
+    source_closure_match = bool(
+        native is not None
+        and shadow is not None
+        and native.result is not None
+        and shadow.result is not None
+        and native.result.covered_map_unit_ids == shadow.result.covered_map_unit_ids
+        and not native.result.failed_map_unit_ids
+        and not shadow.result.failed_map_unit_ids
+    )
+    checks_passed = (
+        shadow_execution.status == "completed"
+        and scope_digest_match
+        and result_digest_match
+        and coverage_match
+        and report_readiness_match
+        and source_closure_match
+        and recovery_verified
+        and event_projection_verified
+        and rate_limit_delegation_verified
+    )
+    blockers: list[str] = []
+    if not checks_passed:
+        blockers.append("影子与 Native 的范围、结果、覆盖或恢复事实尚未全部一致。")
+    blockers.extend(
+        (
+            "尚未进行客户明确授权的真实材料与模型验收。",
+            "尚未完成 Native 与 LangGraph 的维护复杂度人工复盘。",
+            "尚未实现经审计的客户开发试点 Router 开关。",
+        )
+    )
+    return K4ShadowComparisonReport(
+        native_task_id=native_task_id,
+        shadow_task_id=shadow_execution.task_id,
+        outcome="passed" if checks_passed else "failed",
+        scope_digest_match=scope_digest_match,
+        result_digest_match=result_digest_match,
+        coverage_match=coverage_match,
+        report_readiness_match=report_readiness_match,
+        source_closure_match=source_closure_match,
+        native_step_total=shadow_execution.metrics.native_step_total,
+        shadow_checkpoint_node_total=shadow_execution.metrics.graph_checkpoint_node_total,
+        native_duration_ms=shadow_execution.metrics.native_duration_ms,
+        shadow_duration_ms=shadow_execution.metrics.graph_elapsed_ms,
+        native_provider_request_total=shadow_execution.metrics.native_provider_request_total,
+        native_retry_total=shadow_execution.metrics.native_retry_total,
+        developer_trial_ready=False,
+        blockers=tuple(blockers),
+    )
+
+
 def _build_graph(backend: LangGraphK4ShadowBackend):
     from langgraph.graph import END, START, StateGraph
 
@@ -494,3 +599,32 @@ def _digest(value: object) -> str:
 
 def _elapsed_ms(started: float) -> int:
     return max(0, int((perf_counter() - started) * 1000))
+
+
+def _coverage_signature(result: object) -> tuple[object, ...] | None:
+    coverage = getattr(result, "coverage", None)
+    if coverage is None:
+        return None
+    return (
+        coverage.state,
+        tuple(coverage.completed_map_unit_ids),
+        tuple(coverage.failed_map_unit_ids),
+        tuple(coverage.cancelled_map_unit_ids),
+        tuple(coverage.pending_map_unit_ids),
+        coverage.total_reduce_count,
+        coverage.completed_reduce_count,
+        coverage.failed_reduce_count,
+        coverage.cancelled_reduce_count,
+        coverage.pending_reduce_count,
+    )
+
+
+def _readiness_signature(result: object) -> tuple[object, ...] | None:
+    readiness = getattr(result, "report_readiness", None)
+    if readiness is None:
+        return None
+    return (
+        readiness.state,
+        readiness.can_export,
+        tuple(readiness.missing_map_unit_ids),
+    )

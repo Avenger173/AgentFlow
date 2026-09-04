@@ -508,6 +508,17 @@ LGM1 交付的是受控协议内核，不是面向客户的“已支持 MCP”�
 - 限流等待仍由 Native K4 的同 Provider 队列负责，影子图只转发其受控阶段变化，绝不新增另一套
   限流器。该事实继续由 K4 专项回归验证；下一步才将两类回归的调用/恢复摘要汇总成稳定比较报告。
 
+#### LGM4.3 实施记录（2026-09-04）
+
+- 新增纯内存 `K4ShadowComparisonReport`：以 Native 基线 task 与影子 task 的冻结范围哈希、
+  最终 Reduce 摘要、Map/Reduce 覆盖、报告资格、来源闭合、步骤/耗时/重试摘要为输入，输出
+  `passed/failed` 事实与阻断项。它不写文件、数据库、任务历史或任何客户正文。
+- 专项回归同时验证完全一致时报告为 `passed`，人为篡改结果摘要时必定为 `failed`。这防止后续
+  只看“图已完成”就误判 K4 业务结果相同。
+- 即便报告为 `passed`，`developer_trial_ready` 目前固定为 `false`：真实材料/模型验收、Native/
+  LangGraph 维护复杂度复盘、经审计的客户试点 Router 开关三项未完成前，任何客户任务仍不得进入
+  LangGraph。LGM4 的下一步是先定义并实现这三项准入条件，而不是直接上线。
+
 ### LGM5：Commander 组合任务试点
 
 前置：LGM4 完成并证明 LangGraph 有收益。

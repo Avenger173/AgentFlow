@@ -50,6 +50,8 @@
 
 > **2026-09-04 LGM4.2 影子可观测性：**影子回执现在只汇总 Native K4 已持久化的步骤/失败数、端到端耗时、实际 Provider 请求数和重试数，以及 Graph 自身墙钟耗时与 checkpoint 节点数；不估算 token、费用或缓存，也不保存正文。K4 既有 Map/Reduce progress callback 已映射为无正文 Harness 事件，专项夹具确认 Native/Graph 的 Map/Reduce 调用次数一致、开始/进度/完成事件顺序可用。限流仍由 Native K4 的 Provider 队列唯一负责，影子图不引入第二套调度器。该能力继续只存在于临时夹具，不会写入客户任务历史或被 Qt 订阅。
 
+> **2026-09-04 LGM4.3 影子准入判定：**新增无副作用的 K4 Native/影子对照报告，核对范围哈希、最终结果、覆盖、报告资格和来源闭合；完全一致时才给出 `passed`，篡改结果摘要会明确失败。它同时保守声明 `developer_trial_ready=false`：在客户明确授权真实材料/模型验收、维护复杂度复盘及受审计试点 Router 开关均完成前，LangGraph 仍不能接管任何客户 K4 任务。
+
 ## 2026-08-25 知识库 K5.4：索引性能事实与解析复用核验
 
 - `KnowledgeIndexJobRecord` 与 SQLite migration 已新增解析/分块、向量、关键词、总耗时，以及本次复用的已解析版本数。计量不写正文、路径、向量、模型输入、缓存键或凭据，旧数据库只前向增列，不重建资料。

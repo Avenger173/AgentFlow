@@ -13,6 +13,7 @@ import os
 import shutil
 import sys
 import tempfile
+from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
 
@@ -27,7 +28,10 @@ if str(BACKEND_ROOT) not in sys.path:
 
 from app.database import sqlite as sqlite_service
 from app.database.knowledge_repository import create_knowledge_base, import_workspace_documents_to_knowledge_base
-from app.harness.langgraph_k4_shadow import LangGraphK4ShadowBackend
+from app.harness.langgraph_k4_shadow import (
+    LangGraphK4ShadowBackend,
+    compare_k4_shadow_execution,
+)
 from app.schemas.knowledge import KnowledgeDeepTaskRequest
 from app.services.knowledge_deep_task import (
     build_knowledge_deep_task_scope,
@@ -130,7 +134,7 @@ def _index_active_materials(*, knowledge_base_id: str, document_names: list[str]
     assert completed.status == "completed", completed.failure_summaries
 
 
-async def _verify_success(*, checkpoint_root: Path, scope) -> str:
+async def _verify_success(*, checkpoint_root: Path, scope):
     native_task_id = "task_k4_lgm4native"
     create_knowledge_deep_task_map_queued_run(task_id=native_task_id, scope=scope)
     native_model = _K4FixtureModel()
@@ -167,9 +171,30 @@ async def _verify_success(*, checkpoint_root: Path, scope) -> str:
         result = get_knowledge_deep_task_result("task_k4_lgm4success")
         assert result is not None and result.coverage is not None and result.coverage.state == "complete"
         assert result.report_readiness is not None and result.report_readiness.can_export
+        report = compare_k4_shadow_execution(
+            native_task_id=native_task_id,
+            shadow_execution=shadow,
+            recovery_verified=True,
+            event_projection_verified=True,
+            rate_limit_delegation_verified=True,
+        )
+        assert report.outcome == "passed", report
+        assert report.scope_digest_match and report.result_digest_match
+        assert report.coverage_match and report.report_readiness_match and report.source_closure_match
+        assert report.developer_trial_ready is False
+        assert len(report.blockers) == 3
+        divergent = compare_k4_shadow_execution(
+            native_task_id=native_task_id,
+            shadow_execution=replace(shadow, result_digest="0" * 64),
+            recovery_verified=True,
+            event_projection_verified=True,
+            rate_limit_delegation_verified=True,
+        )
+        assert divergent.outcome == "failed"
+        assert "结果" in divergent.blockers[0]
     finally:
         await backend.close()
-    return native_digest
+    return native_digest, report
 
 
 async def _verify_map_recovery(*, checkpoint_root: Path, scope, native_digest: str) -> None:
@@ -301,7 +326,7 @@ async def main() -> None:
             )
         )
         assert len(scope.map_units) == 2
-        native_digest = await _verify_success(checkpoint_root=checkpoint_root, scope=scope)
+        native_digest, report = await _verify_success(checkpoint_root=checkpoint_root, scope=scope)
         await _verify_map_recovery(checkpoint_root=checkpoint_root, scope=scope, native_digest=native_digest)
         await _verify_reduce_recovery(checkpoint_root=checkpoint_root, scope=scope, native_digest=native_digest)
         await _verify_cancellation(checkpoint_root=checkpoint_root, scope=scope)
@@ -328,7 +353,8 @@ async def main() -> None:
 
     print(
         "LGM4 K4 shadow verification passed: Native and LangGraph final results match; "
-        "Map/Reduce recovery skips completed work, cancellation and stale generations remain bounded."
+        "Map/Reduce recovery skips completed work, cancellation and stale generations remain bounded; "
+        f"trial_ready={report.developer_trial_ready}."
     )
 
 
