@@ -323,7 +323,7 @@ K0-K6 的既有知识库闭环不包含 OCR；K7 仅按已批准范围新增扫�
 
 ## 平台集成支线 LGM：LangGraph、LangChain 与 MCP
 
-状态：**LGM0 基线/依赖探针与 LGM1 MCP Gateway 测试内核已完成；LGM2 的首个真实客户场景待确认。**详细架构、阶段出口、回退条件和官方依据见 `docs/LANGGRAPH_LANGCHAIN_MCP_INTEGRATION_PLAN.md`。
+状态：**LGM0 基线/依赖探针、LGM1 MCP Gateway 测试内核与 LGM2 受控公开资料客户闭环已完成。**首期只有默认停用的固定 Wikimedia `stdio` 连接；详细架构、阶段出口、回退条件和官方依据见 `docs/LANGGRAPH_LANGCHAIN_MCP_INTEGRATION_PLAN.md`。
 
 该支线不会为了增加技术名词重写 AgentFlow。MCP 先作为独立且受治理的外部 Tool Gateway；LangGraph 只通过 `ExecutionBackend` 接入复杂、可恢复工作流；LangChain 只复用经实测有价值的模型、消息和 Tool 适配组件。Commander、ModelGateway、权限、审计、任务历史、产物、Verifier，以及现有 FTS5/Chroma/BGE/RRF/Evidence Gate 继续由 AgentFlow 持有。
 
@@ -331,7 +331,7 @@ K0-K6 的既有知识库闭环不包含 OCR；K7 仅按已批准范围新增扫�
 
 ## 当前下一步
 
-> **当前状态：LGM0、LGM1 已完成。下一步是确认 LGM2 的首个真实客户 MCP 场景。**LGM1 已建立项目内确定性 MCP stdio Server、短生命周期 ClientManager、Tool schema/结果 Guard、无正文审计和既有 `WorkflowToolCall` 投影；它没有 FastAPI/Qt 入口、真实连接、客户配置、模型调用或客户任务路由。只有用户确认“只读项目/协作平台查询、受控公开资料检索、客户业务系统只读查询”之一后，才可实现 LGM2。详细记录见 `docs/LANGGRAPH_LANGCHAIN_MCP_INTEGRATION_PLAN.md`。
+> **当前状态：LGM0、LGM1、LGM2 已完成。下一步候选为 LGM3 的隔离 LangGraph 测试图与影子对照。**LGM2 已在插件管理、Commander、权限、Runtime、任务审计与结果卡中完成固定 Wikimedia 公共资料参考闭环：连接默认停用，只能启用/检测固定 Tool；真实调用需确认联网与受控 stdio 子进程，结果只作为可回溯参考线索。它不是任意网页抓取、远程 MCP 市场或事实自动核验，也尚未进入组合 Runtime。详细记录见 `docs/LANGGRAPH_LANGCHAIN_MCP_INTEGRATION_PLAN.md`。
 
 下方为各模块的历史里程碑与回归基线，不表示当前会并行启动这些事项。
 

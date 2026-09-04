@@ -99,6 +99,7 @@ description: 开发 AgentFlow 项目时使用：本仓库是 C++ Qt 桌面端 + 
 - 2026-08-14 已确认不自研通用代码工坊 Agent，不得因为仓库中仍有旧 manifest、Node Contract 或 UI 占位而自行恢复立项。未来若接入 Codex、Claude Code 等成熟代码 Agent，应作为受控外部能力 Adapter 单独讨论范围、权限、数据边界和验收，不把它伪装成 AgentFlow 自研能力。
 - DeepSeek Harness H2 以后按真实需求启用：H2 可以做隔离只读工程试点，但接入客户任务必须先有已确认的专业 Agent 或总指挥场景；H3 写入/批准、H4 MCP 仅在该场景确实需要时开发；H5 只在发行版本决定携带 Harness 时进入。不得为了完成框架阶段而制造产品功能。
 - LangGraph、LangChain 与 MCP 的任何实现必须先读 `docs/LANGGRAPH_LANGCHAIN_MCP_INTEGRATION_PLAN.md`：MCP 只能通过独立 `MCPGateway` 和现有 Tool/权限/审计层；LangGraph 只能通过 `ExecutionBackend` 接入，并先与 Native Runtime 做冻结输入的影子对照；LangChain 只引入能减少真实重复代码且通过依赖、启动、打包回归的组件。不得为了增加技术栈名词安装依赖、重写稳定 RAG 或让框架接管 AgentFlow 控制平面。
+- 公开资料 MCP 只能按已审批场景提供固定 Provider、固定域名和固定 Tool；不接受客户输入 URL、请求头、代理、命令、cwd、环境变量或密钥。结果必须先经来源契约验证，以“可回溯参考线索”返回，不自动变成已核验事实、统计结论或模型上下文。连接默认停用；启用、Tool 检测和真实联网调用分别记录状态与权限，不能用“已检测”伪装“已读取资料”。
 - 开发数据工作台前必须完整阅读 `docs/AGENT_SPECIFICATIONS.md` 的“003 数据分析与表格交付 Agent”。模型只规划和解释已经由确定性 Tool 计算、校验的数据；禁止让模型计算数值、生成 Python/SQL/公式交给 Runtime，禁止联网补数或修改源文件。正式交付的 `.xlsx` 必须回读原生 Table/Chart、指标单元格和数据范围后才能登记 artifact。
 - 高危命令默认禁止或强确认，包括删除/覆盖目录、`git reset --hard`、强制 checkout、执行未知下载脚本、提权、修改系统路径等；即使用户开启高权限模式，也要保留风险提示和审计记录。
 - 长对话和长任务优先用摘要、子任务拆分和数据库恢复上下文，不要把全部历史直接塞进模型窗口。

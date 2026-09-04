@@ -21,6 +21,8 @@ from app.schemas.memory import LongTermMemoryRecord
 from app.services.long_term_memory import build_memory_context_summary
 from app.services.data_join import DataJoinError, build_data_join_intent
 from app.services.data_transform_intent import DataTransformIntentError, build_data_transform_intent
+from app.mcp.connection_store import McpConnectionStoreError, load_public_reference_connection
+from app.core.config import settings
 from app.workflow.action_admission import (
     ActionAdmissionDecision,
     evaluate_action_admission,
@@ -77,6 +79,9 @@ KNOWLEDGE_DEEP_ROUTE_KEYWORDS = (
     "深度分析", "深度总结", "全库总结", "全库分析", "整库总结", "整库分析",
     "完整梳理", "逐章总结", "逐章分析", "深度报告",
 )
+PUBLIC_REFERENCE_ROUTE_KEYWORDS = (
+    "公开资料", "联网检索", "搜索公开", "查公开资料", "查百科", "查维基", "维基百科",
+)
 # 这些别名只服务于总指挥输入的 `@` 路由提示。它们不能映射到未完成 Agent、插件、
 # MCP 或任意文件路径，防止看似便利的文本标签扩大实际执行面。
 _AGENT_HINT_ALIASES: dict[str, tuple[str, ...]] = {
@@ -131,15 +136,17 @@ def create_commander_plan(
     # PPT 创作拥有最高的显式意图优先级。即使调度台仍挂着上一次的数据集或资料库，
     # “帮我做 PPT”也不能被错误解释成“分析当前数据/资料库”。
     presentation_requested = _matches_any(lowered, PRESENTATION_ROUTE_KEYWORDS)
+    public_reference_requested = not presentation_requested and _matches_any(lowered, PUBLIC_REFERENCE_ROUTE_KEYWORDS)
     knowledge_intent_requested = _matches_any(lowered, KNOWLEDGE_ROUTE_KEYWORDS) or knowledge_deep_requested
     # “资料库”是知识库专属实体；不能因为 DOCUMENT_ROUTE_KEYWORDS 里的宽泛词“资料”
     # 把一个明确的知识库问题同时路由成“请选择文档”。知识库意图优先于泛化的文档词。
-    document_intent_requested = not knowledge_intent_requested and _matches_any(lowered, DOCUMENT_ROUTE_KEYWORDS)
-    data_intent_requested = _matches_any(lowered, DATA_ROUTE_KEYWORDS)
+    document_intent_requested = not (knowledge_intent_requested or public_reference_requested) and _matches_any(lowered, DOCUMENT_ROUTE_KEYWORDS)
+    data_intent_requested = not public_reference_requested and _matches_any(lowered, DATA_ROUTE_KEYWORDS)
     data_transform_intent_requested = _matches_any(lowered, DATA_TRANSFORM_KEYWORDS)
     data_join_intent_requested = _matches_any(lowered, DATA_JOIN_KEYWORDS)
     explicit_specialist_intent = (
-        knowledge_intent_requested
+        public_reference_requested
+        or knowledge_intent_requested
         or document_intent_requested
         or data_intent_requested
         or data_join_intent_requested
@@ -228,6 +235,41 @@ def create_commander_plan(
 
     next_index = 2
     specialist_step_ids: list[str] = []
+
+    if public_reference_requested:
+        try:
+            public_connection = load_public_reference_connection()
+        except McpConnectionStoreError:
+            public_connection = None
+        if not settings.mcp_enabled:
+            clarifying_questions.append("公开资料 MCP 平台已被部署配置关闭，当前不能联网检索。")
+        elif public_connection is None:
+            clarifying_questions.append("公开资料连接状态暂时无法读取；本次不会发起联网检索，请稍后重试。")
+        elif not public_connection.enabled:
+            clarifying_questions.append("公开资料连接尚未启用；请在插件管理中启用“Wikimedia 公开资料参考”后再检索。")
+        else:
+            public_step_id = f"step_{next_index}"
+            decision = _append_admitted_step(
+                steps=steps,
+                step_id=public_step_id,
+                agent_id=COMMANDER_AGENT_ID,
+                action="search_public_references",
+                title="检索受控公开资料参考",
+                depends_on=["step_1"],
+                # LGM2 先保证受控公开检索自身的权限、结果和交付闭环。它还没有进入
+                # Native 组合 Runtime，不能在计划里暗示已经能与其它专业能力并行汇总。
+                parallel_group="",
+                step_input={"query": _public_reference_query(message)},
+                reason="客户明确要求公开资料；只调用已启用的固定 Wikimedia MCP Tool，并在联网前进入权限确认。",
+                agents=available_agent_list,
+                materials=material_bindings,
+                timeout_ms=20_000,
+            )
+            if decision is not None:
+                specialist_step_ids.append(public_step_id)
+                next_index += 1
+            else:
+                clarifying_questions.append("公开资料连接当前未通过总指挥动作准入，请检查连接状态后重试。")
 
     if knowledge_requested:
         if not knowledge_base_refs:
@@ -966,7 +1008,11 @@ def _build_admitted_step(
         risk_level=risk_level,
         requires_confirmation=requires_confirmation,
         tool_name=_tool_name(agent_id, action),
-        command_policy=_command_policy_for_permissions(required_permissions),
+        command_policy=_command_policy_for_permissions(
+            required_permissions,
+            agent_id=agent_id,
+            action=action,
+        ),
         success_criteria=_success_criteria_for_step(agent_id, action),
         timeout_ms=timeout_ms,
         retry_policy=_retry_policy_for_step(agent_id, action),
@@ -1281,13 +1327,26 @@ def _tool_name(agent_id: str, action: str) -> str | None:
     return contract.tool_name if contract else None
 
 
-def _command_policy_for_permissions(permissions: list[str]) -> WorkflowCommandPolicy:
+def _command_policy_for_permissions(
+    permissions: list[str],
+    *,
+    agent_id: str,
+    action: str,
+) -> WorkflowCommandPolicy:
     """根据权限声明给出命令层风险摘要。
 
     当前内置 Runtime 还不会执行 Shell；这个字段先把风险说清楚，后续代码工坊接命令时
     可以在同一个协议位置继续细化白名单、审批和禁止项。
     """
 
+    if agent_id == COMMANDER_AGENT_ID and action == "search_public_references":
+        return WorkflowCommandPolicy(
+            may_run_command=True,
+            risk_level="network",
+            requires_confirmation=True,
+            allowed=True,
+            reason="仅允许启动项目随附的固定 MCP stdio 服务；不接收客户命令、路径或环境变量。",
+        )
     if "shell" in permissions:
         return WorkflowCommandPolicy(
             may_run_command=True,
@@ -1300,6 +1359,8 @@ def _command_policy_for_permissions(permissions: list[str]) -> WorkflowCommandPo
 
 
 def _retry_policy_for_step(agent_id: str, action: str) -> WorkflowRetryPolicy:
+    if agent_id == COMMANDER_AGENT_ID and action == "search_public_references":
+        return WorkflowRetryPolicy(max_attempts=3, retryable=True, stop_condition="固定公开资料连接连续失败后停止自动重试，避免重复联网请求。")
     if agent_id == COMMANDER_AGENT_ID:
         return WorkflowRetryPolicy(max_attempts=2, retryable=True, stop_condition="规划失败后转为澄清问题。")
     if agent_id == "document_agent" and action == "analyze_document":
@@ -1370,6 +1431,8 @@ def _retry_policy_for_step(agent_id: str, action: str) -> WorkflowRetryPolicy:
 def _success_criteria_for_step(agent_id: str, action: str) -> list[str]:
     if agent_id == COMMANDER_AGENT_ID and action == "analyze_task":
         return ["任务意图已识别", "风险和权限已标记", "计划通过校验"]
+    if agent_id == COMMANDER_AGENT_ID and action == "search_public_references":
+        return ["仅调用已启用的固定 MCP Tool", "来源 URL 与字段通过契约校验", "联网与 stdio 启动均记录权限和审计"]
     if agent_id == COMMANDER_AGENT_ID:
         return ["给出可理解的直接答复或澄清问题"]
     if agent_id == "document_agent" and action == "read_text":
@@ -1445,6 +1508,8 @@ def _max_risk_level(steps: list[WorkflowStep]) -> RiskLevel:
 
 
 def _infer_intent(steps: list[WorkflowStep]) -> str:
+    if any(step.action == "search_public_references" for step in steps):
+        return "public_reference_search"
     agents = {step.agent for step in steps}
     if agents <= {COMMANDER_AGENT_ID}:
         return "direct_answer"
@@ -1483,6 +1548,32 @@ def _build_clarifying_questions(
     return []
 
 
+def _public_reference_query(message: str) -> str:
+    """从客户自然语言提炼检索词，不把 Prompt、URL 或内部计划交给 MCP Tool。"""
+
+    cleaned = message
+    for phrase in (
+        "@公开资料",
+        "公开资料",
+        "联网检索",
+        "搜索公开",
+        "查公开资料",
+        "查百科",
+        "查维基",
+        "维基百科",
+        "请帮我",
+        "帮我",
+        "请",
+        "检索",
+        "搜索",
+        "查询",
+        "查一下",
+    ):
+        cleaned = cleaned.replace(phrase, " ")
+    normalized = " ".join(cleaned.split())[:140]
+    return normalized or "公开资料参考"
+
+
 def _build_assumptions(
     steps: list[WorkflowStep],
     memory_context_summary: list[str] | None = None,
@@ -1505,6 +1596,8 @@ def _build_assumptions(
 def _build_definition_of_done(steps: list[WorkflowStep]) -> list[str]:
     agents = {step.agent for step in steps}
     done: list[str] = []
+    if any(step.action == "search_public_references" for step in steps):
+        done.append("已从启用的固定 Wikimedia 公开资料连接取得有限参考线索；每条来源均包含可打开链接与抓取时间，且不会被自动写成已核验事实。")
     if "document_agent" in agents:
         done.append("文档助手完成受控分析，结论附带可验证来源，并形成后续 Agent 可引用的上下文。")
     if "knowledge_agent" in agents:
@@ -1587,7 +1680,9 @@ def _build_workspace_scope(
         if "file_write" in step.required_permissions:
             write_paths.append("data/outputs/<runtime_task_id>/")
         if "network" in step.required_permissions:
-            external_services.append("network")
+            external_services.append(
+                "Wikimedia 公开资料 MCP" if step.action == "search_public_references" else "network"
+            )
 
     return WorkflowWorkspaceScope(
         read_paths=sorted(set(read_paths)),
@@ -1624,6 +1719,8 @@ def _build_plan_summary(steps: list[WorkflowStep]) -> str:
         "data_agent": "数据工作台",
         "knowledge_agent": "知识库",
     }
+    if any(step.action == "search_public_references" for step in steps):
+        return "Commander 将在你确认联网与受控 stdio 服务启动后，检索有限的 Wikimedia 公开资料参考。"
     agent_sequence = [labels.get(step.agent, step.agent) for step in steps if step.agent != COMMANDER_AGENT_ID]
     if not agent_sequence:
         return "Commander 判断该任务暂不需要多 Agent 协作，可先直接回答。"

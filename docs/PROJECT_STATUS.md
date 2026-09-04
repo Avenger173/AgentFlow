@@ -893,12 +893,19 @@ cmd /c ""D:\IDE\VS2022\buildtools\VC\Auxiliary\Build\vcvars64.bat" && "D:\IDE\qt
 
 本次仅完成调度台 PPT 直出和呈现层修复，不代表 AgentFlow 全部 Agent 或 PPT 高级动画已经完成；下一步仍以桌面端真实模型验收结果为准。
 
+## 2026-09-04 LGM2：受控公开资料检索 MCP 闭环
+
+- 已完成唯一首期客户连接 `Wikimedia 公开资料参考`：项目内 `stdio` Server 只提供 `search_wikimedia`，固定读取 `zh.wikipedia.org` Action API 并最多返回三条公开页面参考。它不接收 URL、Header、代理、命令、cwd、环境变量或密钥，也不充当通用网页抓取器。
+- 插件管理已提供小型连接面板，连接默认停用；启用不联网，检测只发现固定 Tool。Commander 只在客户明确提出公开资料检索时创建该步骤；真实调用经 `network + shell` 权限确认，其中 shell 仅允许启动项目随附的固定 stdio 子进程。公开来源在结果卡和同一会话中可打开，内部参数、HTTP 原文与进程信息不展示给客户。
+- 来源结果通过固定域名、Provider、范围、重复来源与结构化 JSON 契约校验；只标记为“可回溯公开资料参考线索”，不自动写成已核验专业事实或统计结论。未实现公开检索与文档/数据/知识库组合并行、远程 Streamable HTTP、第二个客户系统连接或 LangGraph 任务迁移。
+- `verify_lgm2_public_reference.py` 已覆盖连接默认状态、启停、真实 stdio Tool 发现、Commander 准入、权限、来源契约、Runtime 与 DeliveryCard 投影；`--live` 已实际请求固定 Wikimedia 接口并得到受限页面来源。过程中修正了 Wikimedia 对无项目地址 User-Agent 的 `403` 拒绝。LGM1 回归、Python 编译和依赖检查均通过；Qt Debug 构建通过。下一阶段仅可讨论 LGM3 隔离测试图，不能直接替换 Native Runtime。
+
 ## 2026-09-04 LGM1：确定性 MCP Gateway 内核
 
 - 已完成项目内 `agentflow-test` stdio Server、短生命周期 `McpClientManager` 与测试专用 `McpGateway`。测试服务只包含回显、求和、延迟、超大结果和自终止回归 Tool；没有 API/Qt/Commander 入口，不读取客户文件、环境变量、网络或模型。
 - 配置仅允许绝对 Python、受控 backend cwd、有限参数和两项 Python 编码环境变量，不继承 `.env`。Gateway 对 Tool 名称、schema、参数与结果实施 JSON 大小/深度/集合限制及凭据样式脱敏，并只保存调用阶段、耗时、大小和错误码。
 - `verify_lgm1_mcp_gateway.py` 已覆盖 stdio 启动/发现/调用、未知 Tool、超大结果、取消、测试服务异常退出后重新发现、审计投影及关闭后拒绝调用；`verify_backend.py`、LGM0 探针、编译和依赖检查保持通过。未连接真实 MCP Server、未调用模型或读取客户材料。
-- 下一步是 LGM2，但必须先由用户确认一个真实只读客户场景；未确认前不增加 MCP 设置页面、持久化配置或 Commander 路由。
+- 后续 LGM2 已在用户确认“受控公开资料检索”后完成，详见上方记录；LGM1 的测试服务仍不进入客户能力目录。
 
 ## 2026-09-04 LGM0：LangGraph、LangChain 与 MCP 基线冻结
 

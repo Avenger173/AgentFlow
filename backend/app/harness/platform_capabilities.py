@@ -113,8 +113,8 @@ def runtime_platform_dependency_status() -> dict[str, object]:
     return {
         "ready": False,
         "message": (
-            "LGM 可选依赖与 MCPGateway 测试内核已就绪，但 MCP、LangGraph 与 LangChain "
-            "客户能力仍默认关闭；当前没有真实 MCP 连接，也没有客户任务切换。"
+            "LGM 可选依赖已准备；MCPGateway 已提供一条默认停用的 Wikimedia 公开资料连接，"
+            "LangGraph 与 LangChain 客户能力仍未开放。"
             if installed
             else "LGM 可选依赖尚未完整安装；当前 Native Runtime 不受影响。"
         ),
@@ -152,7 +152,7 @@ def _langgraph_message(versions: dict[str, str]) -> str:
 
 def _mcp_message(versions: dict[str, str]) -> str:
     if _versions_match(versions, ("mcp",)):
-        return "MCPGateway LGM1 测试内核已准备，默认关闭；仅专项回归会启动项目内测试服务。"
+        return "MCPGateway 已具备 LGM2 受控公开资料连接；每条客户连接仍需单独启用并经权限确认。"
     return "MCP SDK 未按 LGM0 锁定版本准备；当前不存在 MCP 客户能力。"
 
 

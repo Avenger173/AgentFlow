@@ -67,6 +67,19 @@ ACTION_ADMISSIONS: dict[tuple[str, str], AgentActionAdmission] = {
         verification_scope="无副作用；只记录任务与计划摘要。",
         recovery_hint="用户补充目标、材料或交付形式后重新规划。",
     ),
+    ("commander_agent", "search_public_references"): AgentActionAdmission(
+        agent_id="commander_agent",
+        action="search_public_references",
+        execution_mode="execute",
+        requires_runtime_ready=True,
+        material_kind=None,
+        expected_output="最多三条固定 Wikimedia 公开资料参考，包含标题、链接、摘要与抓取时间。",
+        verification_scope="MCP 连接启用状态、固定 Tool 目录、来源域名/字段契约、联网与 stdio 启动权限、脱敏 Tool 审计。",
+        recovery_hint="检查插件管理中的 Wikimedia 连接状态或网络权限后重试；不会降级为任意网页抓取。",
+        # 本地 stdio MCP 会启动一个项目内受控子进程，并由该进程访问固定公开 API；两类
+        # 权限都必须进入同一 Runtime 确认记录，不能把“内置”误当成无需确认。
+        additional_permissions=("network", "shell"),
+    ),
     ("commander_agent", "synthesize_results"): AgentActionAdmission(
         agent_id="commander_agent",
         action="synthesize_results",

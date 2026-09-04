@@ -61,6 +61,8 @@ def _headline(*, run: WorkflowRun, artifacts: list[WorkflowArtifact]) -> str:
     if run.mode == "dry_run" and run.status == "completed":
         return "计划已生成，等待确认"
     if run.status == "completed":
+        if _has_public_reference_result(run):
+            return "公开资料参考已就绪"
         return f"任务已完成 · {len(artifacts)} 项交付"
     if run.status == "waiting_permission":
         return "等待权限确认"
@@ -74,6 +76,9 @@ def _headline(*, run: WorkflowRun, artifacts: list[WorkflowArtifact]) -> str:
 def _summary(*, run: WorkflowRun, evaluation: object, artifacts: list[WorkflowArtifact]) -> str:
     """只保留一段客户可读结论，不把复盘指标或事件流直接塞进正文。"""
 
+    public_reference_reply = _public_reference_reply(run)
+    if run.status == "completed" and public_reference_reply:
+        return _safe_text(public_reference_reply, maximum=2_200)
     if run.status == "completed" and artifacts:
         names = "、".join(item.name for item in artifacts[:3])
         suffix = "等交付物已登记，可直接打开。" if len(artifacts) > 3 else "已登记，可直接打开。"
@@ -151,6 +156,10 @@ def _append_specialized_facts(facts: list[WorkflowDeliveryFact], result: dict) -
         if isinstance(draft_sections, list):
             _append_unique_fact(facts, WorkflowDeliveryFact(label="内容章节", value=f"{len(draft_sections)} 节"))
 
+    if result.get("scope") == "public_reference_only":
+        _append_result_fact(facts, result, "source_count", "公开来源", suffix=" 条")
+        _append_unique_fact(facts, WorkflowDeliveryFact(label="资料边界", value="公开参考线索"))
+
 
 def _table_summary(*, run: WorkflowRun, artifacts: list[WorkflowArtifact]) -> WorkflowDeliveryTableSummary | None:
     """从专用任务已保存的 verification 中提取表格/图表摘要，不重新读取输出文件。"""
@@ -219,11 +228,25 @@ def _next_actions(*, run: WorkflowRun, artifacts: list[WorkflowArtifact], evalua
         return ["等待任务完成"]
     if run.status == "completed" and artifacts:
         return ["打开交付物", "继续提出下一步要求"]
+    if run.status == "completed" and _has_public_reference_result(run):
+        return ["打开来源链接或继续提问", "继续提出下一步要求"]
     if run.status in {"failed", "blocked"}:
         return ["查看失败原因后重试"]
     if run.status == "cancelled":
         return ["重新提交任务"]
     return ["继续提出下一步要求"]
+
+
+def _has_public_reference_result(run: WorkflowRun) -> bool:
+    return bool(_public_reference_reply(run))
+
+
+def _public_reference_reply(run: WorkflowRun) -> str:
+    for step in run.steps:
+        result = step.output.get("result") if isinstance(step.output, dict) else None
+        if isinstance(result, dict) and result.get("scope") == "public_reference_only":
+            return str(result.get("reply", "")).strip()
+    return ""
 
 
 def _format_duration(duration_ms: int) -> str:

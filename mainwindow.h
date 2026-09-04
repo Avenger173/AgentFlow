@@ -378,6 +378,13 @@ private:
     QString commandPolicyBadgeObjectName(const QString &riskLevel, bool allowed) const;
     QString formatCommandPolicyResultHtml(const WorkflowCommandPolicyCheckResult &result) const;
     void setupSettingsPage();
+    void setupMcpConnectionsPage();
+    void refreshMcpConnections();
+    void updatePublicReferenceMcpUi(const McpConnectionInfo &connection, const QString &message = QString());
+    void handleMcpConnectionsReceived(const QList<McpConnectionInfo> &connections);
+    void handleMcpConnectionsFailed(const QString &message);
+    void handleMcpConnectionUpdated(const McpConnectionInfo &connection, const QString &message);
+    void handleMcpConnectionUpdateFailed(const QString &message);
     void refreshRuntimePreferences();
     void saveRuntimePreferencesFromSettings();
     void handleRuntimePreferencesReceived(const RuntimePreferencesResult &result);
@@ -738,6 +745,7 @@ private:
     QTextEdit *modelDetailText = nullptr;
     // 仅缓存模型路由的脱敏展示快照，供各工作台展示“当前本次模型”提示；不保存 Key、材料或响应。
     QHash<QString, ModelRouteInfo> currentModelRoutesById;
+    McpConnectionInfo currentPublicReferenceMcpConnection;
     // 低频任务模型设置位于独立检查器；QPointer 防止网络回调写入用户已关闭的窗口。
     QPointer<ModelRouteDialog> modelRouteDialog;
     // 已导入材料的选择放在独立对话框，避免 Composer 被三个长期下拉框挤压。

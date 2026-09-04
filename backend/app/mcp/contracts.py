@@ -47,6 +47,48 @@ McpGatewayAuditEventType = Literal[
 ]
 
 
+@dataclass(frozen=True)
+class McpBuiltinStdioServerConfig:
+    """AgentFlow 随版本发布的受控 stdio MCP Server 启动配置。
+
+    LGM2 只允许产品明确登记的内置连接复用这份配置。它不是客户可编辑的命令配置，
+    因此无法借由“公开资料检索”启动任意可执行程序、继承 .env 或扩大 cwd。
+    """
+
+    server: "McpServerReference"
+    command: Path
+    args: tuple[str, ...]
+    cwd: Path
+    environment: Mapping[str, str] = field(default_factory=dict)
+    connect_timeout_seconds: float = 5.0
+    tool_timeout_seconds: float = 15.0
+
+    def __post_init__(self) -> None:
+        command = self.command.resolve()
+        cwd = self.cwd.resolve()
+        if not command.is_file() or not cwd.is_dir():
+            raise ValueError("内置 MCP 服务的 command 与 cwd 必须是存在的受控绝对路径。")
+        if self.server.transport != "stdio":
+            raise ValueError("内置 MCP 服务当前只支持 stdio 传输。")
+        if not 1 <= len(self.args) <= 12:
+            raise ValueError("内置 MCP 服务参数数量必须在 1 到 12 之间。")
+        if any(not item or len(item) > 256 or any(ord(char) < 32 for char in item) for item in self.args):
+            raise ValueError("内置 MCP 服务参数包含不允许的内容。")
+        if not 0.1 <= self.connect_timeout_seconds <= 30 or not 0.1 <= self.tool_timeout_seconds <= 60:
+            raise ValueError("内置 MCP 服务超时不在允许范围内。")
+
+        allowed_environment = {"PYTHONIOENCODING", "PYTHONUTF8"}
+        environment = dict(self.environment)
+        if set(environment) - allowed_environment:
+            raise ValueError("内置 MCP 服务环境变量不在白名单内。")
+        if any(not value or len(value) > 80 or any(ord(char) < 32 for char in value) for value in environment.values()):
+            raise ValueError("内置 MCP 服务环境变量值不合法。")
+
+        object.__setattr__(self, "command", command)
+        object.__setattr__(self, "cwd", cwd)
+        object.__setattr__(self, "environment", environment)
+
+
 class McpServerReference(BaseModel):
     """给计划、审计和 Tool Registry 使用的脱敏服务器标识。"""
 

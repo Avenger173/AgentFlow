@@ -92,7 +92,9 @@ class Settings:
     }
     # LGM 平台集成默认全部关闭。开关只允许准备已经验证的 Adapter，不能改变
     # Commander 的 action 准入、权限策略或客户任务的默认 Native Runtime 路径。
-    mcp_enabled: bool = os.getenv("AGENTFLOW_MCP_ENABLED", "false").lower() in {
+    # LGM2 起 MCPGateway 平台代码随应用可用，但每一条客户连接默认仍为 disabled，必须在
+    # 插件管理中显式启用。此环境变量仅保留给部署方作为全局 kill switch。
+    mcp_enabled: bool = os.getenv("AGENTFLOW_MCP_ENABLED", "true").lower() in {
         "1",
         "true",
         "yes",

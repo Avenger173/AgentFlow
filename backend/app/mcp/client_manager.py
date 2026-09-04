@@ -10,6 +10,7 @@ from time import perf_counter
 from typing import Any, TypeVar
 
 from app.mcp.contracts import (
+    McpBuiltinStdioServerConfig,
     McpGatewayAuditEvent,
     McpGatewayError,
     McpServerReference,
@@ -27,6 +28,7 @@ from app.mcp.result_guard import (
 
 _ResultT = TypeVar("_ResultT")
 _TEST_SERVER_ID = "agentflow-test"
+_PUBLIC_REFERENCE_SERVER_ID = "public-reference"
 
 
 class McpClientManager:
@@ -36,7 +38,7 @@ class McpClientManager:
     内完成，因此取消、超时和正常返回均会走 SDK 的进程清理路径。
     """
 
-    def __init__(self, config: McpStdioTestServerConfig) -> None:
+    def __init__(self, config: McpStdioTestServerConfig | McpBuiltinStdioServerConfig) -> None:
         self._config = config
         self._tool_catalog: dict[str, McpToolDescriptor] = {}
         self._audit_events: list[McpGatewayAuditEvent] = []
@@ -232,6 +234,29 @@ def create_deterministic_test_server_config() -> McpStdioTestServerConfig:
         args=("-X", "utf8", "-m", "app.mcp.deterministic_test_server"),
         cwd=backend_root,
         environment={"PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"},
+    )
+
+
+def create_public_reference_server_config() -> McpBuiltinStdioServerConfig:
+    """构造 LGM2 唯一可联网的内置 MCP 服务。
+
+    Tool 本身只向固定的 Wikimedia Action API 查询；Gateway 不接受任意 URL、命令、cwd
+    或环境变量，因此即使模型输出异常，也不能把这个场景放大为通用网页抓取或本地读取通道。
+    """
+
+    backend_root = Path(__file__).resolve().parents[2]
+    return McpBuiltinStdioServerConfig(
+        server=McpServerReference(
+            server_id=_PUBLIC_REFERENCE_SERVER_ID,
+            display_name="Wikimedia 公开资料参考",
+            transport="stdio",
+        ),
+        command=Path(sys.executable),
+        args=("-X", "utf8", "-m", "app.mcp.public_reference_server"),
+        cwd=backend_root,
+        environment={"PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"},
+        connect_timeout_seconds=5.0,
+        tool_timeout_seconds=15.0,
     )
 
 

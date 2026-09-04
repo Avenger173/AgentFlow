@@ -1084,6 +1084,24 @@ struct TaskHistoryQuery
     int requiresConfirmation = -1;
 };
 
+// LGM2 首期只展示产品登记的内置连接，不传递 URL、命令、环境变量或凭据。未来连接器
+// 仍应复用这份脱敏状态投影，不能把原始 MCP 配置暴露给 Qt。
+struct McpConnectionInfo
+{
+    QString connectionId;
+    QString displayName;
+    QString description;
+    QString transport;
+    QString status;
+    bool enabled = false;
+    bool requiresNetwork = false;
+    bool requiresCommandConfirmation = false;
+    QString originSummary;
+    QString lastCheckedAt;
+    int lastToolCount = 0;
+    QString lastErrorCode;
+};
+
 class BackendClient : public QObject
 {
     Q_OBJECT
@@ -1139,6 +1157,11 @@ public:
         const QString &model,
         const QString &thinking,
         const QString &apiKey);
+    // LGM2 的首个内置连接只允许启停和 Tool 目录检测；实际公开资料读取仍由 Runtime
+    // 在网络和受控 stdio 启动权限确认后执行。
+    void requestMcpConnections();
+    void setPublicReferenceMcpEnabled(bool enabled);
+    void testPublicReferenceMcpConnection();
     // 把用户选择的 UTF-8 txt/markdown 导入后端受控 workspace。
     void importWorkspaceDocument(const QString &filename, const QString &content);
     // PDF/DOCX 以 Base64 通过同一受控协议上传；后端负责格式、大小和解析边界校验。
@@ -1468,6 +1491,10 @@ signals:
     void modelConfigSaveFailed(const QString &message);
     void modelConnectionTestCompleted(const ModelConnectionTestResult &result);
     void modelConnectionTestFailed(const QString &message);
+    void mcpConnectionsReceived(const QList<McpConnectionInfo> &connections);
+    void mcpConnectionsFailed(const QString &message);
+    void mcpConnectionUpdated(const McpConnectionInfo &connection, const QString &message);
+    void mcpConnectionUpdateFailed(const QString &message);
     void workspaceDocumentImported(const WorkspaceDocumentInfo &document);
     void workspaceDocumentImportFailed(const QString &message);
     void workspaceDocumentsReceived(const WorkspaceDocumentListResult &result);
@@ -1665,6 +1692,8 @@ private:
     QUrl buildNodeContractsUrl() const;
     QUrl buildWorkflowCommandPolicyUrl() const;
     QUrl buildRuntimePreferencesUrl() const;
+    QUrl buildMcpConnectionsUrl() const;
+    QUrl buildPublicReferenceMcpActionUrl(const QString &action) const;
     QUrl buildLongTermMemoriesUrl(const QString &scope = QString(), bool confirm = false) const;
     QUrl buildTaskArtifactsUrl(const QString &taskId) const;
     QUrl buildTaskArtifactPreviewUrl(const QString &taskId, const QString &artifactId, int maxBytes) const;

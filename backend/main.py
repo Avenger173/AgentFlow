@@ -1,7 +1,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 
-from app.api import agents, chat, data_agent, document_agent, harness, health, knowledge, memories, models, pdf_processing, preferences, tasks, websocket, workflow, workspace
+from app.api import agents, chat, data_agent, document_agent, harness, health, knowledge, mcp, memories, models, pdf_processing, preferences, tasks, websocket, workflow, workspace
 from app.core.config import settings
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -54,6 +54,7 @@ def create_app() -> FastAPI:
     app.include_router(document_agent.router)
     app.include_router(pdf_processing.router)
     app.include_router(models.router)
+    app.include_router(mcp.router)
     app.include_router(preferences.router)
     app.include_router(memories.router)
     app.include_router(chat.router)

@@ -87,7 +87,12 @@ def fetch_wikimedia_references(
     active_client = client or httpx.Client(
         timeout=httpx.Timeout(10.0, connect=5.0),
         follow_redirects=False,
-        headers={"User-Agent": "AgentFlow-PresentationStudio/0.1"},
+        # Wikimedia 要求调用方提供可识别且可追溯的 User-Agent。没有项目地址的泛化
+        # 标识会被边缘节点拒绝，导致公开资料能力出现“连接正常但没有结果”的假失败。
+        headers={
+            "User-Agent": "AgentFlow/0.1 (https://github.com/Avenger173/AgentFlow; public-reference-mcp)",
+            "Accept": "application/json",
+        },
     )
     try:
         for query in clean_queries:

@@ -86,6 +86,7 @@ from app.services.knowledge_answer import (
     run_knowledge_answer_task,
 )
 from app.services.conversation_memory import persist_async_assistant_delivery
+from app.services.public_reference_mcp import PublicReferenceError, search_public_references_sync
 from app.services.knowledge_deep_dispatch import (
     KnowledgeDeepTaskDispatchError,
     start_knowledge_deep_task_in_background,
@@ -134,6 +135,9 @@ _NON_RETRYABLE_ERROR_CODES = {
     "data_chart_export_failed",
     "data_workbook_export_failed",
     "data_join_failed",
+    "mcp_disabled",
+    "mcp_tool_schema_invalid",
+    "mcp_tool_result_rejected",
 }
 
 RuntimeEventReporter = Callable[[TaskLogEvent], None]
@@ -334,6 +338,7 @@ def run_prepared_workflow_runtime(
     )
     _persist_direct_knowledge_answer_delivery(plan=plan, run=run)
     _persist_direct_data_analysis_delivery(plan=plan, run=run)
+    _persist_public_reference_delivery(plan=plan, run=run)
     _persist_data_chart_delivery(plan=plan, run=run)
     _persist_data_workbook_delivery(plan=plan, run=run)
     _persist_data_transformation_delivery(plan=plan, run=run)
@@ -441,6 +446,49 @@ def _persist_direct_knowledge_answer_delivery(*, plan: WorkflowPlan, run: Workfl
             assistant_message=delivery,
         )
     except Exception:
+        return
+
+
+def _is_public_reference_plan(plan: WorkflowPlan) -> bool:
+    """识别单一固定公开资料 Tool 的会话交付。
+
+    这条路径必须保留联网与 stdio 启动的确认边界，因此不放进“只读自动执行”白名单；
+    但一旦客户批准并完成，也应该直接把来源回到原会话，而非要求客户去历史页找结果。
+    """
+
+    specialist_steps = [
+        step
+        for step in plan.steps
+        if step.agent == "commander_agent" and step.action == "search_public_references"
+    ]
+    return (
+        len(specialist_steps) == 1
+        and specialist_steps[0].execution_mode == "execute"
+        and bool(str(specialist_steps[0].input.get("query", "")).strip())
+    )
+
+
+def _persist_public_reference_delivery(*, plan: WorkflowPlan, run: WorkflowRun) -> None:
+    """将已验证的公开参考来源追加至原会话，使用 runtime task 作幂等键。"""
+
+    if run.status != "completed" or not plan.conversation_id or not _is_public_reference_plan(plan):
+        return
+    step = next(item for item in plan.steps if item.action == "search_public_references")
+    step_run = next((item for item in run.steps if item.step_id == step.id), None)
+    result = step_run.output.get("result") if step_run is not None else None
+    if not isinstance(result, dict) or result.get("scope") != "public_reference_only":
+        return
+    delivery = str(result.get("reply", "")).strip()
+    if not delivery:
+        return
+    try:
+        persist_async_assistant_delivery(
+            conversation_id=plan.conversation_id,
+            task_id=run.task_id,
+            assistant_message=delivery,
+        )
+    except Exception:
+        # 会话恢复失败不撤销已经过来源契约校验的结果；任务历史仍保留可读交付卡。
         return
 
 
@@ -2038,6 +2086,12 @@ def _execute_safe_step(
     runtime_context: dict[str, dict[str, object]],
     attempt: int = 1,
 ) -> tuple[WorkflowStepRun, WorkflowToolCall, list[WorkflowArtifact]]:
+    if step.agent == "commander_agent" and step.action == "search_public_references":
+        return _execute_public_reference_search(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            attempt=attempt,
+        )
     if step.agent == "document_agent" and step.action == "read_text":
         return _execute_document_read_text(
             runtime_task_id=runtime_task_id,
@@ -2146,6 +2200,102 @@ def _execute_safe_step(
         plan=plan,
         attempt=attempt,
     )
+
+
+def _execute_public_reference_search(
+    *,
+    runtime_task_id: str,
+    step: WorkflowStep,
+    attempt: int,
+) -> tuple[WorkflowStepRun, WorkflowToolCall, list[WorkflowArtifact]]:
+    """运行首个受控的公开资料 MCP Tool。
+
+    URL、请求头、代理、命令行和 Tool 名都不来自计划输入；MCP 服务进程与 Tool 白名单均
+    由 Gateway 固定。Runtime 只把已验证的公开参考线索投影进会话和交付卡。
+    """
+
+    started_at = datetime.now(UTC)
+    timeout_ms = step.timeout_ms or _TOOL_TIMEOUT_MS
+    query = str(step.input.get("query", "")).strip()
+    if not query:
+        return _failed_safe_step(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            started_at=started_at,
+            error_code="invalid_parameters",
+            message="公开资料检索缺少已批准的查询内容。",
+            timeout_ms=timeout_ms,
+            attempt=attempt,
+        )
+
+    try:
+        resolution = search_public_references_sync(query)
+    except PublicReferenceError as exc:
+        return _failed_safe_step(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            started_at=started_at,
+            error_code=exc.code,
+            message=str(exc),
+            details={"retryable": exc.retryable},
+            timeout_ms=timeout_ms,
+            attempt=attempt,
+        )
+    except Exception:
+        return _failed_safe_step(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            started_at=started_at,
+            error_code="mcp_connection_failed",
+            message="公开资料连接暂时不可用；本次没有使用外部结果。",
+            timeout_ms=timeout_ms,
+            attempt=attempt,
+        )
+
+    result = resolution.runtime_result()
+    finished_at = datetime.now(UTC)
+    if not resolution.completed:
+        return _failed_safe_step(
+            runtime_task_id=runtime_task_id,
+            step=step,
+            started_at=started_at,
+            error_code="mcp_tool_result_rejected",
+            message="公开资料检索没有返回可定位的参考页面。",
+            details={"warning_count": len(resolution.warnings)},
+            timeout_ms=timeout_ms,
+            attempt=attempt,
+        )
+
+    step_run = WorkflowStepRun(
+        step_id=step.id,
+        agent=step.agent,
+        action=step.action,
+        status="completed",
+        message=f"已取得 {len(resolution.sources)} 条可回溯的公开资料参考。",
+        requires_confirmation=step.requires_confirmation,
+        risk_level=step.risk_level,
+        output={"runtime": True, "tool_name": _tool_name_for_step(step), "result": result},
+    )
+    tool_call = _completed_tool_call(
+        runtime_task_id=runtime_task_id,
+        step=step,
+        attempt=attempt,
+        timeout_ms=timeout_ms,
+        started_at=started_at,
+        finished_at=finished_at,
+        request={
+            "mcp_server_id": "public-reference",
+            "mcp_tool_name": "search_wikimedia",
+            "request_bytes": resolution.request_bytes,
+        },
+        result={
+            "source_count": len(resolution.sources),
+            "warning_count": len(resolution.warnings),
+            "scope": "public_reference_only",
+            "duration_ms": resolution.duration_ms,
+        },
+    )
+    return step_run, tool_call, []
 
 
 def _execute_document_agent_handoff(
@@ -4725,12 +4875,19 @@ def _completed_parent_summary(steps: list[WorkflowStepRun]) -> str:
     身份与状态，避免为了写一句汇总而把材料内容再复制一份进 SQLite 或任务时间线。
     """
 
+    public_reference_results: list[dict[str, object]] = []
     delegations: list[dict[str, object]] = []
     for step in steps:
         result = step.output.get("result") if isinstance(step.output, dict) else None
-        if not isinstance(result, dict) or not result.get("delegated_task_id"):
+        if not isinstance(result, dict):
             continue
-        delegations.append(result)
+        if result.get("scope") == "public_reference_only":
+            public_reference_results.append(result)
+        if result.get("delegated_task_id"):
+            delegations.append(result)
+
+    if public_reference_results and not delegations:
+        return str(public_reference_results[0].get("reply") or "已返回公开资料参考。")
 
     if not delegations:
         return f"Runtime 执行完成；共完成 {len(steps)} 个步骤。"

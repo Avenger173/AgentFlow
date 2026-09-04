@@ -2781,7 +2781,7 @@ QPushButton#navGroupButton:hover {
 <property name="rightMargin"><number>0</number></property>
 <property name="bottomMargin"><number>0</number></property>
 <item><widget class="QFrame" name="pluginsMainCard">
-<property name="objectName"><string>heroCard</string></property>
+<property name="objectName"><string>contentCard</string></property>
 <property name="frameShape"><enum>QFrame::Shape::NoFrame</enum></property>
 <layout class="QVBoxLayout" name="pluginsMainLayout">
 <property name="spacing"><number>8</number></property>
@@ -2811,13 +2811,12 @@ QPushButton#navGroupButton:hover {
 <property name="bottomMargin"><number>0</number></property>
 <item><widget class="QLabel" name="pluginsTitle">
 <property name="objectName"><string>heroTitle</string></property>
-<property name="text"><string>插件管理</string></property>
-<property name="visible"><bool>false</bool></property>
+<property name="text"><string>受控连接</string></property>
 <property name="wordWrap"><bool>true</bool></property>
 
 </widget></item><item><widget class="QLabel" name="pluginsSub">
 <property name="objectName"><string>subText</string></property>
-<property name="text"><string>插件签名、依赖与权限检查准备中</string></property>
+<property name="text"><string>内置 MCP 连接由平台统一治理；每次联网仍需任务级确认与审计。</string></property>
 <property name="wordWrap"><bool>true</bool></property>
 
 </widget></item>
@@ -2826,12 +2825,7 @@ QPushButton#navGroupButton:hover {
 <property name="orientation"><enum>Qt::Orientation::Vertical</enum></property>
 <property name="sizeType"><enum>QSizePolicy::Policy::Fixed</enum></property>
 <property name="sizeHint" stdset="0"><size><width>20</width><height>4</height></size></property>
-</spacer></item><item><widget class="QLineEdit" name="pluginsInput">
-<property name="minimumSize"><size><width>0</width><height>40</height></size></property>
-<property name="enabled"><bool>false</bool></property>
-
-<property name="placeholderText"><string>插件服务准备中</string></property>
-</widget></item><item><spacer name="pluginsFill">
+</spacer></item><item><layout class="QVBoxLayout" name="pluginsConnectionLayout"><property name="spacing"><number>12</number></property><property name="leftMargin"><number>0</number></property><property name="topMargin"><number>12</number></property><property name="rightMargin"><number>0</number></property><property name="bottomMargin"><number>8</number></property><item><layout class="QHBoxLayout" name="pluginsConnectionHeadLayout"><item><layout class="QVBoxLayout" name="pluginsConnectionTextLayout"><property name="spacing"><number>4</number></property><property name="leftMargin"><number>0</number></property><property name="topMargin"><number>0</number></property><property name="rightMargin"><number>0</number></property><property name="bottomMargin"><number>0</number></property><item><widget class="QLabel" name="pluginsConnectionTitle"><property name="objectName"><string>sectionTitle</string></property><property name="text"><string>Wikimedia 公开资料参考</string></property></widget></item><item><widget class="QLabel" name="pluginsConnectionSummary"><property name="objectName"><string>subText</string></property><property name="text"><string>只读检索固定的中文维基百科页面，返回可追溯参考线索；不提供任意网页抓取。</string></property><property name="wordWrap"><bool>true</bool></property></widget></item></layout></item><item><spacer name="pluginsConnectionHeadFill"><property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>30</width><height>20</height></size></property></spacer></item><item><widget class="QLabel" name="pluginsConnectionStatus"><property name="objectName"><string>badgeGray</string></property><property name="text"><string>正在检测</string></property></widget></item></layout></item><item><widget class="QLabel" name="pluginsConnectionMeta"><property name="objectName"><string>subText</string></property><property name="text"><string>启用连接不会联网；实际检索需要在任务执行前确认网络与受控服务启动权限。</string></property><property name="wordWrap"><bool>true</bool></property></widget></item><item><layout class="QHBoxLayout" name="pluginsConnectionActionsLayout"><item><widget class="QPushButton" name="pluginsConnectionEnableButton"><property name="objectName"><string>primaryButton</string></property><property name="minimumSize"><size><width>112</width><height>40</height></size></property><property name="text"><string>启用连接</string></property><property name="toolTip"><string>启用固定的 Wikimedia 公开资料 MCP 连接；不会立即联网</string></property></widget></item><item><widget class="QPushButton" name="pluginsConnectionTestButton"><property name="objectName"><string>ghostButton</string></property><property name="minimumSize"><size><width>106</width><height>40</height></size></property><property name="text"><string>检测 Tool</string></property><property name="toolTip"><string>只检测 MCP 协议和固定 Tool 目录，不读取公开页面</string></property></widget></item><item><widget class="QPushButton" name="pluginsConnectionDisableButton"><property name="objectName"><string>ghostButton</string></property><property name="minimumSize"><size><width>92</width><height>40</height></size></property><property name="text"><string>停用</string></property><property name="toolTip"><string>停用后 AI 调度台不会再计划或调用该连接</string></property></widget></item><item><spacer name="pluginsConnectionActionsFill"><property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>30</width><height>20</height></size></property></spacer></item></layout></item></layout></item><item><spacer name="pluginsFill">
 <property name="orientation"><enum>Qt::Orientation::Vertical</enum></property>
 <property name="sizeType"><enum>QSizePolicy::Policy::Fixed</enum></property>
 <property name="sizeHint" stdset="0"><size><width>20</width><height>0</height></size></property>

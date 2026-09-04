@@ -58,6 +58,24 @@ QStringList readStringList(const QJsonArray &array)
     return values;
 }
 
+McpConnectionInfo readMcpConnectionInfo(const QJsonObject &payload)
+{
+    McpConnectionInfo result;
+    result.connectionId = payload.value(QStringLiteral("connection_id")).toString();
+    result.displayName = payload.value(QStringLiteral("display_name")).toString();
+    result.description = payload.value(QStringLiteral("description")).toString();
+    result.transport = payload.value(QStringLiteral("transport")).toString();
+    result.status = payload.value(QStringLiteral("status")).toString();
+    result.enabled = payload.value(QStringLiteral("enabled")).toBool(false);
+    result.requiresNetwork = payload.value(QStringLiteral("requires_network")).toBool(false);
+    result.requiresCommandConfirmation = payload.value(QStringLiteral("requires_command_confirmation")).toBool(false);
+    result.originSummary = payload.value(QStringLiteral("origin_summary")).toString();
+    result.lastCheckedAt = payload.value(QStringLiteral("last_checked_at")).toString();
+    result.lastToolCount = payload.value(QStringLiteral("last_tool_count")).toInt();
+    result.lastErrorCode = payload.value(QStringLiteral("last_error_code")).toString();
+    return result;
+}
+
 ConversationContextInfo readConversationContextInfo(const QJsonObject &payload)
 {
     // 后端的 ConversationContext 包含完整 session 元数据；Qt 只消费恢复界面所需的最小字段，
@@ -1652,6 +1670,85 @@ void BackendClient::testModelConnection(
         QJsonDocument(payload).toJson(QJsonDocument::Compact));
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         handleModelConnectionTestReply(reply);
+    });
+}
+
+void BackendClient::requestMcpConnections()
+{
+    QNetworkReply *reply = networkManager_.get(createRequest(buildMcpConnectionsUrl(), 6000));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        if (reply->error() != QNetworkReply::NoError) {
+            const QString message = replyErrorMessage(reply);
+            reply->deleteLater();
+            emit mcpConnectionsFailed(message);
+            return;
+        }
+        const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+        reply->deleteLater();
+        const QJsonArray values = document.object().value(QStringLiteral("connections")).toArray();
+        QList<McpConnectionInfo> connections;
+        connections.reserve(values.size());
+        for (const QJsonValue &value : values) {
+            if (!value.isObject()) {
+                continue;
+            }
+            const McpConnectionInfo connection = readMcpConnectionInfo(value.toObject());
+            if (!connection.connectionId.isEmpty()) {
+                connections.append(connection);
+            }
+        }
+        if (connections.isEmpty()) {
+            emit mcpConnectionsFailed(QStringLiteral("MCP 连接响应为空。"));
+            return;
+        }
+        emit mcpConnectionsReceived(connections);
+    });
+}
+
+void BackendClient::setPublicReferenceMcpEnabled(bool enabled)
+{
+    const QString action = enabled ? QStringLiteral("enable") : QStringLiteral("disable");
+    QNetworkReply *reply = networkManager_.post(
+        createRequest(buildPublicReferenceMcpActionUrl(action), 10000), QByteArray{});
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        if (reply->error() != QNetworkReply::NoError) {
+            const QString message = replyErrorMessage(reply);
+            reply->deleteLater();
+            emit mcpConnectionUpdateFailed(message);
+            return;
+        }
+        const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+        reply->deleteLater();
+        const QJsonObject payload = document.object();
+        const McpConnectionInfo connection = readMcpConnectionInfo(payload.value(QStringLiteral("connection")).toObject());
+        if (connection.connectionId.isEmpty()) {
+            emit mcpConnectionUpdateFailed(QStringLiteral("MCP 连接响应缺少状态。"));
+            return;
+        }
+        emit mcpConnectionUpdated(connection, payload.value(QStringLiteral("message")).toString());
+    });
+}
+
+void BackendClient::testPublicReferenceMcpConnection()
+{
+    QNetworkReply *reply = networkManager_.post(
+        createRequest(buildPublicReferenceMcpActionUrl(QStringLiteral("test")), 10000), QByteArray{});
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        if (reply->error() != QNetworkReply::NoError) {
+            const QString message = replyErrorMessage(reply);
+            reply->deleteLater();
+            emit mcpConnectionUpdateFailed(message);
+            return;
+        }
+        const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+        reply->deleteLater();
+        const QJsonObject payload = document.object();
+        const McpConnectionInfo connection = readMcpConnectionInfo(payload.value(QStringLiteral("connection")).toObject());
+        if (connection.connectionId.isEmpty()) {
+            emit mcpConnectionUpdateFailed(QStringLiteral("MCP 检测响应缺少连接状态。"));
+            return;
+        }
+        emit mcpConnectionUpdated(connection, payload.value(QStringLiteral("message")).toString());
     });
 }
 
@@ -4234,6 +4331,20 @@ QUrl BackendClient::buildRuntimePreferencesUrl() const
 {
     QUrl url(baseUrl_);
     url.setPath(QStringLiteral("/api/settings/runtime-preferences"));
+    return url;
+}
+
+QUrl BackendClient::buildMcpConnectionsUrl() const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/mcp/connections"));
+    return url;
+}
+
+QUrl BackendClient::buildPublicReferenceMcpActionUrl(const QString &action) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/mcp/connections/public-reference/%1").arg(action));
     return url;
 }
 

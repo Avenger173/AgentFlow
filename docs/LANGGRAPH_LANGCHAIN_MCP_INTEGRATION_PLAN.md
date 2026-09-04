@@ -2,7 +2,7 @@
 
 最后更新：2026-09-04
 
-状态：**LGM0 与 LGM1 已完成。MCP、LangGraph 与 LangChain 依赖已在开发后端环境锁定；项目内确定性 MCP Gateway 已通过 stdio 回归，但未配置或连接任何真实 MCP Server、未创建 LangGraph 图或 Checkpointer、未切换任何客户任务。现有 Native Runtime 仍是唯一默认执行路径。**
+状态：**LGM0、LGM1 与 LGM2 已完成。MCP、LangGraph 与 LangChain 依赖已在开发后端环境锁定；项目已提供一个默认停用、固定边界的 Wikimedia 公开资料 MCP 客户闭环。Native Runtime 仍是唯一默认执行路径；尚未创建 LangGraph 图或 Checkpointer，也未引入通用远程 MCP 连接。**
 
 本文是三项技术进入 AgentFlow 的实施依据。目标不是为简历增加名词，而是用成熟框架和开放协议改善复杂工作流恢复、外部工具接入、组件复用和长期可维护性。任何阶段只有产生可验证的客户价值并通过回归后，才能写入“已实现”状态。
 
@@ -417,6 +417,15 @@ LGM1 交付的是受控协议内核，不是面向客户的“已支持 MCP”�
 - 关闭连接后 Commander 不再承诺该能力；
 - 未批准的 MCP 调用为零。
 
+实施结果（2026-09-04，已完成）：
+
+- 已选择“受控公开资料检索”作为唯一首期场景，并实现随应用发布的 `public-reference` stdio MCP Server；它只暴露 `search_wikimedia`，只读取固定的 `zh.wikipedia.org` Action API，最多返回 3 条标题、链接、摘要与抓取时间。
+- 插件管理页只提供连接启用、协议/Tool 检测和停用。它没有 URL、命令、目录、环境变量、代理或密钥输入；连接默认停用，启用本身不联网，检测只发现固定 Tool、不读取公开页面。
+- Commander 仅在客户明确提出“联网检索 / 查百科 / 公开资料”等意图且连接已启用时，才计划 `mcp.public-reference.search_wikimedia`。实际调用要求 `network + shell` 权限确认；`shell` 仅指启动项目随附的受控 stdio 子进程，不接受客户命令。
+- `MCPGateway` 继续执行 Tool 目录、参数、JSON 结果和审计 Guard；结果还必须验证固定来源域名、Provider、范围和重复来源，之后才通过既有 Runtime/DeliveryCard 回到同一会话。客户看到的是可打开来源与事实边界，不是内部日志或原始 HTTP 正文。
+- 本阶段不把公开检索并入 Native 组合 Runtime，不在计划中暗示与文档、数据或知识库可以并行汇总；组合执行、远程 Streamable HTTP 和第二个外部系统连接均留待独立需求确认。
+- `verify_lgm2_public_reference.py` 覆盖默认停用、启用、真实 stdio Tool 发现、准入/权限、来源契约、Runtime 投影和交付卡；其 `--live` 模式已实际读取固定 Wikimedia 接口并验证来源为 `https://zh.wikipedia.org/wiki/...`。真实请求使用可追溯 User-Agent，避免被资料源错误拒绝。
+
 ### LGM3：LangGraph ExecutionBackend 骨架
 
 目标：在不接客户业务的情况下验证图、事件和恢复映射。
@@ -572,14 +581,14 @@ LGM1 交付的是受控协议内核，不是面向客户的“已支持 MCP”�
 建议功能开关：
 
 ```text
-AGENTFLOW_MCP_ENABLED=false
+AGENTFLOW_MCP_ENABLED=true
 AGENTFLOW_LANGGRAPH_ENABLED=false
 AGENTFLOW_LANGCHAIN_ADAPTERS_ENABLED=false
 ```
 
 规则：
 
-- 开关默认关闭，只有开发/客户明确启用后才准备依赖和连接；
+- `AGENTFLOW_MCP_ENABLED` 是部署级总开关，默认开启仅用于显示随应用发布的连接描述；每条 MCP 连接仍默认停用，未经客户启用绝不启动子进程、发现 Tool 或联网。部署将其设为 `false` 时必须彻底拒绝 MCP 调用；
 - Runtime 后端、graph ID/version、MCP Server/Tool 快照写入任务历史；
 - 第一次 Tool 或副作用前，后端准备失败可以回到 Native 并明确记录；
 - 第一次 Tool 或副作用后禁止自动换后端重跑；
@@ -617,9 +626,9 @@ AGENTFLOW_LANGCHAIN_ADAPTERS_ENABLED=false
 
 ## 13. 下一次开发起点
 
-LGM0 与 LGM1 已完成。下一阶段是 **LGM2：首个客户 MCP 闭环**，但实施前必须由用户确认
-一个真实产品场景（只读项目/协作平台查询、受控公开资料检索，或客户已有业务系统的只读查询）。
-未确认场景前，不创建真实连接、不新增设置页或 Commander 路由；LangGraph 仍停留在 LGM3 之后。
+LGM0、LGM1 与 LGM2 已完成。下一阶段候选是 **LGM3：LangGraph ExecutionBackend 骨架**，但它
+只允许在确定性测试图和影子对照中验证状态、事件与恢复，不能直接迁移客户任务或替换 Native Runtime。
+新的 MCP 连接、远程 MCP、LangGraph 客户路由与 LangChain 适配仍必须先由用户确认具体产品价值。
 
 推荐顺序：
 

@@ -10,6 +10,7 @@
 #include "taskactivityindicator.h"
 #include "ui_mainwindow.h"
 
+#include <algorithm>
 #include <cmath>
 #include <functional>
 
@@ -958,6 +959,7 @@ MainWindow::MainWindow(QWidget *parent)
     setupCodeWorkshop();
     setupModelPage();
     setupSettingsPage();
+    setupMcpConnectionsPage();
     setupHistoryPage();
 
     // Qt 6.11 + MSVC Debug 下，给大量 QFrame 动态挂 QGraphicsDropShadowEffect
@@ -1190,6 +1192,7 @@ void MainWindow::setupBackendIntegration()
         backendClient->refresh();
         backendClient->requestNodeContracts();
         backendClient->requestRuntimePreferences();
+        backendClient->requestMcpConnections();
         // 文档工作台的加载状态由统一入口维护。这样首启失败、后端重启或客户首次进入页面时
         // 都能清楚显示可恢复状态，而不是留下“等待后端加载文档”的静态占位。
         refreshDocumentAgentDocuments();
@@ -1318,6 +1321,10 @@ void MainWindow::setupBackendIntegration()
     connect(backendClient, &BackendClient::modelConfigSaveFailed, this, &MainWindow::handleModelConfigSaveFailed);
     connect(backendClient, &BackendClient::modelConnectionTestCompleted, this, &MainWindow::handleModelConnectionTestCompleted);
     connect(backendClient, &BackendClient::modelConnectionTestFailed, this, &MainWindow::handleModelConnectionTestFailed);
+    connect(backendClient, &BackendClient::mcpConnectionsReceived, this, &MainWindow::handleMcpConnectionsReceived);
+    connect(backendClient, &BackendClient::mcpConnectionsFailed, this, &MainWindow::handleMcpConnectionsFailed);
+    connect(backendClient, &BackendClient::mcpConnectionUpdated, this, &MainWindow::handleMcpConnectionUpdated);
+    connect(backendClient, &BackendClient::mcpConnectionUpdateFailed, this, &MainWindow::handleMcpConnectionUpdateFailed);
     connect(backendClient, &BackendClient::workspaceDocumentImported, this, &MainWindow::handleWorkspaceDocumentImported);
     connect(backendClient, &BackendClient::workspaceDocumentImportFailed, this, &MainWindow::handleWorkspaceDocumentImportFailed);
     connect(backendClient, &BackendClient::workspaceDocumentsReceived, this, &MainWindow::handleWorkspaceDocumentsReceived);
@@ -12002,6 +12009,144 @@ void MainWindow::setupSettingsPage()
         QStringLiteral("<p style=\"color:#64748B;\">后端就绪后会读取当前运行偏好。</p>"));
 }
 
+void MainWindow::setupMcpConnectionsPage()
+{
+    // 页面结构与按钮语义保存在 mainwindow.ui；这里只负责状态绑定。首期没有可编辑 URL、
+    // 命令、环境变量或密钥，避免“插件管理”意外变成任意 MCP 进程启动入口。
+    ui->pluginsConnectionEnableButton->setIcon(style()->standardIcon(QStyle::SP_MediaPlay));
+    ui->pluginsConnectionTestButton->setIcon(style()->standardIcon(QStyle::SP_DialogApplyButton));
+    ui->pluginsConnectionDisableButton->setIcon(style()->standardIcon(QStyle::SP_DialogCancelButton));
+    ui->pluginsConnectionEnableButton->setEnabled(false);
+    ui->pluginsConnectionTestButton->setEnabled(false);
+    ui->pluginsConnectionDisableButton->setEnabled(false);
+
+    connect(ui->pluginsConnectionEnableButton, &QPushButton::clicked, this, [this]() {
+        const auto decision = QMessageBox::question(
+            this,
+            QStringLiteral("启用公开资料连接"),
+            QStringLiteral("启用后，AI 调度台可在你批准联网权限时查询固定的 Wikimedia 公开资料。\n\n"
+                           "不会立即联网，也不会开放任意网址、命令或密钥配置。"),
+            QMessageBox::Cancel | QMessageBox::Yes,
+            QMessageBox::Cancel);
+        if (decision == QMessageBox::Yes && backendClient) {
+            ui->pluginsConnectionEnableButton->setEnabled(false);
+            backendClient->setPublicReferenceMcpEnabled(true);
+        }
+    });
+    connect(ui->pluginsConnectionTestButton, &QPushButton::clicked, this, [this]() {
+        if (!backendClient) {
+            return;
+        }
+        ui->pluginsConnectionTestButton->setEnabled(false);
+        ui->pluginsConnectionStatus->setText(QStringLiteral("检测中"));
+        polishBadge(ui->pluginsConnectionStatus, QStringLiteral("badgeBlue"));
+        backendClient->testPublicReferenceMcpConnection();
+    });
+    connect(ui->pluginsConnectionDisableButton, &QPushButton::clicked, this, [this]() {
+        const auto decision = QMessageBox::question(
+            this,
+            QStringLiteral("停用公开资料连接"),
+            QStringLiteral("停用后，AI 调度台不会再为公开资料检索生成 MCP 执行计划。\n\n"
+                           "已有任务历史不会被删除。"),
+            QMessageBox::Cancel | QMessageBox::Yes,
+            QMessageBox::Cancel);
+        if (decision == QMessageBox::Yes && backendClient) {
+            ui->pluginsConnectionDisableButton->setEnabled(false);
+            backendClient->setPublicReferenceMcpEnabled(false);
+        }
+    });
+
+    polishBadge(ui->pluginsConnectionStatus, QStringLiteral("badgeGray"));
+    ui->pluginsConnectionStatus->setText(QStringLiteral("等待后端"));
+}
+
+void MainWindow::refreshMcpConnections()
+{
+    if (!backendClient || !backendManager || !backendManager->isReady()) {
+        return;
+    }
+    ui->pluginsConnectionEnableButton->setEnabled(false);
+    ui->pluginsConnectionTestButton->setEnabled(false);
+    ui->pluginsConnectionDisableButton->setEnabled(false);
+    polishBadge(ui->pluginsConnectionStatus, QStringLiteral("badgeBlue"));
+    ui->pluginsConnectionStatus->setText(QStringLiteral("加载中"));
+    backendClient->requestMcpConnections();
+}
+
+void MainWindow::updatePublicReferenceMcpUi(const McpConnectionInfo &connection, const QString &message)
+{
+    currentPublicReferenceMcpConnection = connection;
+    const bool enabled = connection.enabled;
+    const bool ready = connection.status == QStringLiteral("ready");
+    const bool degraded = connection.status == QStringLiteral("degraded");
+    const bool platformDisabled = connection.status == QStringLiteral("platform_disabled");
+    const QString statusText = platformDisabled ? QStringLiteral("平台已关闭")
+                             : degraded         ? QStringLiteral("需要处理")
+                             : ready            ? QStringLiteral("已就绪")
+                             : enabled          ? QStringLiteral("已启用")
+                                                : QStringLiteral("未启用");
+    const QString badge = (ready ? QStringLiteral("badgeGreen")
+                         : degraded || platformDisabled ? QStringLiteral("badgeOrange")
+                         : enabled ? QStringLiteral("badgeBlue")
+                                   : QStringLiteral("badgeGray"));
+    polishBadge(ui->pluginsConnectionStatus, badge);
+    ui->pluginsConnectionStatus->setText(statusText);
+
+    QString meta = connection.originSummary.trimmed();
+    if (!message.trimmed().isEmpty()) {
+        meta = message.trimmed();
+    } else if (!connection.lastCheckedAt.trimmed().isEmpty()) {
+        meta += QStringLiteral(" · 最近检测 %1 · %2 个 Tool")
+                    .arg(connection.lastCheckedAt.left(19).replace(QLatin1Char('T'), QLatin1Char(' ')))
+                    .arg(connection.lastToolCount);
+    }
+    if (degraded && !connection.lastErrorCode.isEmpty()) {
+        meta += QStringLiteral(" · 检测失败：%1").arg(connection.lastErrorCode);
+    }
+    if (meta.isEmpty()) {
+        meta = QStringLiteral("启用连接不会联网；实际检索会单独请求联网与受控服务启动权限。");
+    }
+    ui->pluginsConnectionMeta->setText(meta);
+    ui->pluginsConnectionEnableButton->setEnabled(!enabled && !platformDisabled);
+    ui->pluginsConnectionTestButton->setEnabled(enabled && !platformDisabled);
+    ui->pluginsConnectionDisableButton->setEnabled(enabled);
+}
+
+void MainWindow::handleMcpConnectionsReceived(const QList<McpConnectionInfo> &connections)
+{
+    const auto iterator = std::find_if(
+        connections.cbegin(), connections.cend(), [](const McpConnectionInfo &item) {
+            return item.connectionId == QStringLiteral("public-reference");
+        });
+    if (iterator == connections.cend()) {
+        handleMcpConnectionsFailed(QStringLiteral("未找到内置公开资料连接。"));
+        return;
+    }
+    updatePublicReferenceMcpUi(*iterator);
+}
+
+void MainWindow::handleMcpConnectionsFailed(const QString &message)
+{
+    polishBadge(ui->pluginsConnectionStatus, QStringLiteral("badgeOrange"));
+    ui->pluginsConnectionStatus->setText(QStringLiteral("加载失败"));
+    ui->pluginsConnectionMeta->setText(QStringLiteral("无法读取受控连接状态：%1").arg(message.left(180)));
+    ui->pluginsConnectionEnableButton->setEnabled(false);
+    ui->pluginsConnectionTestButton->setEnabled(false);
+    ui->pluginsConnectionDisableButton->setEnabled(false);
+}
+
+void MainWindow::handleMcpConnectionUpdated(const McpConnectionInfo &connection, const QString &message)
+{
+    updatePublicReferenceMcpUi(connection, message);
+}
+
+void MainWindow::handleMcpConnectionUpdateFailed(const QString &message)
+{
+    updatePublicReferenceMcpUi(
+        currentPublicReferenceMcpConnection,
+        QStringLiteral("操作未完成：%1").arg(message.left(180)));
+}
+
 void MainWindow::refreshRuntimePreferences()
 {
     if (!backendClient) {
@@ -18693,8 +18838,11 @@ void MainWindow::switchPage(int index)
         refreshKnowledgeBases();
         break;
     case 10:
-        updateHeader("插件管理", "安装 .afagent，管理权限、版本、启用状态");
+        updateHeader("插件管理", "管理受控 MCP 连接与权限边界");
         setActiveNavButton(ui->navPluginsButton);
+        if (backendManager && backendManager->isReady()) {
+            refreshMcpConnections();
+        }
         break;
     case 11:
         updateHeader("模型密钥", "管理全局模型和每个 Agent 的独立 API Key");
