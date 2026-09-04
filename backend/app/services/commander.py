@@ -38,7 +38,9 @@ DOCUMENT_ROUTE_KEYWORDS = (
     # “分析/整理/总结/提取”等动词同样适用于数据，不能单独把用户误导到文档工作台。
     # 一旦客户端已绑定材料，材料类型优先于宽泛语言信号；未绑定时只用此处较明确的
     # 文档提示触发一次澄清。
-    "文档", "文件", "资料", "作业", "需求", "读取", "归纳",
+    # “资料”“需求”既可能是公开信息、知识库、数据集，也可能只是普通问答。只有
+    # 文档对象/格式或明确的文档处理动词才允许在未绑定材料时进入文档助手澄清。
+    "文档", "文件", "读取", "归纳",
     "txt", "markdown", "pdf", "word", "docx",
 )
 DATA_ROUTE_KEYWORDS = (
@@ -82,6 +84,13 @@ KNOWLEDGE_DEEP_ROUTE_KEYWORDS = (
 PUBLIC_REFERENCE_ROUTE_KEYWORDS = (
     "公开资料", "联网检索", "搜索公开", "查公开资料", "查百科", "查维基", "维基百科",
 )
+_FRESH_EXTERNAL_INFORMATION_KEYWORDS = (
+    "新闻", "实时", "行情", "股价", "汇率", "天气", "比分", "赛程",
+)
+_FRESH_EXTERNAL_RECENCY_KEYWORDS = (
+    "最近", "最新", "今日", "今天", "本周", "本月", "当前动态",
+)
+_EXTERNAL_LOOKUP_VERBS = ("查", "搜索", "检索", "了解", "资讯", "动态")
 # 这些别名只服务于总指挥输入的 `@` 路由提示。它们不能映射到未完成 Agent、插件、
 # MCP 或任意文件路径，防止看似便利的文本标签扩大实际执行面。
 _AGENT_HINT_ALIASES: dict[str, tuple[str, ...]] = {
@@ -136,16 +145,28 @@ def create_commander_plan(
     # PPT 创作拥有最高的显式意图优先级。即使调度台仍挂着上一次的数据集或资料库，
     # “帮我做 PPT”也不能被错误解释成“分析当前数据/资料库”。
     presentation_requested = _matches_any(lowered, PRESENTATION_ROUTE_KEYWORDS)
-    public_reference_requested = not presentation_requested and _matches_any(lowered, PUBLIC_REFERENCE_ROUTE_KEYWORDS)
+    fresh_external_information_requested = (
+        not presentation_requested and _requests_fresh_external_information(lowered)
+    )
+    public_reference_requested = (
+        not presentation_requested
+        and not fresh_external_information_requested
+        and _matches_any(lowered, PUBLIC_REFERENCE_ROUTE_KEYWORDS)
+    )
     knowledge_intent_requested = _matches_any(lowered, KNOWLEDGE_ROUTE_KEYWORDS) or knowledge_deep_requested
     # “资料库”是知识库专属实体；不能因为 DOCUMENT_ROUTE_KEYWORDS 里的宽泛词“资料”
     # 把一个明确的知识库问题同时路由成“请选择文档”。知识库意图优先于泛化的文档词。
-    document_intent_requested = not (knowledge_intent_requested or public_reference_requested) and _matches_any(lowered, DOCUMENT_ROUTE_KEYWORDS)
-    data_intent_requested = not public_reference_requested and _matches_any(lowered, DATA_ROUTE_KEYWORDS)
+    document_intent_requested = not (
+        knowledge_intent_requested
+        or public_reference_requested
+        or fresh_external_information_requested
+    ) and _matches_any(lowered, DOCUMENT_ROUTE_KEYWORDS)
+    data_intent_requested = not (public_reference_requested or fresh_external_information_requested) and _matches_any(lowered, DATA_ROUTE_KEYWORDS)
     data_transform_intent_requested = _matches_any(lowered, DATA_TRANSFORM_KEYWORDS)
     data_join_intent_requested = _matches_any(lowered, DATA_JOIN_KEYWORDS)
     explicit_specialist_intent = (
-        public_reference_requested
+        fresh_external_information_requested
+        or public_reference_requested
         or knowledge_intent_requested
         or document_intent_requested
         or data_intent_requested
@@ -155,7 +176,7 @@ def create_commander_plan(
     # 后随口问一个普通问题，也会被残留 CSV 强行劫持。只有目标本身出现处理意图时，
     # 才把已选材料交给对应专业 Agent；`@` 在没有冲突目标时提供一个温和的偏好兜底。
     material_task_requested = _requests_bound_material_work(message)
-    knowledge_requested = not presentation_requested and (
+    knowledge_requested = not (presentation_requested or fresh_external_information_requested) and (
         knowledge_intent_requested
         or (
             bool(knowledge_base_refs)
@@ -175,7 +196,7 @@ def create_commander_plan(
     # C6.3 允许客户明确组合文档、资料库和数据集；材料引用优先于模糊关键词。
     # 只有没有资料库绑定时，才把“资料”等宽泛词当作普通文档意图，避免单独问资料库
     # 时额外产生“请选择文档”的噪声澄清。
-    document_requested = not presentation_requested and (
+    document_requested = not (presentation_requested or fresh_external_information_requested) and (
         document_intent_requested
         or (
             bool(document_refs)
@@ -192,7 +213,7 @@ def create_commander_plan(
             )
         )
     )
-    data_requested = not presentation_requested and (
+    data_requested = not (presentation_requested or fresh_external_information_requested) and (
         data_intent_requested
         or data_transform_intent_requested
         or data_join_intent_requested
@@ -236,7 +257,12 @@ def create_commander_plan(
     next_index = 2
     specialist_step_ids: list[str] = []
 
-    if public_reference_requested:
+    if fresh_external_information_requested:
+        clarifying_questions.append(
+            "当前仅支持固定百科型公开资料参考，暂不支持最近新闻、实时动态或任意网站搜索；"
+            "本次不会转交文档、数据或知识库助手。"
+        )
+    elif public_reference_requested:
         try:
             public_connection = load_public_reference_connection()
         except McpConnectionStoreError:
@@ -273,7 +299,11 @@ def create_commander_plan(
 
     if knowledge_requested:
         if not knowledge_base_refs:
-            clarifying_questions.append("已点名 @知识库，但尚未选择资料库；请先在知识库页面选择一个资料库后再委派。")
+            clarifying_questions.append(
+                "已点名 @知识库，但尚未选择资料库；请先在知识库页面选择一个资料库后再委派。"
+                if "knowledge_agent" in hinted_agent_ids
+                else "该请求需要基于本地资料库回答；请先在知识库页面选择一个已完成索引的资料库。"
+            )
         elif len(knowledge_base_refs) > 1:
             clarifying_questions.append("当前知识库委派一次只处理一个资料库；请保留最相关的一个资料库后重试。资料对照请在知识库工作台逐份选择资料。")
         else:
@@ -343,7 +373,11 @@ def create_commander_plan(
             clarifying_questions.append("智能制作 PPT 当前不可用，请在文档助手页面检查工作台状态后重试。")
     elif document_requested:
         if not document_refs:
-            clarifying_questions.append("已点名 @文档助手，但尚未选择文档；请先导入并选择 TXT、Markdown、PDF 或 DOCX 材料。")
+            clarifying_questions.append(
+                "已点名 @文档助手，但尚未选择文档；请先导入并选择 TXT、Markdown、PDF 或 DOCX 材料。"
+                if "document_agent" in hinted_agent_ids
+                else "该请求需要基于本地文档处理；请先导入并选择 TXT、Markdown、PDF 或 DOCX 材料。"
+            )
         elif search_query and not needs_document_understanding:
             specialist_step_id = f"step_{next_index}"
             decision = _append_admitted_step(
@@ -397,7 +431,11 @@ def create_commander_plan(
 
     if data_requested:
         if not dataset_refs:
-            clarifying_questions.append("已点名 @数据工作台，但尚未选择数据文件；请先在数据工作台完成导入和画像。")
+            clarifying_questions.append(
+                "已点名 @数据工作台，但尚未选择数据文件；请先在数据工作台完成导入和画像。"
+                if "data_agent" in hinted_agent_ids
+                else "该请求需要基于本地数据文件处理；请先在数据工作台完成导入和画像。"
+            )
         elif data_join_requested:
             if len(dataset_refs) != 2:
                 clarifying_questions.append("多数据集合并首版需要明确选择两份数据文件，请保留两份最相关的数据后重试。")
@@ -669,7 +707,7 @@ def create_commander_plan(
     plan = WorkflowPlan(
         workflow_name="commander_manager_plan",
         description="Commander 基于显式材料绑定与 Agent action 准入生成的结构化计划。",
-        intent=_infer_intent(steps),
+        intent="fresh_external_information" if fresh_external_information_requested else _infer_intent(steps),
         user_goal=message,
         summary=_build_plan_summary(steps),
         clarifying_questions=clarifying_questions,
@@ -844,6 +882,12 @@ def build_commander_planning_reply(plan: WorkflowPlan) -> str:
     这不是专业结论，也不替代后续模型调用。它只使用已经通过 action admission 的计划
     事实，保证客户不会在“资料库已经绑定”时看到“系统没有资料库工具”这类冲突话术。
     """
+
+    if plan.intent == "fresh_external_information":
+        return (
+            "当前还不能检索最近新闻、实时动态或任意网站内容。"
+            "现有公开资料连接只支持固定的百科型参考，且不会转交给本地文档、数据或知识库助手。"
+        )
 
     material_names = {
         "document": "文档",
@@ -1026,6 +1070,14 @@ def _build_admitted_step(
 
 def _matches_any(value: str, keywords: tuple[str, ...]) -> bool:
     return any(keyword in value for keyword in keywords)
+
+
+def _requests_fresh_external_information(message: str) -> bool:
+    """识别未开放的时效外部信息，防止被“资料”等泛词误路由为本地文档。"""
+
+    if _matches_any(message, _FRESH_EXTERNAL_INFORMATION_KEYWORDS):
+        return True
+    return _matches_any(message, _FRESH_EXTERNAL_RECENCY_KEYWORDS) and _matches_any(message, _EXTERNAL_LOOKUP_VERBS)
 
 
 def _requests_bound_material_work(message: str) -> bool:

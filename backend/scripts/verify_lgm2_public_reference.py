@@ -143,6 +143,21 @@ def main(*, live: bool = False) -> None:
         assert not any(step.action == "search_public_references" for step in disabled_plan.steps)
         assert len(disabled_plan.clarifying_questions) == 1
 
+        fresh_news_plan = create_commander_plan("帮我查一下最近有关汽车的新闻资料")
+        assert fresh_news_plan.intent == "fresh_external_information"
+        assert fresh_news_plan.agent_hints == []
+        assert not any(
+            step.agent in {"document_agent", "data_agent", "knowledge_agent"}
+            for step in fresh_news_plan.steps
+        )
+        assert "暂不支持最近新闻" in fresh_news_plan.clarifying_questions[0]
+        assert "@文档助手" not in fresh_news_plan.clarifying_questions[0]
+
+        plain_document_plan = create_commander_plan("请整理一份文档")
+        assert "@文档助手" not in plain_document_plan.clarifying_questions[0]
+        hinted_document_plan = create_commander_plan("@文档助手 请整理一份文档")
+        assert "已点名 @文档助手" in hinted_document_plan.clarifying_questions[0]
+
         enabled = client.post("/api/mcp/connections/public-reference/enable")
         enabled.raise_for_status()
         assert enabled.json()["connection"]["enabled"] is True

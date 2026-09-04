@@ -899,6 +899,7 @@ cmd /c ""D:\IDE\VS2022\buildtools\VC\Auxiliary\Build\vcvars64.bat" && "D:\IDE\qt
 - 插件管理已提供小型连接面板，连接默认停用；启用不联网，检测只发现固定 Tool。Commander 只在客户明确提出公开资料检索时创建该步骤；真实调用经 `network + shell` 权限确认，其中 shell 仅允许启动项目随附的固定 stdio 子进程。公开来源在结果卡和同一会话中可打开，内部参数、HTTP 原文与进程信息不展示给客户。
 - 来源结果通过固定域名、Provider、范围、重复来源与结构化 JSON 契约校验；只标记为“可回溯公开资料参考线索”，不自动写成已核验专业事实或统计结论。未实现公开检索与文档/数据/知识库组合并行、远程 Streamable HTTP、第二个客户系统连接或 LangGraph 任务迁移。
 - `verify_lgm2_public_reference.py` 已覆盖连接默认状态、启停、真实 stdio Tool 发现、Commander 准入、权限、来源契约、Runtime 与 DeliveryCard 投影；`--live` 已实际请求固定 Wikimedia 接口并得到受限页面来源。过程中修正了 Wikimedia 对无项目地址 User-Agent 的 `403` 拒绝。LGM1 回归、Python 编译和依赖检查均通过；Qt Debug 构建通过。下一阶段仅可讨论 LGM3 隔离测试图，不能直接替换 Native Runtime。
+- 已修复调度台把“最近新闻资料”等时效外部信息误路由为本地文档的问题：新会话继续清空材料、`@` 偏好和短期上下文；后端将新闻、实时动态、行情、天气、赛程等识别为独立未开放能力，并给出明确边界，不再伪称客户点名文档、数据或知识库助手。只有客户实际输入 `@Agent` 时，缺少材料的提示才会显示“已点名”。
 
 ## 2026-09-04 LGM1：确定性 MCP Gateway 内核
 
