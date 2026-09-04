@@ -48,6 +48,8 @@
 
 > **2026-09-04 LGM4.1 K4 LangGraph 影子对照：**新增仅用于离线夹具的 `LangGraphK4ShadowBackend`，以“范围冻结 -> Map -> Reduce -> 交付资格核验”直接调用既有 K4 服务；它不复制正文、模型 Runtime 或 K4 业务算法，LangGraph checkpoint 只保留 task、图版本、范围哈希、generation 引用、完成节点和结果哈希。`verify_lgm4_k4_shadow.py` 已对照 Native 与影子路径的最终 Reduce 结果，覆盖 Map/Reduce 失败恢复不重跑已完成工作、取消、旧 generation 拒绝和无正文 checkpoint。`verify_knowledge_deep_task_map.py`、`verify_knowledge_deep_task_scope.py`、`verify_lgm3_langgraph_execution_backend.py`、`compileall` 与 `pip check` 已通过。该能力尚未注册 API、Qt、客户 Router 或开关，Native K4 仍是唯一正式执行路径；下一步补齐影子阶段/调用/耗时与限流等待比较，再判断是否值得进入客户主动试点。
 
+> **2026-09-04 LGM4.2 影子可观测性：**影子回执现在只汇总 Native K4 已持久化的步骤/失败数、端到端耗时、实际 Provider 请求数和重试数，以及 Graph 自身墙钟耗时与 checkpoint 节点数；不估算 token、费用或缓存，也不保存正文。K4 既有 Map/Reduce progress callback 已映射为无正文 Harness 事件，专项夹具确认 Native/Graph 的 Map/Reduce 调用次数一致、开始/进度/完成事件顺序可用。限流仍由 Native K4 的 Provider 队列唯一负责，影子图不引入第二套调度器。该能力继续只存在于临时夹具，不会写入客户任务历史或被 Qt 订阅。
+
 ## 2026-08-25 知识库 K5.4：索引性能事实与解析复用核验
 
 - `KnowledgeIndexJobRecord` 与 SQLite migration 已新增解析/分块、向量、关键词、总耗时，以及本次复用的已解析版本数。计量不写正文、路径、向量、模型输入、缓存键或凭据，旧数据库只前向增列，不重建资料。

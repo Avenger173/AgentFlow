@@ -13,9 +13,12 @@ import operator
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
+from time import perf_counter
 from typing import Annotated, Literal, TypedDict
 
 from app.agents.runner import ToolCallingModel
+from app.database.task_repository import load_workflow_run
+from app.harness.contracts import HarnessEventSink, HarnessRuntimeEvent
 from app.schemas.knowledge import KnowledgeDeepTaskScope
 from app.services.knowledge_deep_task import (
     KnowledgeDeepTaskScopeError,
@@ -62,6 +65,20 @@ class K4ShadowSnapshot:
 
 
 @dataclass(frozen=True)
+class K4ShadowExecutionMetrics:
+    """影子运行与 Native K4 checkpoint 的无正文对照事实。"""
+
+    graph_elapsed_ms: int = 0
+    graph_checkpoint_node_total: int = 0
+    native_step_total: int = 0
+    native_step_completed: int = 0
+    native_step_failed: int = 0
+    native_duration_ms: int = 0
+    native_provider_request_total: int = 0
+    native_retry_total: int = 0
+
+
+@dataclass(frozen=True)
 class K4ShadowExecutionResult:
     """影子图的受限回执，不替代客户可见的 K4 结果协议。"""
 
@@ -73,6 +90,7 @@ class K4ShadowExecutionResult:
     result_digest: str = ""
     message: str = ""
     resumed: bool = False
+    metrics: K4ShadowExecutionMetrics = K4ShadowExecutionMetrics()
 
 
 class _K4ShadowBlocked(RuntimeError):
@@ -109,9 +127,14 @@ class LangGraphK4ShadowBackend:
         self._model = model
         self._checkpointer_context: object | None = None
         self._graph: object | None = None
+        self._active_event_sink: HarnessEventSink | None = None
         self._closed = False
 
-    async def execute_task(self, task_id: str) -> K4ShadowExecutionResult:
+    async def execute_task(
+        self,
+        task_id: str,
+        event_sink: HarnessEventSink | None = None,
+    ) -> K4ShadowExecutionResult:
         """启动一条仅存在于临时夹具数据库的 K4 影子任务。"""
 
         if self._closed:
@@ -124,9 +147,18 @@ class LangGraphK4ShadowBackend:
             "knowledge_base_id": self._scope.knowledge_base_id,
             "index_generation_id": self._scope.index_generation_id,
         }
-        return await self._drive(task_id=task_id, graph_input=initial_state, resumed=False)
+        return await self._drive(
+            task_id=task_id,
+            graph_input=initial_state,
+            resumed=False,
+            event_sink=event_sink,
+        )
 
-    async def resume_task(self, task_id: str) -> K4ShadowExecutionResult:
+    async def resume_task(
+        self,
+        task_id: str,
+        event_sink: HarnessEventSink | None = None,
+    ) -> K4ShadowExecutionResult:
         """从同一 Graph/K4 checkpoint 恢复；已完成章节仍由 Native K4 跳过。"""
 
         if self._closed:
@@ -146,7 +178,12 @@ class LangGraphK4ShadowBackend:
         control = resume_knowledge_deep_task(task_id)
         if control is None or not control[0].accepted:
             return self._failure(task_id, "runtime", "Native K4 未接受本次恢复请求。", resumed=True)
-        return await self._drive(task_id=task_id, graph_input=None, resumed=True)
+        return await self._drive(
+            task_id=task_id,
+            graph_input=None,
+            resumed=True,
+            event_sink=event_sink,
+        )
 
     async def cancel_task(self, task_id: str) -> bool:
         """把取消权交回既有 K4 控制面；Graph 不另建一套控制状态。"""
@@ -193,31 +230,65 @@ class LangGraphK4ShadowBackend:
         task_id: str,
         graph_input: object,
         resumed: bool,
+        event_sink: HarnessEventSink | None,
     ) -> K4ShadowExecutionResult:
         graph = await self._ensure_graph()
+        started = perf_counter()
+        self._active_event_sink = event_sink
         try:
+            await self._emit("runtime_started")
             await graph.ainvoke(graph_input, _graph_config(task_id))
         except _K4ShadowBlocked as exc:
-            return await self._from_snapshot(task_id, "blocked", exc.stage, str(exc), resumed=resumed)
+            await self._emit("runtime_failed")
+            return await self._from_snapshot(
+                task_id,
+                "blocked",
+                exc.stage,
+                str(exc),
+                resumed=resumed,
+                elapsed_ms=_elapsed_ms(started),
+            )
         except _K4ShadowCancelled:
+            await self._emit("runtime_cancelled")
             return await self._from_snapshot(
                 task_id,
                 "cancelled",
                 "map",
                 "Native K4 已在章节安全边界确认取消。",
                 resumed=resumed,
+                elapsed_ms=_elapsed_ms(started),
             )
         except KnowledgeDeepTaskScopeError as exc:
-            return await self._from_snapshot(task_id, "failed", "scope", str(exc), resumed=resumed)
+            await self._emit("runtime_failed")
+            return await self._from_snapshot(
+                task_id,
+                "failed",
+                "scope",
+                str(exc),
+                resumed=resumed,
+                elapsed_ms=_elapsed_ms(started),
+            )
         except Exception as exc:  # 影子夹具只输出错误类别，避免泄漏模型或材料正文。
+            await self._emit("runtime_failed")
             return await self._from_snapshot(
                 task_id,
                 "failed",
                 "runtime",
                 f"LangGraph K4 影子图发生未分类失败：{type(exc).__name__}。",
                 resumed=resumed,
+                elapsed_ms=_elapsed_ms(started),
             )
-        return await self._from_snapshot(task_id, "completed", "verify", "K4 影子对照已完成。", resumed=resumed)
+        finally:
+            self._active_event_sink = None
+        await self._emit("assistant_final", event_sink=event_sink)
+        return await self._from_snapshot(
+            task_id,
+            "completed",
+            "verify",
+            "K4 影子对照已完成。",
+            resumed=resumed,
+            elapsed_ms=_elapsed_ms(started),
+        )
 
     async def _from_snapshot(
         self,
@@ -227,8 +298,11 @@ class LangGraphK4ShadowBackend:
         message: str,
         *,
         resumed: bool,
+        elapsed_ms: int,
     ) -> K4ShadowExecutionResult:
         snapshot = await self.inspect_task(task_id)
+        native_run = load_workflow_run(task_id)
+        native_metrics = native_run.metrics if native_run is not None else None
         return K4ShadowExecutionResult(
             task_id=task_id,
             status=status,
@@ -238,6 +312,18 @@ class LangGraphK4ShadowBackend:
             result_digest=snapshot.result_digest if snapshot is not None else "",
             message=message,
             resumed=resumed,
+            metrics=K4ShadowExecutionMetrics(
+                graph_elapsed_ms=elapsed_ms,
+                graph_checkpoint_node_total=len(snapshot.completed_nodes) if snapshot is not None else 0,
+                native_step_total=native_metrics.step_total if native_metrics is not None else 0,
+                native_step_completed=native_metrics.step_completed if native_metrics is not None else 0,
+                native_step_failed=native_metrics.step_failed if native_metrics is not None else 0,
+                native_duration_ms=native_metrics.duration_ms if native_metrics is not None else 0,
+                native_provider_request_total=(
+                    native_metrics.provider_model_request_total if native_metrics is not None else 0
+                ),
+                native_retry_total=native_metrics.retry_total if native_metrics is not None else 0,
+            ),
         )
 
     async def _ensure_graph(self):
@@ -288,6 +374,7 @@ class LangGraphK4ShadowBackend:
             task_id=state["task_id"],
             scope=self._scope,
             model=self._model,
+            progress_callback=self._progress,
         )
         if response.status == "cancelled":
             raise _K4ShadowCancelled()
@@ -301,6 +388,7 @@ class LangGraphK4ShadowBackend:
             task_id=state["task_id"],
             scope=self._scope,
             model=self._model,
+            progress_callback=self._progress,
         )
         if response.status == "cancelled":
             raise _K4ShadowCancelled()
@@ -343,6 +431,31 @@ class LangGraphK4ShadowBackend:
             resumed=resumed,
         )
 
+    async def _progress(self, event: str, _message: str, _step_id: str | None, _level: str) -> None:
+        """将 K4 既有阶段回调归一化为无正文 Harness 进度事件。"""
+
+        if event.endswith("_failed") or event.endswith("_blocked"):
+            await self._emit("runtime_failed")
+        else:
+            await self._emit("runtime_heartbeat")
+
+    async def _emit(
+        self,
+        kind: Literal[
+            "runtime_started",
+            "runtime_heartbeat",
+            "assistant_final",
+            "runtime_failed",
+            "runtime_cancelled",
+        ],
+        *,
+        event_sink: HarnessEventSink | None = None,
+    ) -> None:
+        sink = event_sink if event_sink is not None else self._active_event_sink
+        if sink is None:
+            return
+        await sink(HarnessRuntimeEvent(kind=kind, message="K4 影子执行阶段发生变化。"))
+
 
 def k4_shadow_graph_identity() -> tuple[str, str]:
     """公开影子图身份，避免测试散落魔法字符串。"""
@@ -377,3 +490,7 @@ def _graph_config(task_id: str) -> dict[str, dict[str, str]]:
 def _digest(value: object) -> str:
     payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(0, int((perf_counter() - started) * 1000))

@@ -133,19 +133,33 @@ def _index_active_materials(*, knowledge_base_id: str, document_names: list[str]
 async def _verify_success(*, checkpoint_root: Path, scope) -> str:
     native_task_id = "task_k4_lgm4native"
     create_knowledge_deep_task_map_queued_run(task_id=native_task_id, scope=scope)
-    native = await run_knowledge_deep_task(task_id=native_task_id, scope=scope, model=_K4FixtureModel())
+    native_model = _K4FixtureModel()
+    native = await run_knowledge_deep_task(task_id=native_task_id, scope=scope, model=native_model)
     assert native.status == "completed" and native.result is not None
     native_digest = _digest_result(native_task_id)
+    shadow_model = _K4FixtureModel()
+    events: list[str] = []
+
+    async def collect(event) -> None:
+        events.append(event.kind)
 
     backend = LangGraphK4ShadowBackend(
         checkpoint_path=checkpoint_root / "success.db",
         scope=scope,
-        model=_K4FixtureModel(),
+        model=shadow_model,
     )
     try:
-        shadow = await backend.execute_task("task_k4_lgm4success")
+        shadow = await backend.execute_task("task_k4_lgm4success", event_sink=collect)
         assert shadow.status == "completed", shadow
         assert shadow.result_digest == native_digest
+        assert native_model.map_unit_ids == shadow_model.map_unit_ids
+        assert native_model.reduce_turn_count == shadow_model.reduce_turn_count == 2
+        assert shadow.metrics.graph_checkpoint_node_total == 4
+        assert shadow.metrics.native_step_total == shadow.metrics.native_step_completed == 4
+        assert shadow.metrics.native_step_failed == 0
+        assert shadow.metrics.graph_elapsed_ms >= 0 and shadow.metrics.native_duration_ms >= 0
+        assert events[0] == "runtime_started"
+        assert "runtime_heartbeat" in events and events[-1] == "assistant_final"
         snapshot = await backend.inspect_task("task_k4_lgm4success")
         assert snapshot is not None
         assert snapshot.completed_nodes == ("scope_frozen", "map_completed", "reduce_completed", "delivery_verified")
