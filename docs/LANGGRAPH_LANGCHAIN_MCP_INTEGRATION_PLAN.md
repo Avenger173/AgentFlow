@@ -2,7 +2,7 @@
 
 最后更新：2026-09-04
 
-状态：**LGM0 基线冻结与技术探针已完成。MCP、LangGraph 与 LangChain 依赖已在开发后端环境锁定并通过隔离探针，但仍未创建 MCP 连接、未创建 LangGraph 图或 Checkpointer、未切换任何客户任务。现有 Native Runtime 仍是唯一默认执行路径。**
+状态：**LGM0 与 LGM1 已完成。MCP、LangGraph 与 LangChain 依赖已在开发后端环境锁定；项目内确定性 MCP Gateway 已通过 stdio 回归，但未配置或连接任何真实 MCP Server、未创建 LangGraph 图或 Checkpointer、未切换任何客户任务。现有 Native Runtime 仍是唯一默认执行路径。**
 
 本文是三项技术进入 AgentFlow 的实施依据。目标不是为简历增加名词，而是用成熟框架和开放协议改善复杂工作流恢复、外部工具接入、组件复用和长期可维护性。任何阶段只有产生可验证的客户价值并通过回归后，才能写入“已实现”状态。
 
@@ -351,7 +351,7 @@ LangChain 不作为新的总控制层。以下条件满足时才引入对应组�
   未调用真实模型、未读取客户材料、未连接外部 MCP Server。
 
 LGM0 通过的含义仅是“依赖可控、默认关闭、Native 基线未破坏”，不等于客户已经获得
-MCP、LangGraph 或 LangChain 功能。下一阶段仍从 LGM1 的确定性 MCP Gateway 内核开始。
+MCP、LangGraph 或 LangChain 功能。其后的 LGM1 确定性 MCP Gateway 内核已完成，记录如下。
 
 ### LGM1：MCP Client/Gateway 内核
 
@@ -371,6 +371,26 @@ MCP、LangGraph 或 LangChain 功能。下一阶段仍从 LGM1 的确定性 MCP 
 - 每次调用均有结构化 tool_call、耗时、错误和权限事实；
 - Qt 退出后无 MCP 子进程残留；
 - MCP Tool 不能读取未授权文件、环境变量或网络。
+
+#### LGM1 实施记录（2026-09-04）
+
+- 新增项目内唯一的 `agentflow-test` stdio 服务与短生命周期 `McpClientManager`。它只提供
+  回显、整数求和、可取消延迟和大结果边界测试；不读取文件/环境变量/网络/模型，也没有
+  FastAPI route、数据库配置或 Commander action。
+- 启动配置只接受绝对 Python 可执行文件、受控 backend cwd、最多 12 个参数及
+  `PYTHONUTF8`/`PYTHONIOENCODING` 白名单环境变量；不会继承项目 `.env`。每次发现或调用
+  都在 SDK 的 `async with Client` 内完成，调用终止、超时、取消和服务异常退出后均关闭子进程。
+- Gateway 已实现 Tool 目录发现、名称规范化、schema/参数 JSON 边界、文本/结构化结果裁剪、
+  API Key/Authorization 样式脱敏、最大大小/深度/集合数限制和无正文短期审计。测试服务异常
+  退出后可重新发现新进程；超大结果、未知 Tool、非法 schema 与关闭后的调用均明确失败。
+- 新增 `WorkflowToolCall` 脱敏投影，验证 MCP 调用可以使用既有审计结构而不记录原始参数或
+  结果正文。它尚未写入客户任务；LGM2 必须先通过 Action Admission、权限和 Verifier 才能落库。
+- 已通过 `verify_lgm1_mcp_gateway.py`：真实 stdio 启动/发现/调用、超大结果拦截、取消、
+  子进程异常退出与重新发现、无正文审计、关闭后拒绝重启均覆盖。未连接外网、未使用真实
+  MCP Server、未调用模型或读取客户材料。
+
+LGM1 交付的是受控协议内核，不是面向客户的“已支持 MCP”。真实连接、配置持久化、权限 UI
+和 Commander 调用必须等待 LGM2 的首个客户场景确认。
 
 ### LGM2：首个客户 MCP 闭环
 
@@ -597,9 +617,9 @@ AGENTFLOW_LANGCHAIN_ADAPTERS_ENABLED=false
 
 ## 13. 下一次开发起点
 
-LGM0 已完成。下一次用户明确确认继续后，只启动 **LGM1：MCP Client/Gateway 内核**：
-先建立项目内确定性测试 MCP Server 与无 LLM、无客户数据、无外部副作用的 Gateway
-闭环；不直接迁移 K4，不创建真实外部连接。
+LGM0 与 LGM1 已完成。下一阶段是 **LGM2：首个客户 MCP 闭环**，但实施前必须由用户确认
+一个真实产品场景（只读项目/协作平台查询、受控公开资料检索，或客户已有业务系统的只读查询）。
+未确认场景前，不创建真实连接、不新增设置页或 Commander 路由；LangGraph 仍停留在 LGM3 之后。
 
 推荐顺序：
 
