@@ -610,6 +610,15 @@ LGM1 交付的是受控协议内核，不是面向客户的“已支持 MCP”�
   RuntimeRouter/API/Qt，也没有改变客户默认路径。下一步 LGM5.5 先做 Native 专业步骤 executor 的
   最小复用、父任务 checkpoint/事件/交付回读和明确的故障回退夹具；通过后才讨论默认关闭的开发者试点。
 
+#### LGM5.5 实施记录（2026-09-07，进行中）
+
+- 已将稳定 `delegation_call_id` 注入业务 Adapter 的执行步骤副本。其哈希仅基于 Runtime 任务、
+  invocation、步骤与动作身份；原计划快照不被改写，客户目标、材料引用和正文不参与调用键。
+- 复审发现当前 Native 文档/数据/知识库委派仍自行生成随机子任务 ID，因此尚不能直接把真实
+  executor 接入可恢复 Graph：重放同一 invocation 可能创建第二个专业子任务。后续必须让每个
+  已批准的只读 handoff 消费 `delegation_call_id`，在父任务 checkpoint 合并前核验已有 child
+  task/artifact，才允许进入 Router 开关试点。该风险已明确记录，当前不以“已接入真实业务”误报。
+
 ### LGM6：LangChain 组件收敛
 
 目标：在已有 LangGraph/MCP 实现中评估 LangChain 是否确实减少代码。

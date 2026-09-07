@@ -27,7 +27,10 @@ from app.harness.langgraph_commander_composition_bridge import (
     build_composition_bridge_record,
     mark_composition_bridge_running,
 )
-from app.harness.langgraph_commander_composition_business_adapter import AgentFlowCompositionBusinessAdapter
+from app.harness.langgraph_commander_composition_business_adapter import (
+    AgentFlowCompositionBusinessAdapter,
+    composition_delegation_call_id,
+)
 from app.harness.langgraph_commander_composition_shadow import (
     CommanderCompositionInvocation,
     CommanderCompositionOutcome,
@@ -120,14 +123,21 @@ async def _verify() -> None:
     ensure_langgraph_composition_bridge(build_composition_bridge_record(runtime_task_id=_TASK_ID, plan=plan))
     mark_composition_bridge_running(runtime_task_id=_TASK_ID)
     invocations, _digest = build_composition_invocations(plan)
-    calls: list[tuple[str, str, str]] = []
+    calls: list[tuple[str, str, str, str]] = []
 
     async def executor(
         runtime_task_id: str,
         step: WorkflowStep,
         approved_plan: WorkflowPlan,
     ) -> CommanderCompositionOutcome:
-        calls.append((runtime_task_id, step.id, approved_plan.plan_id))
+        calls.append(
+            (
+                runtime_task_id,
+                step.id,
+                approved_plan.plan_id,
+                str(step.input.get("_agentflow_delegation_call_id", "")),
+            )
+        )
         invocation = next(item for item in invocations if item.step_id == step.id)
         return CommanderCompositionOutcome(
             invocation_id=invocation.invocation_id,
@@ -146,7 +156,10 @@ async def _verify() -> None:
     assert result.summary == "一项已批准的专业步骤已完成；完整结果保留在关联任务交付中。"
     assert result.delegated_task_id == "fixture_child_step_2"
     assert result.source_count == 2
-    assert calls == [(_TASK_ID, "step_2", plan.plan_id)]
+    expected_call_id = composition_delegation_call_id(runtime_task_id=_TASK_ID, invocation=invocations[0])
+    assert expected_call_id.startswith("lgm5call_")
+    assert calls == [(_TASK_ID, "step_2", plan.plan_id, expected_call_id)]
+    assert "_agentflow_delegation_call_id" not in plan.steps[1].input
 
     forged = CommanderCompositionInvocation(
         invocation_id=invocations[1].invocation_id,
@@ -158,7 +171,7 @@ async def _verify() -> None:
     )
     rejected = await adapter(forged)
     assert rejected.status == "failed"
-    assert calls == [(_TASK_ID, "step_2", plan.plan_id)]
+    assert calls == [(_TASK_ID, "step_2", plan.plan_id, expected_call_id)]
 
 
 def main() -> None:

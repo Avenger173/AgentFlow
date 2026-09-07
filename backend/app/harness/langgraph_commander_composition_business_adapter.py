@@ -8,6 +8,8 @@ LangGraph invocation 只携带哈希摘要，不能作为业务输入。每次�
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+import json
+from hashlib import sha256
 
 from app.database.langgraph_bridge_repository import load_langgraph_composition_bridge
 from app.database.task_repository import load_workflow_plan
@@ -71,7 +73,17 @@ class AgentFlowCompositionBusinessAdapter:
             return _failed(invocation, "组合 invocation 找不到对应的已批准专业步骤。")
 
         try:
-            receipt = await self._execute_approved_step(self._runtime_task_id, step, plan)
+            receipt = await self._execute_approved_step(
+                self._runtime_task_id,
+                _step_with_delegation_call_id(
+                    step=step,
+                    delegation_call_id=composition_delegation_call_id(
+                        runtime_task_id=self._runtime_task_id,
+                        invocation=invocation,
+                    ),
+                ),
+                plan,
+            )
         except Exception:
             return _failed(invocation, "专业步骤在受控业务执行器中没有返回可用结果。")
         if receipt.invocation_id != invocation.invocation_id:
@@ -121,3 +133,42 @@ def _failed(
 
 def _nonnegative_or_none(value: int | None) -> int | None:
     return value if isinstance(value, int) and value >= 0 else None
+
+
+def composition_delegation_call_id(
+    *,
+    runtime_task_id: str,
+    invocation: CommanderCompositionInvocation,
+) -> str:
+    """生成单次专业委派的稳定调用标识，不使用客户正文或材料引用。"""
+
+    payload = json.dumps(
+        {
+            "runtime_task_id": runtime_task_id,
+            "invocation_id": invocation.invocation_id,
+            "step_id": invocation.step_id,
+            "agent_id": invocation.agent_id,
+            "action": invocation.action,
+        },
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return f"lgm5call_{sha256(payload.encode('utf-8')).hexdigest()[:24]}"
+
+
+def _step_with_delegation_call_id(
+    *,
+    step: WorkflowStep,
+    delegation_call_id: str,
+) -> WorkflowStep:
+    """只给本次执行器传递受控调用 ID，不修改主库中的原计划快照。"""
+
+    return step.model_copy(
+        update={
+            "input": {
+                **step.input,
+                "_agentflow_delegation_call_id": delegation_call_id,
+            }
+        }
+    )
