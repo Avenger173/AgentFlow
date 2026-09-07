@@ -624,5 +624,17 @@ def _thread_id(task_id: str) -> str:
     return f"lgm5:{task_id}"
 
 
+def composition_graph_identity() -> tuple[str, str]:
+    """返回 LGM5 组合图的稳定身份，供主库 bridge 校验而非客户展示。"""
+
+    return _GRAPH_ID, _GRAPH_VERSION
+
+
+def composition_thread_id(task_id: str) -> str:
+    """返回同一 Runtime 任务在 LangGraph 中唯一的 opaque thread 标识。"""
+
+    return _thread_id(task_id)
+
+
 def _graph_config(task_id: str) -> dict[str, dict[str, str]]:
     return {"configurable": {"thread_id": _thread_id(task_id)}}

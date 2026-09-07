@@ -1147,6 +1147,35 @@ def _apply_commander_conversation_archive_v1(connection: sqlite3.Connection) -> 
     )
 
 
+def _apply_langgraph_runtime_bridges_v1(connection: sqlite3.Connection) -> None:
+    """建立 LGM5 主任务与 LangGraph checkpoint 的脱敏关联表。"""
+
+    connection.executescript(
+        """
+        CREATE TABLE langgraph_runtime_bridges (
+            runtime_task_id TEXT PRIMARY KEY,
+            backend_id TEXT NOT NULL CHECK (backend_id = 'langgraph'),
+            graph_id TEXT NOT NULL,
+            graph_version TEXT NOT NULL,
+            thread_id TEXT NOT NULL UNIQUE,
+            bridge_invocation_key TEXT NOT NULL,
+            plan_digest TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (
+                status IN ('prepared', 'running', 'partial', 'completed', 'blocked', 'failed', 'cancelled')
+            ),
+            delivery_state TEXT NOT NULL CHECK (
+                delivery_state IN ('pending', 'partial', 'completed', 'blocked', 'failed')
+            ),
+            bridge_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (runtime_task_id) REFERENCES workflow_runs(task_id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX idx_langgraph_runtime_bridges_status_updated
+        ON langgraph_runtime_bridges(status, updated_at DESC, runtime_task_id DESC);
+        """
+    )
 _SCHEMA_MIGRATIONS: tuple[_SchemaMigration, ...] = (
     _SchemaMigration(
         migration_id="20260821_knowledge_foundation_v1",
@@ -1246,5 +1275,13 @@ _SCHEMA_MIGRATIONS: tuple[_SchemaMigration, ...] = (
             "complete_sanitized_archive_bounded_prompt_context"
         ),
         apply=_apply_commander_conversation_archive_v1,
+    ),
+    _SchemaMigration(
+        migration_id="20260907_langgraph_runtime_bridges_v1",
+        signature=(
+            "langgraph_runtime_bridges:v1;runtime_task_unique;opaque_thread_unique;"
+            "plan_digest_and_invocation_key_only;no_customer_content"
+        ),
+        apply=_apply_langgraph_runtime_bridges_v1,
     ),
 )

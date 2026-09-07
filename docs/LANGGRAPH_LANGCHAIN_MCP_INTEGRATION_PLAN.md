@@ -1,8 +1,8 @@
 # LangGraph、LangChain 与 MCP 平台集成计划
 
-最后更新：2026-09-04
+最后更新：2026-09-07
 
-状态：**LGM0-LGM4 已完成工程影子验证，LGM5.1-LGM5.2 Commander 组合任务影子图已通过恢复和 Native 对照回归。MCP、LangGraph 与 LangChain 依赖已在开发后端环境锁定；项目已提供一个默认停用、固定边界的 Wikimedia 公开资料 MCP 客户闭环。Native Runtime 仍是唯一客户默认执行路径；LGM5 尚未注册客户 Router/API/Qt 入口，也未引入通用远程 MCP 连接。**
+状态：**LGM0-LGM4 已完成工程影子验证，LGM5.1-LGM5.3 已完成 Commander 组合任务影子图、Native 对照及主任务/Graph checkpoint bridge 准入。MCP、LangGraph 与 LangChain 依赖已在开发后端环境锁定；项目已提供一个默认停用、固定边界的 Wikimedia 公开资料 MCP 客户闭环。Native Runtime 仍是唯一客户默认执行路径；LGM5 尚未注册客户 Router/API/Qt 入口，也未引入通用远程 MCP 连接。**
 
 本文是三项技术进入 AgentFlow 的实施依据。目标不是为简历增加名词，而是用成熟框架和开放协议改善复杂工作流恢复、外部工具接入、组件复用和长期可维护性。任何阶段只有产生可验证的客户价值并通过回归后，才能写入“已实现”状态。
 
@@ -572,6 +572,27 @@ LGM1 交付的是受控协议内核，不是面向客户的“已支持 MCP”�
 - `verify_commander_c63_composition.py`、`verify_commander_c64_runtime.py`、两个 LGM5 专项回归都通过。
   下一步不是直接上线：先定义并实现正式业务 bridge 的幂等键、主任务 checkpoint/Graph checkpoint
   映射、客户事件和 delivery card 映射，再以受审计开关讨论客户主动试点。
+
+#### LGM5.3 实施记录（2026-09-07）
+
+- 新增 `LangGraphCompositionBridgeRecord`、`langgraph_runtime_bridges` 前向 SQLite migration 和
+  `langgraph_bridge_repository`。每个已创建的 AgentFlow Runtime 任务最多绑定一条组合 bridge；
+  主库记录图 ID/版本、opaque thread ID、计划摘要、稳定调用键、完成/失败 invocation 集合和受限
+  交付状态。它不保存客户目标、材料名称、正文、路径、模型上下文或凭据。
+- `build_composition_bridge_record()` 用 Runtime 任务 ID、图身份、已批准计划摘要和 invocation ID
+  集合计算稳定调用键；同一 Runtime 重复提交相同 bridge 会读取已有记录，不会建立第二条专业调用链。
+  改变计划摘要、图版本或 thread ID 会被明确拒绝。终态不能回退，已经完成的 invocation 也不能从
+  检查点中移除。
+- `mark_composition_bridge_running()` 与 `sync_composition_bridge_result()` 将影子图的
+  `running/partial/completed/blocked/failed` 受限结果投影到 AgentFlow 主库。完整专业结论、真实
+  artifact 和客户交付仍只能由既有 Runtime 任务表、`project_runtime_event()` 与
+  `build_delivery_card()` 持有；bridge 不建立第二份客户事实或绕过现有 WebSocket/结果卡边界。
+- `verify_lgm5_composition_bridge_mapping.py` 使用临时主库和 Graph SQLite 覆盖“同任务重复准备、
+  不同计划摘要拒绝、数据分支首次失败、恢复时不重跑文档分支、最终完成”的链路，并检查 bridge JSON
+  与 Graph checkpoint 均不存在夹具目标或材料引用。没有调用真实模型、网络、MCP 或客户文件。
+- 本阶段仍没有客户 Router/API/Qt 入口，也没有正式专业 Agent 业务调用。下一步 LGM5.4 才能在
+  `AGENTFLOW_LANGGRAPH_ENABLED` 默认关闭的前提下，设计只读组合任务的业务 Adapter、现有事件投影/
+  交付卡接线、故障回退及受审计的开发者试点条件；未满足 Native 回退和真实任务验收前不得开放。
 
 ### LGM6：LangChain 组件收敛
 

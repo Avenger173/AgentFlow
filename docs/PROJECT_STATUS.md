@@ -52,7 +52,7 @@
 
 > **2026-09-04 LGM4.3 影子准入判定：**新增无副作用的 K4 Native/影子对照报告，核对范围哈希、最终结果、覆盖、报告资格和来源闭合；完全一致时才给出 `passed`，篡改结果摘要会明确失败。它同时保守声明 `developer_trial_ready=false`：在客户明确授权真实材料/模型验收、维护复杂度复盘及受审计试点 Router 开关均完成前，LangGraph 仍不能接管任何客户 K4 任务。
 
-> **2026-09-07 LGM5.1-LGM5.2 Commander 组合影子图：**新增 `LangGraphCommanderCompositionShadowBackend`，只接收已经通过 C6.4 Native Runtime 准入的文档/数据/知识库只读组合计划。动态 invocation 图以步骤、动作、材料摘要和输入摘要哈希建立独立分支；一个分支失败不会取消其它独立分支，恢复同一 task 时只重派发失败/未开始分支，最终汇总只使用实际成功的受限摘要。专项夹具已验证“文档完成、数据首次失败、恢复后仅数据重试、完整汇总”，并检查 Graph SQLite checkpoint 不含原始目标、材料名或正文。新增 Native/Graph 对照后，同一三分支 C6.4 fixture 在两条路径上的成功/失败子任务集合与 `partial` 汇总范围完全一致；客户明确要求组合文档、数据和资料库时也不会再被单一“资料库”关键词抢占路由。该能力没有 API、Qt、客户 Router 或正式业务委派入口，Native 仍是唯一客户执行路径；下一步才定义正式 bridge 的幂等、双 checkpoint 映射与客户交付准入。
+> **2026-09-07 LGM5.1-LGM5.3 Commander 组合影子图与 bridge 准入：**`LangGraphCommanderCompositionShadowBackend` 只接收已经通过 C6.4 Native Runtime 准入的文档/数据/知识库只读组合计划。动态 invocation 图以步骤、动作、材料摘要和输入摘要哈希建立独立分支；一个分支失败不会取消其它独立分支，恢复同一 task 时只重派发失败/未开始分支，最终汇总只使用实际成功的受限摘要。专项夹具已验证“文档完成、数据首次失败、恢复后仅数据重试、完整汇总”，并检查 Graph SQLite checkpoint 不含原始目标、材料名或正文；同一三分支 C6.4 fixture 在 Native/Graph 两条路径上的完成/失败集合与 `partial` 汇总范围也完全一致。LGM5.3 新增主库 `langgraph_runtime_bridges` 关联表和稳定调用键：同一 Runtime 只能绑定同一图版本、线程与计划摘要，恢复不会建立第二条专业调用链，终态与已完成 invocation 不能回退；bridge 与 Graph checkpoint 均只保存脱敏关联事实。该能力仍没有 API、Qt、客户 Router 或正式业务委派入口，Native 仍是唯一客户执行路径；下一步才讨论默认关闭的业务 Adapter、现有事件/交付卡接线、故障回退和开发者试点准入。
 
 ## 2026-08-25 知识库 K5.4：索引性能事实与解析复用核验
 
