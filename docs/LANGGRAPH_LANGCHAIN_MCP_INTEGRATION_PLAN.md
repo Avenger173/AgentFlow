@@ -2,7 +2,7 @@
 
 最后更新：2026-09-07
 
-状态：**LGM0-LGM4 已完成工程影子验证，LGM5.1-LGM5.5 已完成 Commander 组合任务影子图、Native 对照、主任务/Graph checkpoint bridge、业务 Adapter 准入及稳定只读子任务调用键。MCP、LangGraph 与 LangChain 依赖已在开发后端环境锁定；项目已提供一个默认停用、固定边界的 Wikimedia 公开资料 MCP 客户闭环。Native Runtime 仍是唯一客户默认执行路径；LGM5 尚未注册客户 Router/API/Qt 入口，也未引入通用远程 MCP 连接。**
+状态：**LGM0-LGM4 已完成工程影子验证，LGM5.1-LGM5.6 已完成 Commander 组合任务影子图、Native 对照、主任务/Graph checkpoint bridge、业务 Adapter、稳定只读子任务调用键及单父任务协调器。MCP、LangGraph 与 LangChain 依赖已在开发后端环境锁定；项目已提供一个默认停用、固定边界的 Wikimedia 公开资料 MCP 客户闭环。Native Runtime 仍是唯一客户默认执行路径；LGM5 尚未注册客户 Router/API/Qt 入口，也未引入通用远程 MCP 连接。**
 
 本文是三项技术进入 AgentFlow 的实施依据。目标不是为简历增加名词，而是用成熟框架和开放协议改善复杂工作流恢复、外部工具接入、组件复用和长期可维护性。任何阶段只有产生可验证的客户价值并通过回归后，才能写入“已实现”状态。
 
@@ -629,18 +629,37 @@ LGM1 交付的是受控协议内核，不是面向客户的“已支持 MCP”�
   合并 Graph/Native checkpoint、事件、artifact 和 delivery，覆盖中断后的回读、部分完成与
   Native 故障回退；在这些条件完成前不得开放 Router/API/Qt 试点。
 
-#### LGM5.6：父任务协调与故障回退（待开始）
+#### LGM5.6 实施记录（2026-09-07）
 
-目标：让真实组合执行仍由 AgentFlow 的单一父任务协调器持有 SQLite checkpoint、WebSocket
-事件、artifact 和客户交付，而 LangGraph 只负责受限 invocation 的调度与恢复。
+- 新增 `LangGraphCompositionParentCoordinator` 与 `NativeCompositionStepCollector`。业务 Adapter
+  注入的 Native executor 仍走既有只读 handoff；每个 Graph 分支只返回受限回执并被 Collector
+  暂存，绝不从并发分支直接写父任务 SQLite。协调器随后按已批准计划顺序一次性合并
+  `WorkflowStepRun`、tool call、delegation artifact、运行指标和 append-only 事件。
+- 第一次出现部分完成时，父任务显式保持 `blocked` 而非假终态 `completed`，但已经形成的受控
+  synthesis 仍可通过既有 DeliveryCard 展示。恢复时 Graph 只派发失败 invocation，协调器保留
+  原有完成步骤/产物，并且只为本轮新回执追加事件；全部分支完成后才把父任务写为 `completed`。
+- Graph 无法启动且尚未产生任何 Native 回执时，才允许注入的 Native fallback 接管；一旦已有
+  专业回执或父 checkpoint 合并失败，bridge 立即收束为 `failed`，禁止自动回退造成重复副作用。
+  该回退仅是受控接口/夹具，不调用现有客户 Router。
+- `verify_lgm5_parent_coordinator.py` 以临时主库与 Graph SQLite 覆盖“文档/知识库完成、数据
+  首次失败 -> 部分交付 -> 恢复时仅数据重跑 -> 全部完成”的主库步骤、artifact URI、工具调用、
+  事件和 DeliveryCard 一致性；还覆盖无回执 Graph 恢复失败时的 Native fallback、父 checkpoint
+  写入失败后 bridge 失败收束。未调用真实模型、网络、MCP 或客户文件。
+- LGM5.6 仍未注册 RuntimeRouter、FastAPI、Qt 或客户功能开关。下一步不应直接灰度上线，而是
+  先做 LGM5.7 的独立开发者试点准入：真实材料/模型授权验收、Native/Graph 对照、启动/内存
+  基线和可撤销开关必须同时具备，任何一项不通过都维持 Native 默认路径。
+
+#### LGM5.7：开发者试点准入（待开始）
+
+目标：定义仅开发者显式开启的试点边界与回退检查，而不是把影子基础设施直接暴露给客户。
 
 任务：
 
-- 注入既有只读步骤执行器，按稳定 child task ID 回读或执行；
-- 禁止 Graph 并发分支直接改写父任务 SQLite 快照，统一由父协调器顺序合并；
-- 对照 Native/Graph 的完成集合、事件顺序、artifact URI、DeliveryCard 与部分完成结果；
-- 覆盖进程恢复、一个分支失败、子任务已完成回读、父 checkpoint 写入失败和 Native 回退；
-- 默认关闭且不注册客户 Router/API/Qt，直到明确通过独立开发者试点门槛。
+- 固定只读组合计划、真实材料/模型验收授权、事件与交付对照样本；
+- 比较 Native/Graph 的调用集合、来源/产物、恢复语义、耗时与常驻资源；
+- 建立默认关闭、任务级可追溯、开始前可撤销的开发者开关；
+- 任一 bridge/Graph/父 checkpoint 异常时停止试点任务并明确回到 Native 重试路线；
+- 不增加客户 UI、不让模型选择 Backend、不扩大 Agent/action/权限边界。
 
 ### LGM6：LangChain 组件收敛
 
