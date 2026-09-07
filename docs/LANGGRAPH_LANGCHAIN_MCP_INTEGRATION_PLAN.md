@@ -2,7 +2,7 @@
 
 最后更新：2026-09-07
 
-状态：**LGM0-LGM4 已完成工程影子验证，LGM5.1-LGM5.6 已完成 Commander 组合任务影子图、Native 对照、主任务/Graph checkpoint bridge、业务 Adapter、稳定只读子任务调用键及单父任务协调器。MCP、LangGraph 与 LangChain 依赖已在开发后端环境锁定；项目已提供一个默认停用、固定边界的 Wikimedia 公开资料 MCP 客户闭环。Native Runtime 仍是唯一客户默认执行路径；LGM5 尚未注册客户 Router/API/Qt 入口，也未引入通用远程 MCP 连接。**
+状态：**LGM0-LGM4 已完成工程影子验证，LGM5.1-LGM5.6 已完成 Commander 组合任务影子图、Native 对照、主任务/Graph checkpoint bridge、业务 Adapter、稳定只读子任务调用键及单父任务协调器；LGM5.7 已完成默认关闭的开发者试点准入/撤销合同，真实材料与模型的试点验收尚未开始。MCP、LangGraph 与 LangChain 依赖已在开发后端环境锁定；项目已提供一个默认停用、固定边界的 Wikimedia 公开资料 MCP 客户闭环。Native Runtime 仍是唯一客户默认执行路径；LGM5 尚未注册客户 Router/API/Qt 入口，也未引入通用远程 MCP 连接。**
 
 本文是三项技术进入 AgentFlow 的实施依据。目标不是为简历增加名词，而是用成熟框架和开放协议改善复杂工作流恢复、外部工具接入、组件复用和长期可维护性。任何阶段只有产生可验证的客户价值并通过回归后，才能写入“已实现”状态。
 
@@ -649,7 +649,7 @@ LGM1 交付的是受控协议内核，不是面向客户的“已支持 MCP”�
   先做 LGM5.7 的独立开发者试点准入：真实材料/模型授权验收、Native/Graph 对照、启动/内存
   基线和可撤销开关必须同时具备，任何一项不通过都维持 Native 默认路径。
 
-#### LGM5.7：开发者试点准入（待开始）
+#### LGM5.7：开发者试点准入（准入合同完成，真实试点待授权）
 
 目标：定义仅开发者显式开启的试点边界与回退检查，而不是把影子基础设施直接暴露给客户。
 
@@ -660,6 +660,28 @@ LGM1 交付的是受控协议内核，不是面向客户的“已支持 MCP”�
 - 建立默认关闭、任务级可追溯、开始前可撤销的开发者开关；
 - 任一 bridge/Graph/父 checkpoint 异常时停止试点任务并明确回到 Native 重试路线；
 - 不增加客户 UI、不让模型选择 Backend、不扩大 Agent/action/权限边界。
+
+#### LGM5.7 实施记录（2026-09-07）
+
+- 新增 `LangGraphCompositionTrialEvidence` 和 `LangGraphCompositionTrialAdmissionRecord`。记录只保存
+  已批准计划/材料范围/模型配置的摘要、对照与基线事实、以及不透明审批引用；不写客户目标、
+  材料名、正文、模型名、凭据或 Graph checkpoint。`langgraph_composition_trial_admissions` 以
+  Runtime task 为唯一键，保留 `admitted`、`rejected`、`revoked` 三种可追溯状态。
+- `evaluate_composition_trial_admission()` 同时核验 C6.4 只读计划、计划摘要、真实材料/模型授权、
+  Native/Graph 调用集合、事件/交付、来源/产物、恢复语义、Native 重试路线，以及启动与常驻内存
+  相对 Native 基线不超过 10%。确定性 fixture 明确不能构成真实授权证据。
+- 开发者必须同时设置 `AGENTFLOW_LANGGRAPH_ENABLED=true` 与
+  `AGENTFLOW_LANGGRAPH_COMPOSITION_TRIAL=developer-approved`；后者为精确值，并会在 Graph 创建前
+  重新检查。`revoke_composition_developer_trial()` 可在启动前不可逆撤销同一任务的准入。
+- `LangGraphCompositionDeveloperTrialRunner` 只供内部脚本调用，未注册 RuntimeRouter/FastAPI/Qt。
+  coordinator 的 bridge、Graph 或父 checkpoint 异常会返回明确的 `native_retry_required`，不会静默
+  替换为其它后端或扩大现有 Native 权限。
+- `verify_lgm5_trial_admission.py` 用临时 SQLite 与伪协调器覆盖：通用开关误开、fixture、资源超线、
+  计划不一致和撤销均不可执行；已准入的 Graph 故障只给出 Native 重试路线。未调用真实模型、网络、
+  MCP 或客户文件。
+- **尚未进行真实材料/模型的开发者验收，也没有任何客户流量进入 LangGraph。**下一步只能在开发者
+  明确授权、准备固定只读组合计划和实际基线采样后，手动运行一次受审计试点；失败即停驻并按 Native
+  重试，不能据此注册客户 Router/API/Qt。
 
 ### LGM6：LangChain 组件收敛
 

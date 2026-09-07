@@ -1176,6 +1176,27 @@ def _apply_langgraph_runtime_bridges_v1(connection: sqlite3.Connection) -> None:
         ON langgraph_runtime_bridges(status, updated_at DESC, runtime_task_id DESC);
         """
     )
+
+
+def _apply_langgraph_composition_trial_admissions_v1(connection: sqlite3.Connection) -> None:
+    """建立 LGM5.7 开发者试点的脱敏准入/撤销记录。"""
+
+    connection.executescript(
+        """
+        CREATE TABLE langgraph_composition_trial_admissions (
+            runtime_task_id TEXT PRIMARY KEY,
+            plan_digest TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('admitted', 'rejected', 'revoked')),
+            admission_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (runtime_task_id) REFERENCES workflow_runs(task_id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX idx_langgraph_composition_trial_admissions_status_updated
+        ON langgraph_composition_trial_admissions(status, updated_at DESC, runtime_task_id DESC);
+        """
+    )
 _SCHEMA_MIGRATIONS: tuple[_SchemaMigration, ...] = (
     _SchemaMigration(
         migration_id="20260821_knowledge_foundation_v1",
@@ -1283,5 +1304,13 @@ _SCHEMA_MIGRATIONS: tuple[_SchemaMigration, ...] = (
             "plan_digest_and_invocation_key_only;no_customer_content"
         ),
         apply=_apply_langgraph_runtime_bridges_v1,
+    ),
+    _SchemaMigration(
+        migration_id="20260907_langgraph_composition_trial_admissions_v1",
+        signature=(
+            "langgraph_composition_trial_admissions:v1;runtime_task_unique;plan_digest_and_opaque_evidence_only;"
+            "admitted_rejected_revoked;no_customer_content"
+        ),
+        apply=_apply_langgraph_composition_trial_admissions_v1,
     ),
 )
