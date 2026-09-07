@@ -2,7 +2,7 @@
 
 最后更新：2026-09-07
 
-状态：**LGM0-LGM4 已完成工程影子验证，LGM5.1-LGM5.3 已完成 Commander 组合任务影子图、Native 对照及主任务/Graph checkpoint bridge 准入。MCP、LangGraph 与 LangChain 依赖已在开发后端环境锁定；项目已提供一个默认停用、固定边界的 Wikimedia 公开资料 MCP 客户闭环。Native Runtime 仍是唯一客户默认执行路径；LGM5 尚未注册客户 Router/API/Qt 入口，也未引入通用远程 MCP 连接。**
+状态：**LGM0-LGM4 已完成工程影子验证，LGM5.1-LGM5.5 已完成 Commander 组合任务影子图、Native 对照、主任务/Graph checkpoint bridge、业务 Adapter 准入及稳定只读子任务调用键。MCP、LangGraph 与 LangChain 依赖已在开发后端环境锁定；项目已提供一个默认停用、固定边界的 Wikimedia 公开资料 MCP 客户闭环。Native Runtime 仍是唯一客户默认执行路径；LGM5 尚未注册客户 Router/API/Qt 入口，也未引入通用远程 MCP 连接。**
 
 本文是三项技术进入 AgentFlow 的实施依据。目标不是为简历增加名词，而是用成熟框架和开放协议改善复杂工作流恢复、外部工具接入、组件复用和长期可维护性。任何阶段只有产生可验证的客户价值并通过回归后，才能写入“已实现”状态。
 
@@ -610,14 +610,37 @@ LGM1 交付的是受控协议内核，不是面向客户的“已支持 MCP”�
   RuntimeRouter/API/Qt，也没有改变客户默认路径。下一步 LGM5.5 先做 Native 专业步骤 executor 的
   最小复用、父任务 checkpoint/事件/交付回读和明确的故障回退夹具；通过后才讨论默认关闭的开发者试点。
 
-#### LGM5.5 实施记录（2026-09-07，进行中）
+#### LGM5.5 实施记录（2026-09-07）
 
 - 已将稳定 `delegation_call_id` 注入业务 Adapter 的执行步骤副本。其哈希仅基于 Runtime 任务、
   invocation、步骤与动作身份；原计划快照不被改写，客户目标、材料引用和正文不参与调用键。
-- 复审发现当前 Native 文档/数据/知识库委派仍自行生成随机子任务 ID，因此尚不能直接把真实
-  executor 接入可恢复 Graph：重放同一 invocation 可能创建第二个专业子任务。后续必须让每个
-  已批准的只读 handoff 消费 `delegation_call_id`，在父任务 checkpoint 合并前核验已有 child
-  task/artifact，才允许进入 Router 开关试点。该风险已明确记录，当前不以“已接入真实业务”误报。
+- Native 的文档、数据预览和知识库问答 handoff 现会严格校验该调用键，并把合法键稳定映射为
+  对应子任务 ID；普通 Native 步骤未携带键时仍使用原有随机 ID。三条只读路径都会先回读已完成
+  的 child task 快照，命中后直接复用既有结论、数量事实和关联任务 URI，不再次创建任务、读取
+  材料或调用模型。数据预览补齐了与文档/知识库对等的任务回读入口。
+- 未完成或失败的只读 child task 不会被伪装成成功结果；它们仍按既有 Native retry 语义在同一
+  稳定子任务 ID 下重新执行，并保留父任务可追溯的失败原因。此阶段没有把稳定内部键展示给客户
+  聊天正文或改写已批准计划。
+- `verify_lgm5_stable_delegation_replay.py` 以完成快照夹具覆盖三类 handoff：每条路径均确认稳定
+  子任务 ID 与关联 URI 一致，且任何 create/run 函数若被再次调用都会使回归失败；无调用键的
+  普通 Native 步骤仍走 UUID 路径。未调用真实模型、网络、MCP 或客户文件。
+- LGM5.5 解决的是“同一只读 invocation 不重复创建已完成 child task”的前置条件，**尚未**把
+  LangGraph Adapter 注册为真实父 Runtime executor。下一步 LGM5.6 需要在单一父任务协调器中
+  合并 Graph/Native checkpoint、事件、artifact 和 delivery，覆盖中断后的回读、部分完成与
+  Native 故障回退；在这些条件完成前不得开放 Router/API/Qt 试点。
+
+#### LGM5.6：父任务协调与故障回退（待开始）
+
+目标：让真实组合执行仍由 AgentFlow 的单一父任务协调器持有 SQLite checkpoint、WebSocket
+事件、artifact 和客户交付，而 LangGraph 只负责受限 invocation 的调度与恢复。
+
+任务：
+
+- 注入既有只读步骤执行器，按稳定 child task ID 回读或执行；
+- 禁止 Graph 并发分支直接改写父任务 SQLite 快照，统一由父协调器顺序合并；
+- 对照 Native/Graph 的完成集合、事件顺序、artifact URI、DeliveryCard 与部分完成结果；
+- 覆盖进程恢复、一个分支失败、子任务已完成回读、父 checkpoint 写入失败和 Native 回退；
+- 默认关闭且不注册客户 Router/API/Qt，直到明确通过独立开发者试点门槛。
 
 ### LGM6：LangChain 组件收敛
 

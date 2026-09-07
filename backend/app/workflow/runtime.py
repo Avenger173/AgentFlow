@@ -52,9 +52,10 @@ from app.services.workspace_documents import (
     read_workspace_document_preview,
     search_workspace_documents,
 )
-from app.services.document_agent import run_document_agent
+from app.services.document_agent import get_document_agent_result, run_document_agent
 from app.services.data_analysis_delegate import (
     create_data_analysis_preview_queued_run,
+    get_data_analysis_preview_task_result,
     run_data_analysis_preview_task,
 )
 from app.services.data_chart_delivery import (
@@ -122,6 +123,8 @@ _COMPOSITION_SAFE_ACTIONS = {
     ("data_agent", "analyze_dataset"),
     ("knowledge_agent", "answer_question"),
 }
+_DELEGATION_CALL_ID_PREFIX = "lgm5call_"
+_DELEGATION_CALL_ID_HEX_LENGTH = 24
 _NON_RETRYABLE_ERROR_CODES = {
     "artifact_verification_failed",
     "data_transformation_failed",
@@ -141,6 +144,25 @@ _NON_RETRYABLE_ERROR_CODES = {
 }
 
 RuntimeEventReporter = Callable[[TaskLogEvent], None]
+
+
+def _delegated_task_id_for_step(*, task_prefix: str, step: WorkflowStep) -> str:
+    """为恢复型组合步骤复用稳定子任务 ID，普通 Native 步骤保持原有随机 ID。
+
+    ``_agentflow_delegation_call_id`` 只能由 LGM5 业务 Adapter 注入到内存中的步骤副本，
+    不会改写主库计划。这里仍做严格形状校验，避免任意计划字段影响子任务命名；未携带或
+    非法时继续使用既有 UUID 路径，保证普通 Native Runtime 行为不变。
+    """
+
+    candidate = str(step.input.get("_agentflow_delegation_call_id", "")).strip()
+    expected_length = len(_DELEGATION_CALL_ID_PREFIX) + _DELEGATION_CALL_ID_HEX_LENGTH
+    if (
+        len(candidate) == expected_length
+        and candidate.startswith(_DELEGATION_CALL_ID_PREFIX)
+        and all(character in "0123456789abcdef" for character in candidate[len(_DELEGATION_CALL_ID_PREFIX) :])
+    ):
+        return f"{task_prefix}_{candidate}"
+    return f"{task_prefix}_{uuid4().hex[:12]}"
 
 
 def execute_workflow_runtime(task_id: str) -> WorkflowExecutionResponse | None:
@@ -2340,36 +2362,41 @@ def _execute_document_agent_handoff(
             attempt=attempt,
         )
 
-    async def _run_with_timeout():
-        return await asyncio.wait_for(
-            run_document_agent(request),
-            timeout=timeout_ms / 1000,
-        )
+    delegated_task_id = _delegated_task_id_for_step(task_prefix="task_document", step=step)
+    # LGM5 恢复会以同一受控调用键再次进入这里。已完成的只读子任务可直接从自身快照
+    # 回读，不能再次消耗模型或创建第二条关联任务。
+    response = get_document_agent_result(delegated_task_id)
+    if response is None or response.status != "completed":
+        async def _run_with_timeout():
+            return await asyncio.wait_for(
+                run_document_agent(request, task_id=delegated_task_id),
+                timeout=timeout_ms / 1000,
+            )
 
-    try:
-        response = asyncio.run(_run_with_timeout())
-    except TimeoutError:
-        return _failed_safe_step(
-            runtime_task_id=runtime_task_id,
-            step=step,
-            started_at=started_at,
-            error_code="tool_timeout",
-            message="文档助手在允许时间内没有完成受控分析。",
-            details={"timeout_ms": timeout_ms},
-            timeout_ms=timeout_ms,
-            attempt=attempt,
-        )
-    except Exception as exc:
-        return _failed_safe_step(
-            runtime_task_id=runtime_task_id,
-            step=step,
-            started_at=started_at,
-            error_code="agent_delegate_failed",
-            message="文档助手委派过程发生未预期错误。",
-            details={"reason": str(exc)},
-            timeout_ms=timeout_ms,
-            attempt=attempt,
-        )
+        try:
+            response = asyncio.run(_run_with_timeout())
+        except TimeoutError:
+            return _failed_safe_step(
+                runtime_task_id=runtime_task_id,
+                step=step,
+                started_at=started_at,
+                error_code="tool_timeout",
+                message="文档助手在允许时间内没有完成受控分析。",
+                details={"timeout_ms": timeout_ms, "delegated_task_id": delegated_task_id},
+                timeout_ms=timeout_ms,
+                attempt=attempt,
+            )
+        except Exception as exc:
+            return _failed_safe_step(
+                runtime_task_id=runtime_task_id,
+                step=step,
+                started_at=started_at,
+                error_code="agent_delegate_failed",
+                message="文档助手委派过程发生未预期错误。",
+                details={"reason": str(exc), "delegated_task_id": delegated_task_id},
+                timeout_ms=timeout_ms,
+                attempt=attempt,
+            )
 
     result = {
         "delegated_task_id": response.task_id,
@@ -2494,39 +2521,41 @@ def _execute_data_analysis_handoff(
             attempt=attempt,
         )
 
-    delegated_task_id = f"task_data_preview_{uuid4().hex[:12]}"
-    create_data_analysis_preview_queued_run(task_id=delegated_task_id, request=request)
+    delegated_task_id = _delegated_task_id_for_step(task_prefix="task_data_preview", step=step)
+    response = get_data_analysis_preview_task_result(delegated_task_id)
+    if response is None or response.status != "completed":
+        create_data_analysis_preview_queued_run(task_id=delegated_task_id, request=request)
 
-    async def _run_with_timeout():
-        return await asyncio.wait_for(
-            run_data_analysis_preview_task(task_id=delegated_task_id, request=request),
-            timeout=timeout_ms / 1000,
-        )
+        async def _run_with_timeout():
+            return await asyncio.wait_for(
+                run_data_analysis_preview_task(task_id=delegated_task_id, request=request),
+                timeout=timeout_ms / 1000,
+            )
 
-    try:
-        response = asyncio.run(_run_with_timeout())
-    except TimeoutError:
-        return _data_delegate_failure(
-            runtime_task_id=runtime_task_id,
-            step=step,
-            started_at=started_at,
-            timeout_ms=timeout_ms,
-            attempt=attempt,
-            delegated_task_id=delegated_task_id,
-            error_code="tool_timeout",
-            message="数据工作台在允许时间内没有完成只读分析预览；未写入任何数据文件。",
-        )
-    except Exception:
-        return _data_delegate_failure(
-            runtime_task_id=runtime_task_id,
-            step=step,
-            started_at=started_at,
-            timeout_ms=timeout_ms,
-            attempt=attempt,
-            delegated_task_id=delegated_task_id,
-            error_code="agent_delegate_failed",
-            message="数据工作台委派过程发生未预期错误；可从关联子任务查看当前状态。",
-        )
+        try:
+            response = asyncio.run(_run_with_timeout())
+        except TimeoutError:
+            return _data_delegate_failure(
+                runtime_task_id=runtime_task_id,
+                step=step,
+                started_at=started_at,
+                timeout_ms=timeout_ms,
+                attempt=attempt,
+                delegated_task_id=delegated_task_id,
+                error_code="tool_timeout",
+                message="数据工作台在允许时间内没有完成只读分析预览；未写入任何数据文件。",
+            )
+        except Exception:
+            return _data_delegate_failure(
+                runtime_task_id=runtime_task_id,
+                step=step,
+                started_at=started_at,
+                timeout_ms=timeout_ms,
+                attempt=attempt,
+                delegated_task_id=delegated_task_id,
+                error_code="agent_delegate_failed",
+                message="数据工作台委派过程发生未预期错误；可从关联子任务查看当前状态。",
+            )
 
     result = {
         "delegated_task_id": response.task_id,
@@ -3441,39 +3470,41 @@ def _execute_knowledge_agent_handoff(
             attempt=attempt,
         )
 
-    delegated_task_id = f"task_kb_{uuid4().hex[:12]}"
-    create_knowledge_answer_queued_run(task_id=delegated_task_id, request=request)
+    delegated_task_id = _delegated_task_id_for_step(task_prefix="task_kb", step=step)
+    response = get_knowledge_answer_task_result(delegated_task_id)
+    if response is None or response.status != "completed" or response.result is None:
+        create_knowledge_answer_queued_run(task_id=delegated_task_id, request=request)
 
-    async def _run_with_timeout():
-        return await asyncio.wait_for(
-            run_knowledge_answer_task(task_id=delegated_task_id, request=request),
-            timeout=timeout_ms / 1000,
-        )
+        async def _run_with_timeout():
+            return await asyncio.wait_for(
+                run_knowledge_answer_task(task_id=delegated_task_id, request=request),
+                timeout=timeout_ms / 1000,
+            )
 
-    try:
-        response = asyncio.run(_run_with_timeout())
-    except TimeoutError:
-        return _failed_safe_step(
-            runtime_task_id=runtime_task_id,
-            step=step,
-            started_at=started_at,
-            error_code="tool_timeout",
-            message="知识库助手在允许时间内没有完成可信问答。",
-            details={"timeout_ms": timeout_ms, "delegated_task_id": delegated_task_id},
-            timeout_ms=timeout_ms,
-            attempt=attempt,
-        )
-    except Exception as exc:
-        return _failed_safe_step(
-            runtime_task_id=runtime_task_id,
-            step=step,
-            started_at=started_at,
-            error_code="agent_delegate_failed",
-            message="知识库助手委派过程发生未预期错误。",
-            details={"reason": str(exc), "delegated_task_id": delegated_task_id},
-            timeout_ms=timeout_ms,
-            attempt=attempt,
-        )
+        try:
+            response = asyncio.run(_run_with_timeout())
+        except TimeoutError:
+            return _failed_safe_step(
+                runtime_task_id=runtime_task_id,
+                step=step,
+                started_at=started_at,
+                error_code="tool_timeout",
+                message="知识库助手在允许时间内没有完成可信问答。",
+                details={"timeout_ms": timeout_ms, "delegated_task_id": delegated_task_id},
+                timeout_ms=timeout_ms,
+                attempt=attempt,
+            )
+        except Exception as exc:
+            return _failed_safe_step(
+                runtime_task_id=runtime_task_id,
+                step=step,
+                started_at=started_at,
+                error_code="agent_delegate_failed",
+                message="知识库助手委派过程发生未预期错误。",
+                details={"reason": str(exc), "delegated_task_id": delegated_task_id},
+                timeout_ms=timeout_ms,
+                attempt=attempt,
+            )
 
     answer = response.result.answer if response.result is not None else None
     result = {

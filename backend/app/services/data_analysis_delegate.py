@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import perf_counter
 
-from app.database.task_repository import save_workflow_run
+from app.database.task_repository import load_workflow_run, save_workflow_run
 from app.schemas.data_agent import DataAnalysisPreviewRequest, DataAnalysisPreviewResponse
 from app.schemas.events import TaskLogEvent
 from app.schemas.model import ModelRouteAuditSnapshot
@@ -172,6 +172,33 @@ async def run_data_analysis_preview_task(
         duration_ms=_duration_ms(started_clock),
         events=running_events,
         model_routes=model_routes,
+    )
+
+
+def get_data_analysis_preview_task_result(task_id: str) -> DataAnalysisDelegationResult | None:
+    """从统一任务快照回读已完成的数据预览，供恢复型委派避免重复计算。"""
+
+    run = load_workflow_run(task_id)
+    if run is None or run.status not in {"completed", "failed"}:
+        return None
+    step = next((item for item in run.steps if item.step_id == DATA_ANALYSIS_PREVIEW_STEP_ID), None)
+    if step is None or step.agent != DATA_ANALYSIS_AGENT_ID:
+        return None
+    result = step.output.get("result")
+    if not isinstance(result, dict) or str(result.get("delegated_task_id", "")) != task_id:
+        return None
+    status = str(result.get("agent_status", ""))
+    if status not in {"completed", "failed"}:
+        return None
+    return DataAnalysisDelegationResult(
+        task_id=task_id,
+        status=status,
+        summary=run.summary,
+        message=str(result.get("reply", step.message)),
+        source_sha256=str(result.get("source_sha256", "")),
+        insight_mode=str(result.get("insight_mode", "local")),
+        chart_count=_nonnegative_int(result.get("chart_count")),
+        table_count=_nonnegative_int(result.get("table_count")),
     )
 
 
@@ -376,6 +403,10 @@ def _safe_result(*, task_id: str, preview: DataAnalysisPreviewResponse) -> dict[
         "metric_count": len(preview.metrics),
         "read_only": True,
     }
+
+
+def _nonnegative_int(value: object) -> int:
+    return value if isinstance(value, int) and value >= 0 else 0
 
 
 def _safe_analysis_details(preview: DataAnalysisPreviewResponse) -> dict[str, object]:
