@@ -222,8 +222,18 @@ def create_commander_plan(
         and semantic_kind in {"document", "data", "knowledge"}
         and material_bindings
     )
+    # 多材料组合必须由客户在本轮明确表达“结合/一起/综合”等关系，并且每类材料都已被
+    # 显式绑定。它不能因为页面残留多个材料就自动发生；一旦客户清楚要求组合，也不能让
+    # “资料库”一词抢占为单一知识库路由而丢掉文档或数据分支。
+    multi_material_composition_requested = _requests_multi_material_composition(
+        message=message,
+        document_refs=document_refs,
+        dataset_refs=dataset_refs,
+        knowledge_base_refs=knowledge_base_refs,
+    )
     knowledge_requested = not (presentation_requested or fresh_external_information_requested) and (
         knowledge_intent_requested
+        or (multi_material_composition_requested and bool(knowledge_base_refs))
         or (
             bool(knowledge_base_refs)
             and material_task_requested
@@ -244,6 +254,7 @@ def create_commander_plan(
     # 时额外产生“请选择文档”的噪声澄清。
     document_requested = not (presentation_requested or fresh_external_information_requested) and (
         document_intent_requested
+        or (multi_material_composition_requested and bool(document_refs))
         or (
             bool(document_refs)
             and material_task_requested
@@ -261,6 +272,7 @@ def create_commander_plan(
     )
     data_requested = not (presentation_requested or fresh_external_information_requested) and (
         data_intent_requested
+        or (multi_material_composition_requested and bool(dataset_refs))
         or data_transform_intent_requested
         or data_join_intent_requested
         or (
@@ -1171,6 +1183,37 @@ def _requests_bound_material_work(message: str) -> bool:
         "当前", "这份", "这个", "刚才", "上一步",
     )
     return any(marker in lowered for marker in task_markers)
+
+
+def _requests_multi_material_composition(
+    *,
+    message: str,
+    document_refs: list[str],
+    dataset_refs: list[str],
+    knowledge_base_refs: list[str],
+) -> bool:
+    """只在客户明确要求组合已绑定材料时解除单 Agent 意图互斥。
+
+    规划器不会凭“当前带了几份材料”推断组合任务。客户需要说出至少两个材料对象，并
+    使用结合、综合、一起、联合、交叉、对照或关联一类关系词；后续 Runtime 仍以 C6.4
+    的白名单、独立材料绑定、有限并发和汇总依赖做二次准入。
+    """
+
+    available_kind_total = sum((bool(document_refs), bool(dataset_refs), bool(knowledge_base_refs)))
+    if available_kind_total < 2:
+        return False
+    lowered = message.casefold()
+    relationship_markers = ("结合", "综合", "一起", "联合", "交叉", "对照", "关联")
+    if not any(marker in lowered for marker in relationship_markers):
+        return False
+    mentioned_kind_total = sum(
+        (
+            any(marker in lowered for marker in ("文档", "文件", "pdf", "docx", "markdown")),
+            any(marker in lowered for marker in ("数据", "表格", "csv", "excel", "xlsx")),
+            any(marker in lowered for marker in ("知识库", "资料库", "根据资料")),
+        )
+    )
+    return mentioned_kind_total >= 2
 
 
 def _hint_can_influence_route(

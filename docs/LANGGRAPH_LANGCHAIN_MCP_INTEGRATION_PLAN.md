@@ -2,7 +2,7 @@
 
 最后更新：2026-09-04
 
-状态：**LGM0、LGM1、LGM2 与 LGM3 已完成。MCP、LangGraph 与 LangChain 依赖已在开发后端环境锁定；项目已提供一个默认停用、固定边界的 Wikimedia 公开资料 MCP 客户闭环，以及一张仅用于开发验证的 LangGraph 确定性测试图。Native Runtime 仍是唯一默认执行路径；尚未迁移客户任务，也未引入通用远程 MCP 连接。**
+状态：**LGM0-LGM4 已完成工程影子验证，LGM5.1-LGM5.2 Commander 组合任务影子图已通过恢复和 Native 对照回归。MCP、LangGraph 与 LangChain 依赖已在开发后端环境锁定；项目已提供一个默认停用、固定边界的 Wikimedia 公开资料 MCP 客户闭环。Native Runtime 仍是唯一客户默认执行路径；LGM5 尚未注册客户 Router/API/Qt 入口，也未引入通用远程 MCP 连接。**
 
 本文是三项技术进入 AgentFlow 的实施依据。目标不是为简历增加名词，而是用成熟框架和开放协议改善复杂工作流恢复、外部工具接入、组件复用和长期可维护性。任何阶段只有产生可验证的客户价值并通过回归后，才能写入“已实现”状态。
 
@@ -521,7 +521,8 @@ LGM1 交付的是受控协议内核，不是面向客户的“已支持 MCP”�
 
 ### LGM5：Commander 组合任务试点
 
-前置：LGM4 完成并证明 LangGraph 有收益。
+前置：LGM4 已完成工程影子验证；在真实材料、维护复杂度和受审计 Router 开关均达标前，
+这不等于允许客户任务迁移。
 
 目标：改善文档、数据、知识库组合任务的显式 DAG、并行、汇总和子图状态。
 
@@ -539,6 +540,38 @@ LGM1 交付的是受控协议内核，不是面向客户的“已支持 MCP”�
 - 部分完成时只汇总实际成功结果；
 - 不绑定材料的普通聊天不进入 LangGraph；
 - 不增加客户必须理解的框架概念。
+
+#### LGM5.1 实施记录（2026-09-07）
+
+- 新增 `LangGraphCommanderCompositionShadowBackend`，只接受已经通过 C6.4 Native
+  组合准入的计划：至少两个来自文档、数据、知识库的独立只读专业步骤，以及一个依赖全部
+  专业步骤的 Commander 汇总节点。它不新增任何 Agent/action，也不会放宽 Native Runtime
+  的动作白名单、并发、预算或权限边界。
+- 图的动态分支以稳定 invocation ID 隔离，每个调用只保存步骤 ID、Agent/action、材料摘要哈希
+  和受限输入哈希。Graph SQLite checkpoint 不保存客户原始目标、材料名、正文、DataFrame、模型
+  Runtime、绝对路径或凭据；正式业务输入只能在未来由 AgentFlow 主任务存储按已批准 task/step
+  重新受控读取。
+- 首轮中一个专业分支失败时，图仍汇总另一项已完成结果，并明确标为 `partial`；同计划恢复时，
+  只重新派发失败/未开始 invocation，已完成分支不会重跑。汇总只读取已完成摘要，未完成分支只保留
+  受限恢复提示。
+- `verify_lgm5_commander_composition_shadow.py` 以确定性文档/数据 adapter 覆盖“一个分支首次失败
+  -> 另一分支完成 -> 同 task/checkpoint 恢复 -> 仅失败分支重试 -> 完整汇总”，并检查 SQLite 文件
+  不含夹具的原始目标和材料引用。没有调用真实模型、网络、MCP、客户文件或主任务数据库。
+- 本阶段仍没有 FastAPI route、RuntimeRouter 客户准入、Qt 开关或正式专业 Agent bridge。
+
+#### LGM5.2 实施记录（2026-09-07）
+
+- 新增 `compare_native_composition_execution()` 与 `verify_lgm5_composition_comparison.py`。同一份三
+  分支 C6.4 计划会先走既有 Native Runtime fixture，再走 LangGraph shadow 的等价 adapter；比较只
+  使用步骤状态、invocation/计划摘要和汇总状态，不读取任何子任务正文。
+- 对照验证 Native 与影子在“文档、知识库完成；数据失败”时的已完成步骤集合、未完成步骤集合和
+  `partial` 汇总状态完全一致；影子仍只汇总两个成功分支，不能把失败分支摘要混入结果。
+- 同时修复了总指挥的一项多材料路由缺口：客户明确说“结合文档、数据和资料库”时，不再被“资料库”
+  一词错误收束为单一知识库请求。只有材料已显式绑定、原句点明至少两类材料且带有“结合/综合/一起”等
+  组合关系时才解除单 Agent 互斥，残留材料不会自行触发组合。
+- `verify_commander_c63_composition.py`、`verify_commander_c64_runtime.py`、两个 LGM5 专项回归都通过。
+  下一步不是直接上线：先定义并实现正式业务 bridge 的幂等键、主任务 checkpoint/Graph checkpoint
+  映射、客户事件和 delivery card 映射，再以受审计开关讨论客户主动试点。
 
 ### LGM6：LangChain 组件收敛
 

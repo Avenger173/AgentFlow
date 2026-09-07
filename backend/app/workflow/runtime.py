@@ -839,7 +839,7 @@ def _composition_synthesis_step(plan: WorkflowPlan) -> WorkflowStep | None:
     )
 
 
-def _supports_native_composition_runtime(plan: WorkflowPlan) -> bool:
+def supports_native_read_only_composition_runtime(plan: WorkflowPlan) -> bool:
     """判断计划是否属于当前 Native 组合 Runtime 的窄白名单。
 
     这层检查同时服务于旧计划兼容与服务端准入。它不信任 UI 的 readiness 字段，而是重新
@@ -872,6 +872,12 @@ def _supports_native_composition_runtime(plan: WorkflowPlan) -> bool:
         and non_specialist_steps[0].action == "analyze_task"
         and not synthesis.required_permissions
     )
+
+
+def _supports_native_composition_runtime(plan: WorkflowPlan) -> bool:
+    """兼容内部旧调用的别名；新增编排器应使用公开的准入函数。"""
+
+    return supports_native_read_only_composition_runtime(plan)
 
 
 def _run_composition_plan(
