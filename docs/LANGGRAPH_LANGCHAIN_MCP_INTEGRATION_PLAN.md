@@ -594,6 +594,22 @@ LGM1 交付的是受控协议内核，不是面向客户的“已支持 MCP”�
   `AGENTFLOW_LANGGRAPH_ENABLED` 默认关闭的前提下，设计只读组合任务的业务 Adapter、现有事件投影/
   交付卡接线、故障回退及受审计的开发者试点条件；未满足 Native 回退和真实任务验收前不得开放。
 
+#### LGM5.4 实施记录（2026-09-07）
+
+- 新增 `AgentFlowCompositionBusinessAdapter` 作为正式业务 bridge 的窄入口。Graph invocation 不能
+  直接携带或重建业务输入；Adapter 只按 `runtime_task_id` 从 AgentFlow 主库读取已批准计划，复核
+  bridge 运行态、计划摘要、invocation 全字段和对应白名单步骤后，才把步骤交给注入的受限执行器。
+  伪造材料/输入摘要、失配计划、非运行 bridge 或不存在步骤都会在执行器前停止。
+- Adapter 返回给 LangGraph 的只有固定状态摘要、关联子任务 ID 和已验证数量事实；专业结论、原始
+  recovery 文本、artifact、事件和客户正文不复制进图 checkpoint。现有 `project_runtime_event()` 与
+  `build_delivery_card()` 仍是未来正式 Runtime 的唯一客户事件/交付投影，Adapter 不另建聊天卡片。
+- `verify_lgm5_composition_business_adapter.py` 以临时主库和伪执行器验证：合法 invocation 必须从主库
+  复核后才执行，伪造 `material_digest` 不会触发执行器，执行器返回的夹具专业结论也不会进入 Graph
+  回执。没有调用真实专业 Agent、模型、网络、MCP 或客户文件。
+- 当前只完成可注入业务 Adapter 合同，**尚未**把现有专业 Runtime executor 接到该入口，未注册
+  RuntimeRouter/API/Qt，也没有改变客户默认路径。下一步 LGM5.5 先做 Native 专业步骤 executor 的
+  最小复用、父任务 checkpoint/事件/交付回读和明确的故障回退夹具；通过后才讨论默认关闭的开发者试点。
+
 ### LGM6：LangChain 组件收敛
 
 目标：在已有 LangGraph/MCP 实现中评估 LangChain 是否确实减少代码。
