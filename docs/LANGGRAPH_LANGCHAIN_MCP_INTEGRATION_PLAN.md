@@ -661,7 +661,7 @@ LGM1 交付的是受控协议内核，不是面向客户的“已支持 MCP”�
 - 任一 bridge/Graph/父 checkpoint 异常时停止试点任务并明确回到 Native 重试路线；
 - 不增加客户 UI、不让模型选择 Backend、不扩大 Agent/action/权限边界。
 
-#### LGM5.7 实施记录（2026-09-07）
+#### LGM5.7 实施记录（2026-09-07 至 2026-09-08）
 
 - 新增 `LangGraphCompositionTrialEvidence` 和 `LangGraphCompositionTrialAdmissionRecord`。记录只保存
   已批准计划/材料范围/模型配置的摘要、对照与基线事实、以及不透明审批引用；不写客户目标、
@@ -676,9 +676,13 @@ LGM1 交付的是受控协议内核，不是面向客户的“已支持 MCP”�
 - `LangGraphCompositionDeveloperTrialRunner` 只供内部脚本调用，未注册 RuntimeRouter/FastAPI/Qt。
   coordinator 的 bridge、Graph 或父 checkpoint 异常会返回明确的 `native_retry_required`，不会静默
   替换为其它后端或扩大现有 Native 权限。
+- 后续真实试点必须先经 `observe_composition_developer_trial()` 由 Native/Graph 已保存的 Runtime
+  结构化事实生成证据：它对照 C6.4 调用集合、受控 Tool 形态、产物类型、客户状态事件投影、
+  交付投影及来源/图表/表格数量事实；不读取 prompt、模型正文、材料名、产物 URI 或路径。恢复
+  与 Native retry 仍须来自单独的故障恢复观察，资源采样也必须来自同机实测，不能手填“已通过”。
 - `verify_lgm5_trial_admission.py` 用临时 SQLite 与伪协调器覆盖：通用开关误开、fixture、资源超线、
-  计划不一致和撤销均不可执行；已准入的 Graph 故障只给出 Native 重试路线。未调用真实模型、网络、
-  MCP 或客户文件。
+  计划不一致和撤销均不可执行；已准入的 Graph 故障只给出 Native 重试路线；还覆盖结构化观察器对
+  完整一致执行的证据生成和产物类型偏差的拒绝。未调用真实模型、网络、MCP 或客户文件。
 - **尚未进行真实材料/模型的开发者验收，也没有任何客户流量进入 LangGraph。**下一步只能在开发者
   明确授权、准备固定只读组合计划和实际基线采样后，手动运行一次受审计试点；失败即停驻并按 Native
   重试，不能据此注册客户 Router/API/Qt。

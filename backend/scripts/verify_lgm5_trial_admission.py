@@ -25,11 +25,17 @@ from app.database.langgraph_trial_repository import load_langgraph_composition_t
 from app.database.task_repository import save_workflow_run
 from app.harness.langgraph_commander_composition_shadow import (
     CommanderCompositionShadowError,
+    CommanderCompositionShadowResult,
     build_composition_invocations,
 )
 from app.harness.langgraph_composition_trial import (
+    LangGraphCompositionTrialAuthorization,
     LangGraphCompositionDeveloperTrialRunner,
+    LangGraphCompositionTrialRecoveryObservation,
+    LangGraphCompositionTrialResourceMeasurement,
+    LangGraphCompositionTrialRetryObservation,
     developer_trial_switch_enabled,
+    observe_composition_developer_trial,
     register_composition_developer_trial,
     require_composition_developer_trial,
     revoke_composition_developer_trial,
@@ -37,7 +43,7 @@ from app.harness.langgraph_composition_trial import (
 from app.schemas.chat import WorkflowPlan, WorkflowStep
 from app.schemas.events import TaskLogEvent
 from app.schemas.langgraph_trial import LangGraphCompositionTrialEvidence
-from app.schemas.workflow import WorkflowRun
+from app.schemas.workflow import WorkflowArtifact, WorkflowRun, WorkflowStepRun, WorkflowToolCall
 
 
 _OPEN_TRIAL_ENV = {
@@ -152,6 +158,107 @@ class _RaisingCoordinator:
         raise RuntimeError("fixture：bridge checkpoint 异常。")
 
 
+def _completed_run(task_id: str, plan: WorkflowPlan) -> WorkflowRun:
+    steps: list[WorkflowStepRun] = []
+    for step in plan.steps:
+        if step.id in {"step_2", "step_3"}:
+            result = {"source_count": 2}
+        elif step.id == "step_4":
+            result = {"completion_state": "completed"}
+        else:
+            result = {}
+        steps.append(
+            WorkflowStepRun(
+                step_id=step.id,
+                agent=step.agent,
+                action=step.action,
+                status="completed",
+                message="fixture completed",
+                output={"result": result},
+            )
+        )
+    return WorkflowRun(
+        task_id=task_id,
+        mode="runtime",
+        status="completed",
+        summary="fixture composition completed",
+        steps=steps,
+    )
+
+
+def _artifacts(task_id: str) -> list[WorkflowArtifact]:
+    return [
+        WorkflowArtifact(
+            artifact_id=f"{task_id}:step_2",
+            task_id=task_id,
+            step_id="step_2",
+            agent_id="document_agent",
+            kind="text",
+            name="fixture document",
+            mime_type="text/plain",
+        ),
+        WorkflowArtifact(
+            artifact_id=f"{task_id}:step_3",
+            task_id=task_id,
+            step_id="step_3",
+            agent_id="data_agent",
+            kind="data",
+            name="fixture data",
+            mime_type="application/json",
+        ),
+    ]
+
+
+def _tool_calls(task_id: str) -> list[WorkflowToolCall]:
+    return [
+        WorkflowToolCall(
+            call_id=f"{task_id}:step_2",
+            task_id=task_id,
+            step_id="step_2",
+            agent_id="document_agent",
+            tool_name="agent.document_agent.analyze",
+            status="completed",
+        ),
+        WorkflowToolCall(
+            call_id=f"{task_id}:step_3",
+            task_id=task_id,
+            step_id="step_3",
+            agent_id="data_agent",
+            tool_name="agent.data_agent.analyze",
+            status="completed",
+        ),
+        WorkflowToolCall(
+            call_id=f"{task_id}:step_4",
+            task_id=task_id,
+            step_id="step_4",
+            agent_id="commander_agent",
+            tool_name="planner.synthesize",
+            status="completed",
+        ),
+    ]
+
+
+def _events(task_id: str) -> list[TaskLogEvent]:
+    return [
+        TaskLogEvent(
+            task_id=task_id,
+            sequence=index,
+            event="step_completed",
+            agent_id=agent_id,
+            step_id=step_id,
+            message="fixture",
+        )
+        for index, (step_id, agent_id) in enumerate(
+            (
+                ("step_2", "document_agent"),
+                ("step_3", "data_agent"),
+                ("step_4", "commander_agent"),
+            ),
+            start=1,
+        )
+    ]
+
+
 def main() -> None:
     plan = _plan()
     _invocations, plan_digest = build_composition_invocations(plan)
@@ -246,6 +353,121 @@ def main() -> None:
     )
     assert result.status == "stopped" and result.native_retry_required
     assert coordinator.calls == 1
+
+    native_run = _completed_run("task_lgm57_observation_native", plan)
+    graph_run = _completed_run("task_lgm57_observation_graph", plan)
+    invocations, _ = build_composition_invocations(plan)
+    graph_result = CommanderCompositionShadowResult(
+        task_id=graph_run.task_id,
+        status="completed",
+        plan_digest=plan_digest,
+        completed_invocation_ids=tuple(item.invocation_id for item in invocations),
+        failed_invocation_ids=(),
+        delivery={
+            "status": "completed",
+            "result_scope": "仅汇总已完成的受控专业调用；未完成分支不进入本次结论。",
+        },
+    )
+    observation = observe_composition_developer_trial(
+        plan=plan,
+        native_run=native_run,
+        graph_result=graph_result,
+        graph_run=graph_run,
+        native_artifacts=_artifacts(native_run.task_id),
+        graph_artifacts=_artifacts(graph_run.task_id),
+        native_tool_calls=_tool_calls(native_run.task_id),
+        graph_tool_calls=_tool_calls(graph_run.task_id),
+        native_events=_events(native_run.task_id),
+        graph_events=_events(graph_run.task_id),
+        authorization=LangGraphCompositionTrialAuthorization(
+            approval_reference="approval-observation-0001",
+            material_scope_digest="c" * 64,
+            model_profile_digest="d" * 64,
+            native_reference_id="native-observation-0001",
+            graph_reference_id="graph-observation-0001",
+            real_materials_authorized=True,
+            real_model_authorized=True,
+        ),
+        native_resources=LangGraphCompositionTrialResourceMeasurement(
+            startup_ms=1_000,
+            resident_memory_mib=500,
+        ),
+        graph_resources=LangGraphCompositionTrialResourceMeasurement(
+            startup_ms=1_050,
+            resident_memory_mib=520,
+        ),
+        recovery=LangGraphCompositionTrialRecoveryObservation(
+            initial_completed_invocation_ids=(invocations[0].invocation_id,),
+            initial_failed_invocation_ids=(invocations[1].invocation_id,),
+            resumed_completed_invocation_ids=tuple(item.invocation_id for item in invocations),
+            replayed_invocation_ids=(invocations[1].invocation_id,),
+        ),
+        native_retry=LangGraphCompositionTrialRetryObservation(
+            graph_or_bridge_failure_observed=True,
+            trial_stopped=True,
+            native_retry_required=True,
+        ),
+    )
+    assert observation.composition_report.outcome == "passed"
+    assert observation.evidence.composition_comparison_passed
+    assert observation.evidence.event_delivery_comparison_passed
+    assert observation.evidence.source_artifact_comparison_passed
+    assert observation.evidence.recovery_semantics_passed
+
+    mismatched_artifacts = _artifacts(graph_run.task_id)
+    mismatched_artifacts[1] = mismatched_artifacts[1].model_copy(update={"kind": "file"})
+    mismatch = observe_composition_developer_trial(
+        plan=plan,
+        native_run=native_run,
+        graph_result=graph_result,
+        graph_run=graph_run,
+        native_artifacts=_artifacts(native_run.task_id),
+        graph_artifacts=mismatched_artifacts,
+        native_tool_calls=_tool_calls(native_run.task_id),
+        graph_tool_calls=_tool_calls(graph_run.task_id),
+        native_events=_events(native_run.task_id),
+        graph_events=_events(graph_run.task_id),
+        authorization=LangGraphCompositionTrialAuthorization(
+            approval_reference="approval-observation-0002",
+            material_scope_digest="e" * 64,
+            model_profile_digest="f" * 64,
+            native_reference_id="native-observation-0002",
+            graph_reference_id="graph-observation-0002",
+            real_materials_authorized=True,
+            real_model_authorized=True,
+        ),
+        native_resources=LangGraphCompositionTrialResourceMeasurement(
+            startup_ms=1_000,
+            resident_memory_mib=500,
+        ),
+        graph_resources=LangGraphCompositionTrialResourceMeasurement(
+            startup_ms=1_050,
+            resident_memory_mib=520,
+        ),
+        recovery=LangGraphCompositionTrialRecoveryObservation(
+            initial_completed_invocation_ids=(invocations[0].invocation_id,),
+            initial_failed_invocation_ids=(invocations[1].invocation_id,),
+            resumed_completed_invocation_ids=tuple(item.invocation_id for item in invocations),
+            replayed_invocation_ids=(invocations[1].invocation_id,),
+        ),
+        native_retry=LangGraphCompositionTrialRetryObservation(
+            graph_or_bridge_failure_observed=True,
+            trial_stopped=True,
+            native_retry_required=True,
+        ),
+    )
+    assert not mismatch.artifacts_match
+    assert not mismatch.evidence.source_artifact_comparison_passed
+    observed_rejected_task = "task_lgm57_trial_observed_rejected"
+    _save_runtime(observed_rejected_task, plan)
+    observed_rejected = register_composition_developer_trial(
+        runtime_task_id=observed_rejected_task,
+        plan=plan,
+        evidence=mismatch.evidence,
+        environment=_OPEN_TRIAL_ENV,
+    )
+    assert observed_rejected.status == "rejected"
+    assert any("来源与受控产物" in item for item in observed_rejected.blockers)
     print("LGM5.7 developer trial admission verification passed.")
 
 

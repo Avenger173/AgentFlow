@@ -11,6 +11,7 @@ import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from hashlib import sha256
 
 from app.database.langgraph_trial_repository import (
     load_langgraph_composition_trial_admission,
@@ -22,14 +23,19 @@ from app.harness.langgraph_commander_composition_parent_coordinator import (
     LangGraphCompositionParentCoordinator,
 )
 from app.harness.langgraph_commander_composition_shadow import (
+    CommanderCompositionComparisonReport,
     CommanderCompositionShadowError,
+    CommanderCompositionShadowResult,
     build_composition_invocations,
+    compare_native_composition_execution,
 )
 from app.schemas.chat import WorkflowPlan
+from app.schemas.events import TaskLogEvent
 from app.schemas.langgraph_trial import (
     LangGraphCompositionTrialAdmissionRecord,
     LangGraphCompositionTrialEvidence,
 )
+from app.schemas.workflow import WorkflowArtifact, WorkflowRun, WorkflowToolCall
 from app.workflow.runtime import supports_native_read_only_composition_runtime
 
 
@@ -57,6 +63,82 @@ class LangGraphCompositionTrialExecutionResult:
     message: str = ""
 
 
+@dataclass(frozen=True)
+class LangGraphCompositionTrialAuthorization:
+    """开发者对一次真实只读对照的授权摘要，不携带客户材料或模型名称。"""
+
+    approval_reference: str
+    material_scope_digest: str
+    model_profile_digest: str
+    native_reference_id: str
+    graph_reference_id: str
+    real_materials_authorized: bool
+    real_model_authorized: bool
+
+
+@dataclass(frozen=True)
+class LangGraphCompositionTrialResourceMeasurement:
+    """同机同进程采样的启动/常驻内存事实，不使用推测或模型 token 替代。"""
+
+    startup_ms: int
+    resident_memory_mib: int
+
+    def __post_init__(self) -> None:
+        if self.startup_ms < 1 or self.resident_memory_mib < 1:
+            raise ValueError("试点资源基线必须是正整数。")
+
+
+@dataclass(frozen=True)
+class LangGraphCompositionTrialRecoveryObservation:
+    """一次失败后恢复的调用集合，证明已完成分支没有被重复派发。"""
+
+    initial_completed_invocation_ids: tuple[str, ...]
+    initial_failed_invocation_ids: tuple[str, ...]
+    resumed_completed_invocation_ids: tuple[str, ...]
+    replayed_invocation_ids: tuple[str, ...]
+
+    def passed(self) -> bool:
+        initial_completed = set(self.initial_completed_invocation_ids)
+        initial_failed = set(self.initial_failed_invocation_ids)
+        resumed_completed = set(self.resumed_completed_invocation_ids)
+        replayed = set(self.replayed_invocation_ids)
+        return bool(
+            initial_failed
+            and not initial_completed.intersection(initial_failed)
+            and initial_failed.issubset(resumed_completed)
+            and replayed.issubset(initial_failed)
+            and not replayed.intersection(initial_completed)
+        )
+
+
+@dataclass(frozen=True)
+class LangGraphCompositionTrialRetryObservation:
+    """故障注入后的停止与 Native 重试观察。"""
+
+    graph_or_bridge_failure_observed: bool
+    trial_stopped: bool
+    native_retry_required: bool
+
+    def passed(self) -> bool:
+        return (
+            self.graph_or_bridge_failure_observed
+            and self.trial_stopped
+            and self.native_retry_required
+        )
+
+
+@dataclass(frozen=True)
+class LangGraphCompositionTrialObservation:
+    """由两条 Runtime 的受限审计投影生成的试点证据。"""
+
+    evidence: LangGraphCompositionTrialEvidence
+    composition_report: CommanderCompositionComparisonReport
+    tool_calls_match: bool
+    artifacts_match: bool
+    event_projection_match: bool
+    delivery_projection_match: bool
+
+
 def developer_trial_switch_enabled(
     environment: Mapping[str, str] | None = None,
 ) -> bool:
@@ -73,6 +155,232 @@ def developer_trial_switch_enabled(
         and str(values.get("AGENTFLOW_LANGGRAPH_COMPOSITION_TRIAL", "")).strip().lower()
         == _TRIAL_SWITCH_VALUE
     )
+
+
+def observe_composition_developer_trial(
+    *,
+    plan: WorkflowPlan,
+    native_run: WorkflowRun,
+    graph_result: CommanderCompositionShadowResult,
+    graph_run: WorkflowRun,
+    native_artifacts: list[WorkflowArtifact],
+    graph_artifacts: list[WorkflowArtifact],
+    native_tool_calls: list[WorkflowToolCall],
+    graph_tool_calls: list[WorkflowToolCall],
+    native_events: list[TaskLogEvent],
+    graph_events: list[TaskLogEvent],
+    authorization: LangGraphCompositionTrialAuthorization,
+    native_resources: LangGraphCompositionTrialResourceMeasurement,
+    graph_resources: LangGraphCompositionTrialResourceMeasurement,
+    recovery: LangGraphCompositionTrialRecoveryObservation,
+    native_retry: LangGraphCompositionTrialRetryObservation,
+) -> LangGraphCompositionTrialObservation:
+    """把已完成的真实试点审计投影转换为不可含正文的准入证据。
+
+    该函数不运行模型、不读取文件，也不写 SQLite。它只接受已经保存的 Runtime 结果与精简
+    审计对象，因此真实试点不能靠调用方手填“对照已通过”的布尔值。
+    """
+
+    _invocations, plan_digest = build_composition_invocations(plan)
+    report = compare_native_composition_execution(
+        plan=plan,
+        native_run=native_run,
+        shadow_execution=graph_result,
+    )
+    if authorization.material_scope_digest == plan_digest:
+        raise ValueError("材料范围摘要不能复用计划摘要。")
+    scoped_steps = _composition_scope_step_ids(plan)
+    tool_calls_match = _tool_call_signature(native_tool_calls, scoped_steps) == _tool_call_signature(
+        graph_tool_calls,
+        scoped_steps,
+    )
+    artifacts_match = _artifact_signature(native_artifacts, scoped_steps) == _artifact_signature(
+        graph_artifacts,
+        scoped_steps,
+    )
+    event_projection_match = _event_projection_signature(
+        native_events,
+        scoped_steps,
+        native_run.status,
+    ) == _event_projection_signature(graph_events, scoped_steps, graph_run.status)
+    delivery_projection_match = _delivery_projection_signature(
+        native_run,
+        native_artifacts,
+        scoped_steps,
+    ) == _delivery_projection_signature(
+        graph_run,
+        graph_artifacts,
+        scoped_steps,
+    )
+    evidence = LangGraphCompositionTrialEvidence(
+        evidence_origin="developer_authorized_live",
+        approval_reference=authorization.approval_reference,
+        comparison_reference=_comparison_reference(report),
+        plan_digest=plan_digest,
+        material_scope_digest=authorization.material_scope_digest,
+        model_profile_digest=authorization.model_profile_digest,
+        native_reference_id=authorization.native_reference_id,
+        graph_reference_id=authorization.graph_reference_id,
+        composition_comparison_passed=report.outcome == "passed" and tool_calls_match,
+        event_delivery_comparison_passed=event_projection_match and delivery_projection_match,
+        source_artifact_comparison_passed=artifacts_match
+        and _result_fact_signature(native_run, scoped_steps)
+        == _result_fact_signature(graph_run, scoped_steps),
+        recovery_semantics_passed=recovery.passed(),
+        native_retry_route_verified=native_retry.passed(),
+        real_materials_authorized=authorization.real_materials_authorized,
+        real_model_authorized=authorization.real_model_authorized,
+        native_startup_ms=native_resources.startup_ms,
+        graph_startup_ms=graph_resources.startup_ms,
+        native_resident_memory_mib=native_resources.resident_memory_mib,
+        graph_resident_memory_mib=graph_resources.resident_memory_mib,
+    )
+    return LangGraphCompositionTrialObservation(
+        evidence=evidence,
+        composition_report=report,
+        tool_calls_match=tool_calls_match,
+        artifacts_match=artifacts_match,
+        event_projection_match=event_projection_match,
+        delivery_projection_match=delivery_projection_match,
+    )
+
+
+def _composition_scope_step_ids(plan: WorkflowPlan) -> frozenset[str]:
+    specialists = {
+        step.id for step in plan.steps if step.parallel_group == "specialist_read_only"
+    }
+    synthesis = next(
+        (
+            step.id
+            for step in plan.steps
+            if step.agent == "commander_agent" and step.action == "synthesize_results"
+        ),
+        "",
+    )
+    return frozenset((*specialists, synthesis) if synthesis else specialists)
+
+
+def _tool_call_signature(
+    tool_calls: list[WorkflowToolCall],
+    scoped_steps: frozenset[str],
+) -> tuple[tuple[str, str, str, str, int, bool], ...]:
+    """比较 Tool 的可审计结构，不读取请求参数、结果正文或错误文本。"""
+
+    return tuple(
+        sorted(
+            (
+                call.step_id,
+                call.agent_id,
+                call.tool_name,
+                call.status,
+                call.failure_count,
+                call.permission_required,
+            )
+            for call in tool_calls
+            if call.step_id in scoped_steps
+        )
+    )
+
+
+def _artifact_signature(
+    artifacts: list[WorkflowArtifact],
+    scoped_steps: frozenset[str],
+) -> tuple[tuple[str, str, str, str], ...]:
+    """比较交付物类型与来源步骤，刻意忽略名称、URI、路径和正文。"""
+
+    return tuple(
+        sorted(
+            (artifact.step_id, artifact.agent_id, artifact.kind, artifact.mime_type.lower())
+            for artifact in artifacts
+            if artifact.step_id in scoped_steps
+        )
+    )
+
+
+def _event_projection_signature(
+    events: list[TaskLogEvent],
+    scoped_steps: frozenset[str],
+    terminal_status: str,
+) -> tuple[str, tuple[tuple[str, str, str, str], ...]]:
+    """只保留客户状态投影相关事件，不把顺序号、消息或内部日志文本纳入对照。"""
+
+    step_events = tuple(
+        sorted(
+            (event.event, event.agent_id, event.step_id or "", event.level)
+            for event in events
+            if event.step_id in scoped_steps
+            and event.event in {"step_completed", "step_blocked", "step_failed"}
+        )
+    )
+    return terminal_status, step_events
+
+
+def _result_fact_signature(
+    run: WorkflowRun,
+    scoped_steps: frozenset[str],
+) -> tuple[tuple[str, int, int, int], ...]:
+    """比较来源、图表与表格数量事实，不带专业结论或来源文本。"""
+
+    values: list[tuple[str, int, int, int]] = []
+    for step in run.steps:
+        if step.step_id not in scoped_steps:
+            continue
+        result = step.output.get("result") if isinstance(step.output, dict) else None
+        result = result if isinstance(result, dict) else {}
+        verification = result.get("verification")
+        verification = verification if isinstance(verification, dict) else {}
+        values.append(
+            (
+                step.step_id,
+                _nonnegative_int(result.get("source_count")),
+                max(
+                    _nonnegative_int(result.get("chart_count")),
+                    _nonnegative_int(verification.get("chart_count")),
+                ),
+                max(
+                    _nonnegative_int(result.get("table_count")),
+                    _nonnegative_int(verification.get("table_count")),
+                ),
+            )
+        )
+    return tuple(sorted(values))
+
+
+def _delivery_projection_signature(
+    run: WorkflowRun,
+    artifacts: list[WorkflowArtifact],
+    scoped_steps: frozenset[str],
+) -> tuple[str, tuple[tuple[str, str], ...], tuple[tuple[str, str, str, str], ...], tuple[tuple[str, int, int, int], ...]]:
+    """用状态、步骤、产物形态和数量事实代表客户交付投影。"""
+
+    step_states = tuple(
+        sorted((step.step_id, step.status) for step in run.steps if step.step_id in scoped_steps)
+    )
+    return (
+        run.status,
+        step_states,
+        _artifact_signature(artifacts, scoped_steps),
+        _result_fact_signature(run, scoped_steps),
+    )
+
+
+def _comparison_reference(report: CommanderCompositionComparisonReport) -> str:
+    """由对照身份生成不透明引用，避免把 task 标识扩散进准入证据正文。"""
+
+    source = "|".join(
+        (
+            report.native_task_id,
+            report.shadow_task_id,
+            report.outcome,
+            ",".join(report.native_completed_step_ids),
+            ",".join(report.shadow_completed_step_ids),
+        )
+    )
+    return f"comparison-{sha256(source.encode('utf-8')).hexdigest()[:24]}"
+
+
+def _nonnegative_int(value: object) -> int:
+    return value if isinstance(value, int) and value >= 0 else 0
 
 
 def evaluate_composition_trial_admission(
