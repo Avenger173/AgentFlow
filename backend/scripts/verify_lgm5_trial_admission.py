@@ -21,7 +21,10 @@ os.environ["AGENTFLOW_DATA_DIR"] = str(VERIFY_ROOT / "data")
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from app.database.langgraph_trial_repository import load_langgraph_composition_trial_admission
+from app.database.langgraph_trial_repository import (
+    load_langgraph_composition_trial_admission,
+    load_langgraph_composition_trial_authorization,
+)
 from app.database.task_repository import save_workflow_run
 from app.harness.langgraph_commander_composition_shadow import (
     CommanderCompositionShadowError,
@@ -30,15 +33,19 @@ from app.harness.langgraph_commander_composition_shadow import (
 )
 from app.harness.langgraph_composition_trial import (
     LangGraphCompositionTrialAuthorization,
+    LangGraphCompositionDeveloperTrialCandidateRunner,
     LangGraphCompositionDeveloperTrialRunner,
     LangGraphCompositionTrialRecoveryObservation,
     LangGraphCompositionTrialResourceMeasurement,
     LangGraphCompositionTrialRetryObservation,
     developer_trial_switch_enabled,
+    authorize_composition_developer_trial,
     observe_composition_developer_trial,
     register_composition_developer_trial,
     require_composition_developer_trial,
+    require_composition_developer_trial_authorization,
     revoke_composition_developer_trial,
+    revoke_composition_developer_trial_authorization,
 )
 from app.schemas.chat import WorkflowPlan, WorkflowStep
 from app.schemas.events import TaskLogEvent
@@ -146,6 +153,20 @@ def _evidence(plan_digest: str, **overrides: object) -> LangGraphCompositionTria
     }
     values.update(overrides)
     return LangGraphCompositionTrialEvidence.model_validate(values)
+
+
+def _authorization(**overrides: object) -> LangGraphCompositionTrialAuthorization:
+    values: dict[str, object] = {
+        "approval_reference": "approval-preauthorization-0001",
+        "material_scope_digest": "c" * 64,
+        "model_profile_digest": "d" * 64,
+        "native_reference_id": "native-preauthorization-0001",
+        "graph_reference_id": "graph-preauthorization-0001",
+        "real_materials_authorized": True,
+        "real_model_authorized": True,
+    }
+    values.update(overrides)
+    return LangGraphCompositionTrialAuthorization.model_validate(values)
 
 
 class _RaisingCoordinator:
@@ -276,6 +297,57 @@ def main() -> None:
     )
     assert disabled.status == "rejected"
     assert any("显式开启" in item for item in disabled.blockers)
+
+    preauthorization_disabled_task = "task_lgm57_preauthorization_disabled"
+    _save_runtime(preauthorization_disabled_task, plan)
+    preauthorization_disabled = authorize_composition_developer_trial(
+        runtime_task_id=preauthorization_disabled_task,
+        plan=plan,
+        authorization=_authorization(),
+        environment={"AGENTFLOW_LANGGRAPH_ENABLED": "true"},
+    )
+    assert preauthorization_disabled.status == "rejected"
+    assert any("显式开启" in item for item in preauthorization_disabled.blockers)
+
+    candidate_task = "task_lgm57_preauthorization_candidate"
+    _save_runtime(candidate_task, plan)
+    candidate_authorization = authorize_composition_developer_trial(
+        runtime_task_id=candidate_task,
+        plan=plan,
+        authorization=_authorization(),
+        environment=_OPEN_TRIAL_ENV,
+    )
+    assert candidate_authorization.status == "authorized"
+    assert load_langgraph_composition_trial_admission(candidate_task) is None
+    assert require_composition_developer_trial_authorization(
+        runtime_task_id=candidate_task,
+        plan=plan,
+        environment=_OPEN_TRIAL_ENV,
+    ).status == "authorized"
+    candidate_coordinator = _RaisingCoordinator()
+    candidate_result = asyncio.run(
+        LangGraphCompositionDeveloperTrialCandidateRunner(
+            runtime_task_id=candidate_task,
+            plan=plan,
+            coordinator_factory=lambda: candidate_coordinator,  # type: ignore[arg-type]
+            environment=_OPEN_TRIAL_ENV,
+        ).execute()
+    )
+    assert candidate_result.status == "stopped" and candidate_result.native_retry_required
+    assert candidate_coordinator.calls == 1
+    candidate_revoked = revoke_composition_developer_trial_authorization(candidate_task)
+    assert candidate_revoked.status == "revoked"
+    assert load_langgraph_composition_trial_authorization(candidate_task) == candidate_revoked
+    try:
+        require_composition_developer_trial_authorization(
+            runtime_task_id=candidate_task,
+            plan=plan,
+            environment=_OPEN_TRIAL_ENV,
+        )
+    except CommanderCompositionShadowError:
+        pass
+    else:
+        raise AssertionError("已撤销的候选预授权不能再次进入 Graph 执行。")
 
     fixture_task = "task_lgm57_trial_fixture"
     _save_runtime(fixture_task, plan)

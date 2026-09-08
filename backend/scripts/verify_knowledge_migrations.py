@@ -87,6 +87,11 @@ def main() -> None:
                 "knowledge_generation_documents",
                 "knowledge_index_jobs",
                 "knowledge_child_chunks_fts",
+                "commander_conversations",
+                "commander_conversation_messages",
+                "langgraph_runtime_bridges",
+                "langgraph_composition_trial_admissions",
+                "langgraph_composition_trial_authorizations",
             }
             assert required_tables <= table_names
         finally:
@@ -112,6 +117,11 @@ def main() -> None:
                 "20260825_knowledge_ocr_page_metrics_v1",
                 "20260825_knowledge_ocr_job_stage_v1",
                 "20260826_knowledge_import_state_repair_v1",
+                "20260826_commander_conversation_memory_v1",
+                "20260826_commander_conversation_archive_v1",
+                "20260907_langgraph_runtime_bridges_v1",
+                "20260907_langgraph_composition_trial_admissions_v1",
+                "20260908_langgraph_composition_trial_authorizations_v1",
             }
         finally:
             _close_connection(second_connection)

@@ -19,6 +19,7 @@ _REFERENCE_PATTERN = r"^[A-Za-z0-9_.:-]{8,160}$"
 
 LangGraphTrialAdmissionStatus = Literal["admitted", "rejected", "revoked"]
 LangGraphTrialEvidenceOrigin = Literal["developer_authorized_live", "fixture"]
+LangGraphTrialAuthorizationStatus = Literal["authorized", "rejected", "revoked"]
 
 
 class LangGraphCompositionTrialEvidence(BaseModel):
@@ -54,6 +55,35 @@ class LangGraphCompositionTrialEvidence(BaseModel):
         return value
 
 
+class LangGraphCompositionTrialAuthorization(BaseModel):
+    """真实候选运行前的脱敏授权摘要。
+
+    它只允许进入一次默认关闭的开发者候选路径，不能代表 Native/Graph 对照已经通过；
+    真正的对照结论仍由 ``LangGraphCompositionTrialEvidence`` 在运行后单独登记。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    approval_reference: str = Field(pattern=_REFERENCE_PATTERN)
+    material_scope_digest: str = Field(pattern=_HEX64_PATTERN)
+    model_profile_digest: str = Field(pattern=_HEX64_PATTERN)
+    native_reference_id: str = Field(pattern=_REFERENCE_PATTERN)
+    graph_reference_id: str = Field(pattern=_REFERENCE_PATTERN)
+    real_materials_authorized: bool
+    real_model_authorized: bool
+
+    @field_validator(
+        "approval_reference",
+        "native_reference_id",
+        "graph_reference_id",
+    )
+    @classmethod
+    def _validate_reference(cls, value: str) -> str:
+        if re.fullmatch(_REFERENCE_PATTERN, value) is None:
+            raise ValueError("试点授权引用只能使用不透明标识，不能写入客户内容。")
+        return value
+
+
 class LangGraphCompositionTrialAdmissionRecord(BaseModel):
     """与一个 Runtime 任务绑定的试点准入记录，可在启动前撤销。"""
 
@@ -74,4 +104,27 @@ class LangGraphCompositionTrialAdmissionRecord(BaseModel):
             raise ValueError("试点准入阻断项不能重复。")
         if any(not value.strip() or len(value) > 180 for value in values):
             raise ValueError("试点准入阻断项无效。")
+        return values
+
+
+class LangGraphCompositionTrialAuthorizationRecord(BaseModel):
+    """与一个 Runtime 绑定的候选运行预授权记录，可在开始前撤销。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    runtime_task_id: str = Field(min_length=1, max_length=160, pattern=_IDENTIFIER_PATTERN)
+    plan_digest: str = Field(pattern=_HEX64_PATTERN)
+    status: LangGraphTrialAuthorizationStatus
+    authorization: LangGraphCompositionTrialAuthorization
+    blockers: tuple[str, ...] = Field(max_length=12)
+    created_at: str = Field(min_length=1, max_length=40)
+    updated_at: str = Field(min_length=1, max_length=40)
+
+    @field_validator("blockers")
+    @classmethod
+    def _validate_blockers(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        if len(set(values)) != len(values):
+            raise ValueError("试点预授权阻断项不能重复。")
+        if any(not value.strip() or len(value) > 180 for value in values):
+            raise ValueError("试点预授权阻断项无效。")
         return values

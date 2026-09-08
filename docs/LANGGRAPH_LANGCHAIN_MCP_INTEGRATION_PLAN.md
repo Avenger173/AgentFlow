@@ -1,8 +1,8 @@
 # LangGraph、LangChain 与 MCP 平台集成计划
 
-最后更新：2026-09-07
+最后更新：2026-09-08
 
-状态：**LGM0-LGM4 已完成工程影子验证，LGM5.1-LGM5.6 已完成 Commander 组合任务影子图、Native 对照、主任务/Graph checkpoint bridge、业务 Adapter、稳定只读子任务调用键及单父任务协调器；LGM5.7 已完成默认关闭的开发者试点准入/撤销合同，真实材料与模型的试点验收尚未开始。MCP、LangGraph 与 LangChain 依赖已在开发后端环境锁定；项目已提供一个默认停用、固定边界的 Wikimedia 公开资料 MCP 客户闭环。Native Runtime 仍是唯一客户默认执行路径；LGM5 尚未注册客户 Router/API/Qt 入口，也未引入通用远程 MCP 连接。**
+状态：**LGM0-LGM4 已完成工程影子验证，LGM5.1-LGM5.6 已完成 Commander 组合任务影子图、Native 对照、主任务/Graph checkpoint bridge、业务 Adapter、稳定只读子任务调用键及单父任务协调器；LGM5.7 已完成默认关闭的开发者候选预授权、最终准入/撤销合同与审计观察器，真实材料与模型的试点验收尚未开始。MCP、LangGraph 与 LangChain 依赖已在开发后端环境锁定；项目已提供一个默认停用、固定边界的 Wikimedia 公开资料 MCP 客户闭环。Native Runtime 仍是唯一客户默认执行路径；LGM5 尚未注册客户 Router/API/Qt 入口，也未引入通用远程 MCP 连接。**
 
 本文是三项技术进入 AgentFlow 的实施依据。目标不是为简历增加名词，而是用成熟框架和开放协议改善复杂工作流恢复、外部工具接入、组件复用和长期可维护性。任何阶段只有产生可验证的客户价值并通过回归后，才能写入“已实现”状态。
 
@@ -676,6 +676,11 @@ LGM1 交付的是受控协议内核，不是面向客户的“已支持 MCP”�
 - `LangGraphCompositionDeveloperTrialRunner` 只供内部脚本调用，未注册 RuntimeRouter/FastAPI/Qt。
   coordinator 的 bridge、Graph 或父 checkpoint 异常会返回明确的 `native_retry_required`，不会静默
   替换为其它后端或扩大现有 Native 权限。
+- 新增独立的 `LangGraphCompositionTrialAuthorizationRecord` 与
+  `langgraph_composition_trial_authorizations`。它先锁定 C6.4 只读计划摘要、真实材料/模型双授权和
+  不透明审批引用，状态仅为 `authorized`、`rejected`、`revoked`；预授权不能代替运行后的最终准入，
+  也不能在撤销后重启同一 Runtime。`LangGraphCompositionDeveloperTrialCandidateRunner` 只接受这份
+  预授权来收集候选 Graph 对照，失败显式要求 Native 重试，完成也只表示“等待审计”，不会改变客户路径。
 - 后续真实试点必须先经 `observe_composition_developer_trial()` 由 Native/Graph 已保存的 Runtime
   结构化事实生成证据：它对照 C6.4 调用集合、受控 Tool 形态、产物类型、客户状态事件投影、
   交付投影及来源/图表/表格数量事实；不读取 prompt、模型正文、材料名、产物 URI 或路径。恢复

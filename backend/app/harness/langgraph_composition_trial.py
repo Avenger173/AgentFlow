@@ -15,8 +15,11 @@ from hashlib import sha256
 
 from app.database.langgraph_trial_repository import (
     load_langgraph_composition_trial_admission,
+    load_langgraph_composition_trial_authorization,
     revoke_langgraph_composition_trial_admission,
+    revoke_langgraph_composition_trial_authorization,
     save_langgraph_composition_trial_admission,
+    save_langgraph_composition_trial_authorization,
 )
 from app.harness.langgraph_commander_composition_parent_coordinator import (
     LangGraphCompositionCoordinatorResult,
@@ -33,6 +36,8 @@ from app.schemas.chat import WorkflowPlan
 from app.schemas.events import TaskLogEvent
 from app.schemas.langgraph_trial import (
     LangGraphCompositionTrialAdmissionRecord,
+    LangGraphCompositionTrialAuthorization,
+    LangGraphCompositionTrialAuthorizationRecord,
     LangGraphCompositionTrialEvidence,
 )
 from app.schemas.workflow import WorkflowArtifact, WorkflowRun, WorkflowToolCall
@@ -61,19 +66,6 @@ class LangGraphCompositionTrialExecutionResult:
     coordinator_result: LangGraphCompositionCoordinatorResult | None = None
     native_retry_required: bool = False
     message: str = ""
-
-
-@dataclass(frozen=True)
-class LangGraphCompositionTrialAuthorization:
-    """开发者对一次真实只读对照的授权摘要，不携带客户材料或模型名称。"""
-
-    approval_reference: str
-    material_scope_digest: str
-    model_profile_digest: str
-    native_reference_id: str
-    graph_reference_id: str
-    real_materials_authorized: bool
-    real_model_authorized: bool
 
 
 @dataclass(frozen=True)
@@ -155,6 +147,93 @@ def developer_trial_switch_enabled(
         and str(values.get("AGENTFLOW_LANGGRAPH_COMPOSITION_TRIAL", "")).strip().lower()
         == _TRIAL_SWITCH_VALUE
     )
+
+
+def evaluate_composition_developer_trial_authorization(
+    *,
+    plan: WorkflowPlan,
+    authorization: LangGraphCompositionTrialAuthorization,
+    environment: Mapping[str, str] | None = None,
+) -> LangGraphCompositionTrialDecision:
+    """验证真实候选运行前的最小边界，但不把运行后结论提前写成准入。"""
+
+    blockers: list[str] = []
+    try:
+        _invocations, plan_digest = build_composition_invocations(plan)
+    except CommanderCompositionShadowError:
+        plan_digest = ""
+        blockers.append("任务没有通过 C6.4 受控只读组合计划准入。")
+    if not supports_native_read_only_composition_runtime(plan):
+        blockers.append("当前计划超出开发者试点允许的只读 Agent/action 边界。")
+    if not developer_trial_switch_enabled(environment):
+        blockers.append("LangGraph 组合试点开关未由开发者显式开启。")
+    if not authorization.real_materials_authorized:
+        blockers.append("真实材料尚未获得本次开发者试点授权。")
+    if not authorization.real_model_authorized:
+        blockers.append("真实模型尚未获得本次开发者试点授权。")
+    return LangGraphCompositionTrialDecision(
+        admitted=not blockers,
+        blockers=tuple(blockers),
+        plan_digest=plan_digest,
+    )
+
+
+def authorize_composition_developer_trial(
+    *,
+    runtime_task_id: str,
+    plan: WorkflowPlan,
+    authorization: LangGraphCompositionTrialAuthorization,
+    environment: Mapping[str, str] | None = None,
+) -> LangGraphCompositionTrialAuthorizationRecord:
+    """登记候选运行前的授权判断；它不会替代运行后的最终准入。"""
+
+    decision = evaluate_composition_developer_trial_authorization(
+        plan=plan,
+        authorization=authorization,
+        environment=environment,
+    )
+    now = _now()
+    record = LangGraphCompositionTrialAuthorizationRecord(
+        runtime_task_id=runtime_task_id,
+        plan_digest=decision.plan_digest,
+        status="authorized" if decision.admitted else "rejected",
+        authorization=authorization,
+        blockers=decision.blockers,
+        created_at=now,
+        updated_at=now,
+    )
+    return save_langgraph_composition_trial_authorization(record)
+
+
+def revoke_composition_developer_trial_authorization(
+    runtime_task_id: str,
+) -> LangGraphCompositionTrialAuthorizationRecord:
+    """撤销尚未开始的候选运行授权，不影响既有 Native Runtime。"""
+
+    return revoke_langgraph_composition_trial_authorization(runtime_task_id)
+
+
+def require_composition_developer_trial_authorization(
+    *,
+    runtime_task_id: str,
+    plan: WorkflowPlan,
+    environment: Mapping[str, str] | None = None,
+) -> LangGraphCompositionTrialAuthorizationRecord:
+    """候选 Graph 创建前重新核验计划、开关和双重真实资源授权。"""
+
+    record = load_langgraph_composition_trial_authorization(runtime_task_id)
+    if record is None:
+        raise CommanderCompositionShadowError("当前 Runtime 没有开发者预授权；请继续使用 Native Runtime。")
+    if record.status != "authorized":
+        raise CommanderCompositionShadowError("当前开发者预授权未通过或已撤销；请继续使用 Native Runtime。")
+    decision = evaluate_composition_developer_trial_authorization(
+        plan=plan,
+        authorization=record.authorization,
+        environment=environment,
+    )
+    if not decision.admitted or decision.plan_digest != record.plan_digest:
+        raise CommanderCompositionShadowError("开发者预授权已失效；请停止试点并按 Native 路线重试。")
+    return record
 
 
 def observe_composition_developer_trial(
@@ -526,6 +605,49 @@ class LangGraphCompositionDeveloperTrialRunner:
             runtime_task_id=self._runtime_task_id,
             coordinator_result=result,
             message="开发者试点已完成；客户默认 Runtime 路线未改变。",
+        )
+
+
+class LangGraphCompositionDeveloperTrialCandidateRunner:
+    """仅用于收集对照证据的候选 Graph 运行守卫。
+
+    候选运行只要求预授权，不会把它误报为“最终准入”。协调器故障后仍必须停止，并由
+    原 Runtime 显式按 Native 路线重试。没有 Router、API 或 Qt 会构造这个对象。
+    """
+
+    def __init__(
+        self,
+        *,
+        runtime_task_id: str,
+        plan: WorkflowPlan,
+        coordinator_factory: Callable[[], LangGraphCompositionParentCoordinator],
+        environment: Mapping[str, str] | None = None,
+    ) -> None:
+        self._runtime_task_id = runtime_task_id
+        self._plan = plan
+        self._coordinator_factory = coordinator_factory
+        self._environment = environment
+
+    async def execute(self, *, resume: bool = False) -> LangGraphCompositionTrialExecutionResult:
+        require_composition_developer_trial_authorization(
+            runtime_task_id=self._runtime_task_id,
+            plan=self._plan,
+            environment=self._environment,
+        )
+        try:
+            result = await self._coordinator_factory().execute(resume=resume)
+        except Exception:
+            return LangGraphCompositionTrialExecutionResult(
+                status="stopped",
+                runtime_task_id=self._runtime_task_id,
+                native_retry_required=True,
+                message="LangGraph 候选运行已停止；请从当前 Runtime 任务按 Native 路线重试。",
+            )
+        return LangGraphCompositionTrialExecutionResult(
+            status="completed",
+            runtime_task_id=self._runtime_task_id,
+            coordinator_result=result,
+            message="LangGraph 候选运行已完成；尚待对照审计决定是否最终准入。",
         )
 
 
