@@ -685,6 +685,9 @@ LGM1 交付的是受控协议内核，不是面向客户的“已支持 MCP”�
   Native 基线与 Graph 候选两条 Runtime。候选侧只执行 `step_1/analyze_task` 这条安全内置步骤；文档、
   数据、知识库专业调用、文件读取、模型、联网和 MCP 都不会在准备阶段触发。它为后续真实试点排除
   “手工复制计划”或“候选计划与基线计划不一致”的伪对照风险。
+- `prepare_lgm57_composition_trial.py` 提供开发者可见的受控入口：默认只列出已完成 C6.4 计划的 task ID、
+  plan ID、摘要前缀和 Agent/action 类型；只有显式 `--confirm-prepare` 才会写入 Runtime 对。完整 PowerShell
+  操作、副作用和停止点见 [LGM5.7 开发者试点手册](LGM57_DEVELOPER_TRIAL_RUNBOOK.md)。
 - 后续真实试点必须先经 `observe_composition_developer_trial()` 由 Native/Graph 已保存的 Runtime
   结构化事实生成证据：它对照 C6.4 调用集合、受控 Tool 形态、产物类型、客户状态事件投影、
   交付投影及来源/图表/表格数量事实；不读取 prompt、模型正文、材料名、产物 URI 或路径。恢复

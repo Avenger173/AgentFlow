@@ -331,7 +331,7 @@ K0-K6 的既有知识库闭环不包含 OCR；K7 仅按已批准范围新增扫�
 
 ## 当前下一步
 
-> **当前状态：LGM5.1-LGM5.6 已完成受控组合影子图、Native/Graph 交付对照、主任务/Graph checkpoint bridge、主库回读业务 Adapter、稳定 child task replay 和单父任务协调器；LGM5.7 已完成默认关闭的候选预授权、最终准入、基线、开始前撤销、审计投影观察器与 Native/Graph 成对准备器。下一步是开发者明确授权后，对固定只读组合计划运行一次真实材料/模型候选试点并记录对照；候选完成不等于最终准入，在成功或失败前都不能注册客户 Router/API/Qt。**成对准备阶段只运行安全根步骤，不会读取材料或调用模型；影子图只接受 C6.4 已批准的多材料只读计划。独立 LangGraph SQLite checkpoint 与 AgentFlow 主库 bridge 都只保存 invocation/计划摘要哈希、图线程和受限结果。业务 Adapter 会从主库重新核验已批准步骤，伪造摘要不会触发执行器；尚未注册客户 Router 或改变 Qt。固定 Wikimedia MCP 客户闭环继续默认停用，仍不是任意网页抓取、远程 MCP 市场或事实自动核验。详细记录见 `docs/LANGGRAPH_LANGCHAIN_MCP_INTEGRATION_PLAN.md`。
+> **当前状态：LGM5.1-LGM5.6 已完成受控组合影子图、Native/Graph 交付对照、主任务/Graph checkpoint bridge、主库回读业务 Adapter、稳定 child task replay 和单父任务协调器；LGM5.7 已完成默认关闭的候选预授权、最终准入、基线、开始前撤销、审计投影观察器、候选目录与 Native/Graph 成对准备器。下一步是开发者明确授权后，对固定只读组合计划运行一次真实材料/模型候选试点并记录对照；候选完成不等于最终准入，在成功或失败前都不能注册客户 Router/API/Qt。**成对准备阶段只运行安全根步骤，不会读取材料或调用模型；候选目录只显示脱敏任务/计划身份。影子图只接受 C6.4 已批准的多材料只读计划。独立 LangGraph SQLite checkpoint 与 AgentFlow 主库 bridge 都只保存 invocation/计划摘要哈希、图线程和受限结果。业务 Adapter 会从主库重新核验已批准步骤，伪造摘要不会触发执行器；尚未注册客户 Router 或改变 Qt。固定 Wikimedia MCP 客户闭环继续默认停用，仍不是任意网页抓取、远程 MCP 市场或事实自动核验。详细记录见 `docs/LANGGRAPH_LANGCHAIN_MCP_INTEGRATION_PLAN.md`。
 
 下方为各模块的历史里程碑与回归基线，不表示当前会并行启动这些事项。
 
