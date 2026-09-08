@@ -34,6 +34,8 @@
 
 > **2026-09-08 LGM5.7 真实开发者试点与最终闸门：**在用户授权的固定只读组合计划、已选本地材料和当前模型路由下，Native 基线与 LangGraph 候选都完成了专业步骤、Tool、artifact 与客户交付投影对照；Graph 初次仅一条专业分支失败，恢复时只重放该分支，已完成分支没有重复调用。实测修复了专业问题拆分、同 Provider 组合槽位、稳定 delegation key 与 synthesis 终态事件投影四个接缝。后续独立进程资源探针测得 Native `1569ms / 159MiB`、Graph `2012ms / 189MiB`，Graph 启动和常驻内存均超过当前 10% 门槛；真实父协调器的离线 checkpoint 故障注入也确认会在任何专业调用前停止、收束 bridge 为失败并明确要求 Native 重试。最终准入已按资源门槛登记为拒绝，未注册 API/Qt/Router，Native 仍是唯一客户默认 Runtime。
 
+> **2026-09-08 LGM6 组件收敛结论：**复核当前官方 LangChain Tool/MCP 文档后，没有 LangChain 组件能在不复制现有治理的前提下删除足够适配代码。`langchain.mcp` 依赖完整 LangChain 与 beta FastMCP 生命周期，会重叠 AgentFlow MCPGateway；`ToolRuntime`、Memory 与 ChatModel 包装也会重复 ModelGateway、会话和 Pydantic/Node Contract 边界。因此不新增 LangChain/FastMCP 依赖或适配层，`AGENTFLOW_LANGCHAIN_ADAPTERS_ENABLED` 保持关闭；这是明确的降复杂度决定，不影响现有客户能力。
+
 > **2026-08-31 R5.4B 字段加工自然语言闭环：**AI 调度台现在能在已绑定单个 CSV/XLSX 后识别“新增字段、排名、累计、月份、环比、占比、四舍五入、分段、清理文本和有限四则计算”等目标，先生成不写文件的 `DataTransformIntent v1` 预览，再在客户确认后委派 `data_agent.export_field_transform`。Runtime 复用已有确定性字段加工服务，在 `output/data_transformations/` 中保持原文件类型创建副本，按原字段之后追加最多 12 个派生字段，回读新字段/行数/格式和源哈希后才登记 artifact，并把文件名和新增字段摘要写回同一会话。自然语言不能执行公式、脚本或 SQL，源文件不会被修改。`verify_commander_data_transformation_delivery.py` 与字段加工、数据交付、Commander 回归已通过；本轮未调用真实模型或网络。R5.4C 两份数据关联首版已完成，复杂多表关系仍不自动开放。
 
 > **2026-08-25 补充校正：**知识库 K5.8 已完成。后端现以已保存的索引耗时、当前进程无正文的检索/深度耗时、逻辑核数和数据目录可用空间生成性能建议；同类索引或深度任务 FIFO 串行，低配全局串行、中高配最多一条索引与一条深度链并行。它不保存客户正文、问题、文件名、路径或设备身份；进程队列不会替代 SQLite checkpoint。

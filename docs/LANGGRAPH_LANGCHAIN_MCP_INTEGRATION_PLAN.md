@@ -742,6 +742,22 @@ LGM1 交付的是受控协议内核，不是面向客户的“已支持 MCP”�
 
 没有满足条件的组件不引入。允许最终项目只直接依赖 LangGraph 和官方 MCP SDK，而不依赖完整 LangChain。
 
+#### LGM6.0 实施记录（2026-09-08，未引入组件）
+
+- 已基于当前官方 [LangChain Tools 文档](https://docs.langchain.com/oss/python/langchain/tools) 与
+  [LangChain MCP 文档](https://docs.langchain.com/oss/python/langchain/mcp) 做组件边界复核。当前
+  `langchain.mcp` 需要完整 `langchain[mcp]` 与 FastMCP，且 API 标记为 beta；它会自行处理连接、传输推断、
+  认证与 Tool 发现，和 AgentFlow 既有官方 MCP SDK、`McpClientManager`、`McpGateway` 的白名单、权限、审计、
+  超时和结果裁剪职责重叠。
+- `langchain-core` 的 Tool/`ToolRuntime` 可提供函数 schema 与运行时状态注入，但 AgentFlow 当前由
+  ModelGateway、Pydantic 契约、会话记忆和 Node Contract 持有相同边界。单独包一层不会删除实质胶水，反而会
+  形成第二份 Tool、Memory 或错误状态来源；ChatModel 单向包装也无法在不复制 Provider、思考模式、用量、
+  超时与错误分类的前提下产生收益。
+- 因此 **LGM6 当前没有任何组件获准引入**：`AGENTFLOW_LANGCHAIN_ADAPTERS_ENABLED` 继续默认关闭，不新增
+  `langchain`、FastMCP 或 Provider Adapter 依赖，不注册 Router/API/Qt，不迁移 MCPGateway、ModelGateway、
+  Memory、RAG 或 Native Runtime。该结论是减少复杂度的明确工程结果，不是阶段遗漏；只有未来出现一个可量化
+  删除现有适配代码、且不改变治理所有权的具体场景，才重新提出单项评审。
+
 ### LGM7：稳定化、打包与默认策略
 
 目标：决定哪些能力进入正式桌面发行。
