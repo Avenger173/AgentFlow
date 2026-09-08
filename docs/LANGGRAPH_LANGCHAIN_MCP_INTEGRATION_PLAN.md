@@ -697,6 +697,9 @@ LGM1 交付的是受控协议内核，不是面向客户的“已支持 MCP”�
   完整一致执行的证据生成和产物类型偏差的拒绝。未调用真实模型、网络、MCP 或客户文件。
 - `verify_lgm57_trial_preparation.py` 以临时 SQLite 覆盖成对 Runtime 创建、候选根步骤持久化、候选专业
   分支保持 pending，以及未完成 dry-run 拒绝；它同样不会调用模型、网络、MCP 或客户文件。
+- `verify_lgm57_trial_cli.py` 会在独立临时 SQLite 中实际启动 `prepare_lgm57_composition_trial.py` 子进程，
+  覆盖候选列出、缺少显式确认时拒绝写入、确认后创建 Native/Graph Runtime 对和脱敏输出。内部命令验收
+  由该回归完成；真实库未找到候选只表示尚未有经过批准的 C6.4 计划，不构成需要客户排障的失败。
 - **尚未进行真实材料/模型的开发者验收，也没有任何客户流量进入 LangGraph。**下一步只能在开发者
   明确授权、准备固定只读组合计划和实际基线采样后，手动运行一次受审计试点；失败即停驻并按 Native
   重试，不能据此注册客户 Router/API/Qt。

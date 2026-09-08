@@ -5,6 +5,10 @@
 此手册只面向项目开发者，不是客户功能说明。LangGraph 仍未注册到 Qt、FastAPI 或 RuntimeRouter；
 Native Runtime 仍是客户唯一默认路径。
 
+日常代码验收由 `backend/scripts/verify_lgm57_trial_cli.py` 在临时 SQLite 中自动覆盖，不需要客户或
+开发者手动执行本手册命令。下列步骤只用于已经单独批准的真实开发者试点；没有真实候选计划时，不应
+为了运行命令手工创建任务、修改 SQLite 或消耗模型额度。
+
 ## 目的
 
 LGM5.7 需要用同一份已完成的 C6.4 只读组合计划，分别准备 Native 基线与 Graph 候选，后续再受控
@@ -38,8 +42,11 @@ workspace 文件。
 从上一步复制一条 `task_id`，执行：
 
 ```powershell
-.\.venv\Scripts\python.exe -X utf8 scripts\prepare_lgm57_composition_trial.py --source-task-id <task_id> --confirm-prepare
+$taskId = 'task_llm_123abc' # 只替换引号内的示例值，填入上一步实际显示的 task_id
+.\.venv\Scripts\python.exe -X utf8 scripts\prepare_lgm57_composition_trial.py --source-task-id $taskId --confirm-prepare
 ```
+
+不要输入 `<task_id>`：PowerShell 会把尖括号解析为重定向运算符，而不是命令参数。
 
 预期看到 `native_runtime_task_id=...` 与 `graph_candidate_runtime_task_id=...`。二者必须不同，且输出会
 说明“未调用模型、未读取材料正文、未联网”。
