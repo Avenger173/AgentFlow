@@ -217,10 +217,16 @@ class LangGraphCompositionParentCoordinator:
                 if resume
                 else await graph.execute_task(task_id=self._runtime_task_id, plan=plan)
             )
-        except CommanderCompositionShadowError:
+        except Exception as exc:
+            # `execute_task()` 会先读取 Graph checkpoint；SQLite 打开失败等初始化异常发生在
+            # 影子图自身的 `_drive()` 之前，不能只捕获自定义异常而留下 running bridge。
             if self._native_fallback is None or collector.has_receipts():
                 _mark_bridge_failed(self._runtime_task_id)
-                raise
+                if isinstance(exc, CommanderCompositionShadowError):
+                    raise
+                raise CommanderCompositionShadowError(
+                    "组合父任务初始化失败，未派发专业步骤或确认客户交付。"
+                ) from exc
             fallback_run = await self._native_fallback(self._runtime_task_id, plan)
             _mark_bridge_failed(self._runtime_task_id)
             return LangGraphCompositionCoordinatorResult(

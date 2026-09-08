@@ -2,7 +2,7 @@
 
 最后更新：2026-09-08
 
-状态：**LGM0-LGM4 已完成工程影子验证，LGM5.1-LGM5.6 已完成 Commander 组合任务影子图、Native 对照、主任务/Graph checkpoint bridge、业务 Adapter、稳定只读子任务调用键及单父任务协调器；LGM5.7 已完成默认关闭的开发者候选预授权、最终准入/撤销合同与审计观察器，并完成一次开发者授权的真实材料/模型 Native-Graph 对照及恢复观察。最终准入仍未达成：独立同机资源基线与故障注入后的 Native 重试路线尚未实测。MCP、LangGraph 与 LangChain 依赖已在开发后端环境锁定；项目已提供一个默认停用、固定边界的 Wikimedia 公开资料 MCP 客户闭环。Native Runtime 仍是唯一客户默认执行路径；LGM5 尚未注册客户 Router/API/Qt 入口，也未引入通用远程 MCP 连接。**
+状态：**LGM0-LGM4 已完成工程影子验证，LGM5.1-LGM5.6 已完成 Commander 组合任务影子图、Native 对照、主任务/Graph checkpoint bridge、业务 Adapter、稳定只读子任务调用键及单父任务协调器；LGM5.7 已完成默认关闭的开发者候选预授权、最终准入/撤销合同、真实材料/模型 Native-Graph 对照、恢复观察、独立同机资源测量及 Graph 初始化故障后的 Native 重试验证。最终准入已按门槛明确拒绝：当前 Graph 启动与常驻内存均超过 Native 的 10% 上限。MCP、LangGraph 与 LangChain 依赖已在开发后端环境锁定；项目已提供一个默认停用、固定边界的 Wikimedia 公开资料 MCP 客户闭环。Native Runtime 仍是唯一客户默认执行路径；LGM5 尚未注册客户 Router/API/Qt 入口，也未引入通用远程 MCP 连接。**
 
 本文是三项技术进入 AgentFlow 的实施依据。目标不是为简历增加名词，而是用成熟框架和开放协议改善复杂工作流恢复、外部工具接入、组件复用和长期可维护性。任何阶段只有产生可验证的客户价值并通过回归后，才能写入“已实现”状态。
 
@@ -649,7 +649,7 @@ LGM1 交付的是受控协议内核，不是面向客户的“已支持 MCP”�
   先做 LGM5.7 的独立开发者试点准入：真实材料/模型授权验收、Native/Graph 对照、启动/内存
   基线和可撤销开关必须同时具备，任何一项不通过都维持 Native 默认路径。
 
-#### LGM5.7：开发者试点准入（真实对照已完成，最终准入仍关闭）
+#### LGM5.7：开发者试点准入（真实对照完成，资源门槛拒绝）
 
 目标：定义仅开发者显式开启的试点边界与回退检查，而不是把影子基础设施直接暴露给客户。
 
@@ -708,10 +708,18 @@ LGM1 交付的是受控协议内核，不是面向客户的“已支持 MCP”�
   步骤终态事件。现由计划侧收束专业问题、Provider 槽位限制、32 字符兼容调用键与单父协调器统一处理。
   审计对照对恢复任务只比较每步最终客户状态；独立检索的来源数比较“是否满足可追溯证据”而非偶然的
   Top-K 数量，图表和表格数量仍严格比较。
-- **最终试点准入仍未登记，客户流量仍不得进入 LangGraph。**本轮没有伪造启动/常驻内存数据，也没有把
-  成功路径冒充成 bridge/Graph/父 checkpoint 故障后的 Native 重试验证。下一步仅在需要继续 LGM5.7
-  时补独立同机资源探针与一次无副作用故障注入；任一不达标继续保持 Native 默认路径，不能据此注册
-  Router/API/Qt。
+- `measure_lgm57_composition_resources.py` 会在两个独立 Python 子进程中分别初始化最小 Native 组合壳和
+  LangGraph SQLite Checkpointer，不读取任务库、客户材料或凭据，也不调用模型、网络和专业 Agent。本机
+  基线为 Native `1569ms / 159MiB`、Graph `2012ms / 189MiB`；Graph 分别高出约 28% 与 19%，超过当前
+  10% 准入门槛。`verify_lgm57_resource_probe.py` 只校验探针形状、临时目录隔离和无主库写入。
+- `verify_lgm57_native_retry_probe.py` 使用真实 `LangGraphCompositionParentCoordinator` 与临时 SQLite，故意
+  传入目录形式的 checkpoint 路径。该错误发生在图初始化、任何专业调用之前；回归确认候选返回
+  `stopped + native_retry_required`，bridge 收束为 `failed`，且数据库中只保留候选准备阶段的根规划 Tool/
+  artifact。过程中发现 `execute_task()` 的预读 checkpoint 异常位于旧的自定义异常捕获范围外，可能遗留
+  `running` bridge；父协调器现统一收束初始化异常并保留原因链。
+- **最终试点准入已登记为拒绝，客户流量仍不得进入 LangGraph。**拒绝原因是实测资源门槛，不是模型、
+  材料、对照或恢复语义失败。后续只有在独立测量显示 LangGraph 的真实收益足以调整已确认门槛，且再次
+  经用户审批后，才可重新讨论试点；当前不能据此注册 Router/API/Qt，Native 继续默认。
 
 ### LGM6：LangChain 组件收敛
 

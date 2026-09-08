@@ -1,13 +1,13 @@
 # LGM5.7 开发者试点手册
 
-状态：准备步骤可用；真实模型/材料候选运行尚未授权。
+状态：真实 Native/Graph 对照、资源测量与故障回退验证已完成；最终准入因资源门槛拒绝。
 
 此手册只面向项目开发者，不是客户功能说明。LangGraph 仍未注册到 Qt、FastAPI 或 RuntimeRouter；
 Native Runtime 仍是客户唯一默认路径。
 
-日常代码验收由 `backend/scripts/verify_lgm57_trial_cli.py` 在临时 SQLite 中自动覆盖，不需要客户或
-开发者手动执行本手册命令。下列步骤只用于已经单独批准的真实开发者试点；没有真实候选计划时，不应
-为了运行命令手工创建任务、修改 SQLite 或消耗模型额度。
+日常代码验收由 `backend/scripts/verify_lgm57_trial_cli.py`、资源探针和 Native 重试回归在临时 SQLite
+中自动覆盖，不需要客户或开发者手动执行本手册命令。下列准备步骤只用于已经单独批准的真实开发者试点；
+没有真实候选计划时，不应为了运行命令手工创建任务、修改 SQLite 或消耗模型额度。
 
 ## 目的
 
@@ -57,9 +57,27 @@ $taskId = 'task_llm_123abc' # 只替换引号内的示例值，填入上一步�
 
 ## 3. 当前停止点
 
-准备完成后不要把这两条内部任务当作客户任务执行。真实候选运行必须单独获得当次材料与模型授权，
-并在启动前启用双开关、记录资源采样和故障恢复对照。未通过所有审计门前，不能注册客户 Router/API/Qt，
-也不能声称 LangGraph 已接管实际业务。
+准备完成后不要把这两条内部任务当作客户任务执行。一次已授权的真实候选对照已完成，且故障回退验证
+确认 Graph 初始化异常会在专业调用前停止并要求 Native 重试；但独立进程实测为 Native `1569ms / 159MiB`、
+Graph `2012ms / 189MiB`。Graph 启动和常驻内存均超过当前相对 Native 的 10% 门槛，最终准入已登记为
+`rejected`。
+
+因此当前不得注册客户 Router/API/Qt，也不能声称 LangGraph 已接管实际业务。Native Runtime 仍是唯一客户
+默认路径。若未来要重新讨论门槛，必须先以独立资源收益证据和新的用户审批为前置，而不是重复消耗模型
+额度重跑同一候选。
+
+## 自动回归
+
+以下命令只供开发维护使用，使用临时目录，不读取客户材料、不调用模型或网络：
+
+```powershell
+cd D:\project\AgentFlow\AgentFlow\backend
+.\.venv\Scripts\python.exe -X utf8 scripts\verify_lgm57_resource_probe.py
+.\.venv\Scripts\python.exe -X utf8 scripts\verify_lgm57_native_retry_probe.py
+```
+
+第二条会用目录形式的假 checkpoint 注入 Graph 初始化故障。成功只表示 bridge 失败收束和 Native 重试守卫
+可用，不表示 LangGraph 获得客户准入。
 
 ## 失败信息
 
