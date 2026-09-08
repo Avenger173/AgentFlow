@@ -381,16 +381,23 @@ def _event_projection_signature(
     scoped_steps: frozenset[str],
     terminal_status: str,
 ) -> tuple[str, tuple[tuple[str, str, str, str], ...]]:
-    """只保留客户状态投影相关事件，不把顺序号、消息或内部日志文本纳入对照。"""
+    """只比较每个步骤最终的客户状态投影。
 
-    step_events = tuple(
-        sorted(
-            (event.event, event.agent_id, event.step_id or "", event.level)
-            for event in events
-            if event.step_id in scoped_steps
-            and event.event in {"step_completed", "step_blocked", "step_failed"}
-        )
-    )
+    可恢复 Graph 任务会保留首次失败事件，恢复成功后再追加 ``step_completed``。该历史对审计
+    很重要，但不应让已经恢复的分支在 Native/Graph 终态对照中被误判为仍失败。
+    """
+
+    latest_by_step: dict[str, tuple[str, str, str, str]] = {}
+    for event in events:
+        step_id = event.step_id or ""
+        if step_id not in scoped_steps or event.event not in {
+            "step_completed",
+            "step_blocked",
+            "step_failed",
+        }:
+            continue
+        latest_by_step[step_id] = (event.event, event.agent_id, step_id, event.level)
+    step_events = tuple(sorted(latest_by_step.values()))
     return terminal_status, step_events
 
 
@@ -398,7 +405,12 @@ def _result_fact_signature(
     run: WorkflowRun,
     scoped_steps: frozenset[str],
 ) -> tuple[tuple[str, int, int, int], ...]:
-    """比较来源、图表与表格数量事实，不带专业结论或来源文本。"""
+    """比较客户交付所需的来源/图表/表格事实，不带专业结论或来源文本。
+
+    独立 Native/Graph 候选会各自运行一次检索。只要两侧都通过 Evidence Gate，来源数从 2
+    条变为 3 条并不改变“结果可追溯”的交付契约；图表与表格则是确定性交付数量，仍逐项
+    严格对照。这里把来源数压缩为 0/1，避免把检索排序差异错判为编排差异。
+    """
 
     values: list[tuple[str, int, int, int]] = []
     for step in run.steps:
@@ -411,7 +423,7 @@ def _result_fact_signature(
         values.append(
             (
                 step.step_id,
-                _nonnegative_int(result.get("source_count")),
+                int(_nonnegative_int(result.get("source_count")) > 0),
                 max(
                     _nonnegative_int(result.get("chart_count")),
                     _nonnegative_int(verification.get("chart_count")),

@@ -91,6 +91,21 @@ def _plan() -> WorkflowPlan:
 def main() -> None:
     plan = _plan()
     assert runtime._supports_native_composition_runtime(plan)
+    # Provider 槽位是运行时策略；先用离线伪路由验证同 Provider 串行、异 Provider 并行，
+    # 再固定 fixture 的执行槽位为 2，继续覆盖 C6.4 原有的并发失败隔离语义。
+    original_lane_resolver = runtime._composition_model_lane_for_step
+    runtime._composition_model_lane_for_step = lambda step: (  # type: ignore[method-assign]
+        ("kimi", 1)
+        if step.agent in {"data_agent", "knowledge_agent"}
+        else ("deepseek", 2)
+    )
+    try:
+        by_id = {step.id: step for step in plan.steps}
+        assert runtime._composition_worker_count([by_id["step_3"], by_id["step_4"]]) == 1
+        assert runtime._composition_worker_count([by_id["step_2"], by_id["step_3"]]) == 2
+    finally:
+        runtime._composition_model_lane_for_step = original_lane_resolver
+
     source_task_id = "verify_commander_c64_runtime"
     save_workflow_run(
         run=WorkflowRun(
@@ -114,6 +129,7 @@ def main() -> None:
     )
 
     original_executor = runtime._execute_safe_step_with_retries
+    original_worker_count = runtime._composition_worker_count
     lock = threading.Lock()
     concurrency = {"active": 0, "peak": 0}
 
@@ -170,10 +186,12 @@ def main() -> None:
                 concurrency["active"] -= 1
 
     runtime._execute_safe_step_with_retries = fixture_executor
+    runtime._composition_worker_count = lambda steps: min(2, len(steps))  # type: ignore[method-assign]
     try:
         response = runtime.execute_workflow_runtime(source_task_id)
     finally:
         runtime._execute_safe_step_with_retries = original_executor
+        runtime._composition_worker_count = original_worker_count
 
     assert response is not None and response.workflow_run is not None
     run = response.workflow_run

@@ -86,6 +86,7 @@ from app.services.knowledge_answer import (
     get_knowledge_answer_task_result,
     run_knowledge_answer_task,
 )
+from app.services.model_gateway import resolve_model_runtime_for_route
 from app.services.conversation_memory import persist_async_assistant_delivery
 from app.services.public_reference_mcp import PublicReferenceError, search_public_references_sync
 from app.services.knowledge_deep_dispatch import (
@@ -123,7 +124,14 @@ _COMPOSITION_SAFE_ACTIONS = {
     ("data_agent", "analyze_dataset"),
     ("knowledge_agent", "answer_question"),
 }
-_DELEGATION_CALL_ID_PREFIX = "lgm5call_"
+_COMPOSITION_MODEL_ROUTES: dict[tuple[str, str], str] = {
+    ("document_agent", "analyze_document"): "document_analysis",
+    ("data_agent", "analyze_dataset"): "data_insight",
+    ("knowledge_agent", "answer_question"): "knowledge_answer",
+}
+# 这段 ID 最终会拼接为 ``task_kb_<call_id>``。知识库任务契约只允许字母数字后缀，
+# 因而不能在可恢复调用键中使用下划线；8 + 24 个字符恰好落在其 8-32 的边界内。
+_DELEGATION_CALL_ID_PREFIX = "lgm5call"
 _DELEGATION_CALL_ID_HEX_LENGTH = 24
 _NON_RETRYABLE_ERROR_CODES = {
     "artifact_verification_failed",
@@ -861,6 +869,47 @@ def _composition_synthesis_step(plan: WorkflowPlan) -> WorkflowStep | None:
     )
 
 
+def _composition_model_lane_for_step(step: WorkflowStep) -> tuple[str, int]:
+    """返回组合步骤的 Provider 槽位与已验证的并行上限。
+
+    这只是组合 Runtime 的排队策略，不影响每个专业 Agent 自己的模型路由、超时或输出
+    契约。无法解析路由时收束为单槽位，避免“配置异常 + 并发”让失败难以重放。
+    """
+
+    route_id = _COMPOSITION_MODEL_ROUTES.get((step.agent, step.action))
+    if not route_id:
+        return ("local", _COMPOSITION_MAX_PARALLELISM)
+    try:
+        resolution = resolve_model_runtime_for_route(route_id, validate=False)
+    except Exception:
+        return ("unresolved", 1)
+    runtime = resolution.runtime
+    return (
+        runtime.provider or "unresolved",
+        max(1, min(int(runtime.composition_parallelism_limit), _COMPOSITION_MAX_PARALLELISM)),
+    )
+
+
+def _composition_worker_count(steps: list[WorkflowStep]) -> int:
+    """按 Provider 槽位计算组合任务本轮可用并发数。
+
+    不同 Provider 仍可并发；同一 Provider 的多个模型步骤共享其已验证槽位。例如当前
+    Kimi 为 1，因此资料库回答与数据洞察会按计划顺序执行，避免两次同路由请求互相干扰。
+    """
+
+    provider_counts: dict[str, int] = {}
+    provider_limits: dict[str, int] = {}
+    for step in steps:
+        provider, limit = _composition_model_lane_for_step(step)
+        provider_counts[provider] = provider_counts.get(provider, 0) + 1
+        provider_limits[provider] = min(provider_limits.get(provider, limit), limit)
+    slots = sum(
+        min(count, provider_limits[provider])
+        for provider, count in provider_counts.items()
+    )
+    return max(1, min(_COMPOSITION_MAX_PARALLELISM, len(steps), slots))
+
+
 def supports_native_read_only_composition_runtime(plan: WorkflowPlan) -> bool:
     """判断计划是否属于当前 Native 组合 Runtime 的窄白名单。
 
@@ -1192,9 +1241,10 @@ def _run_composition_plan(
 
         for step in pending_specialists:
             step_states[step.id] = _running_step(step)
+        worker_count = _composition_worker_count(pending_specialists)
         summary = (
-            f"正在并行执行 {len(pending_specialists)} 个只读专业步骤；"
-            f"本轮最多使用 {_COMPOSITION_MAX_PARALLELISM} 个执行槽位。"
+            f"正在调度 {len(pending_specialists)} 个只读专业步骤；"
+            f"本轮最多使用 {worker_count} 个执行槽位。"
         )
         save_progress()
         _append_runtime_event(
@@ -1228,7 +1278,7 @@ def _run_composition_plan(
             )
 
         with ThreadPoolExecutor(
-            max_workers=min(_COMPOSITION_MAX_PARALLELISM, len(pending_specialists)),
+            max_workers=worker_count,
             thread_name_prefix="agentflow-composition",
         ) as executor:
             futures = {executor.submit(execute_specialist, step): step for step in pending_specialists}

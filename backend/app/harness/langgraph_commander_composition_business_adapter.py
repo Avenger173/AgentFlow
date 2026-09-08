@@ -154,7 +154,9 @@ def composition_delegation_call_id(
         sort_keys=True,
         separators=(",", ":"),
     )
-    return f"lgm5call_{sha256(payload.encode('utf-8')).hexdigest()[:24]}"
+    # 调用键会成为 ``task_kb_<call_id>`` 的一部分。K3 的任务 ID 契约只接受字母数字，
+    # 所以这里不使用分隔下划线；长度固定为 32，仍可稳定映射且便于所有子 Agent 回读。
+    return f"lgm5call{sha256(payload.encode('utf-8')).hexdigest()[:24]}"
 
 
 def _step_with_delegation_call_id(

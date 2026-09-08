@@ -482,8 +482,12 @@ def compare_native_composition_execution(
     )
     native_result = synthesis.output.get("result") if synthesis is not None else {}
     native_result = native_result if isinstance(native_result, dict) else {}
-    native_delivery_state = str(native_result.get("completion_state", ""))
-    shadow_delivery_state = str(shadow_execution.delivery.get("status", ""))
+    native_delivery_state = _normalized_delivery_state(
+        native_result.get("completion_state", "")
+    )
+    shadow_delivery_state = _normalized_delivery_state(
+        shadow_execution.delivery.get("status", "")
+    )
     blockers: list[str] = []
     if native_run.status != "completed":
         blockers.append("Native 组合父任务没有完成，不能作为影子对照基线。")
@@ -507,6 +511,17 @@ def compare_native_composition_execution(
         shadow_delivery_state=shadow_delivery_state,
         blockers=tuple(blockers),
     )
+
+
+def _normalized_delivery_state(value: object) -> str:
+    """归一 Native 汇总结果与 Graph bridge 的完成态拼写。
+
+    Native 的客户交付契约历史上使用 ``complete``，而 bridge 状态机使用 ``completed``。
+    两者都是同一完成语义；这里仅服务于试点对照，不改写任一持久化协议。
+    """
+
+    state = str(value)
+    return "completed" if state == "complete" else state
 
 
 def _build_graph(backend: LangGraphCommanderCompositionShadowBackend):

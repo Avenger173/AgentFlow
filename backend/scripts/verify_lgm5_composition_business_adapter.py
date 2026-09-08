@@ -157,7 +157,7 @@ async def _verify() -> None:
     assert result.delegated_task_id == "fixture_child_step_2"
     assert result.source_count == 2
     expected_call_id = composition_delegation_call_id(runtime_task_id=_TASK_ID, invocation=invocations[0])
-    assert expected_call_id.startswith("lgm5call_")
+    assert expected_call_id.startswith("lgm5call")
     assert calls == [(_TASK_ID, "step_2", plan.plan_id, expected_call_id)]
     assert "_agentflow_delegation_call_id" not in plan.steps[1].input
 

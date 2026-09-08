@@ -393,7 +393,15 @@ def create_commander_plan(
                     if knowledge_deep_requested
                     else {
                         "knowledge_base_id": knowledge_base_id,
-                        "query": message,
+                        # 组合任务的全局目标会同时包含数据、文档与最终汇总要求。知识库
+                        # 子 Agent 只能读取资料库，必须先收束成其职责内的问题，避免把
+                        # 无关的数据分析指令一起送进受约束的问答输出契约。
+                        "query": _knowledge_query_for_plan(
+                            message,
+                            combined_with_other_specialist=bool(
+                                data_requested or document_requested
+                            ),
+                        ),
                     }
                 ),
                 reason=(
@@ -1214,6 +1222,46 @@ def _requests_multi_material_composition(
         )
     )
     return mentioned_kind_total >= 2
+
+
+def _knowledge_query_for_plan(
+    message: str,
+    *,
+    combined_with_other_specialist: bool,
+) -> str:
+    """为知识库步骤保留问题本意，同时剥离组合任务中其它专家的职责。
+
+    单一知识库问答完整保留客户原话，避免确定性规则篡改开放问题。仅当同一计划已明确
+    委派数据或文档专业步骤时，才从含“知识库/资料库”的分句提炼知识库子问题；若无法
+    稳定提炼，仍交回原问题，由模型在受控资料范围内回答，而不是凭空补造新问题。
+    """
+
+    normalized = " ".join(message.split())
+    if not combined_with_other_specialist:
+        return normalized
+
+    skipped_combined_anchor_end = 0
+    for match in re.finditer(r"知识库|资料库", normalized):
+        prefix = normalized[max(0, match.start() - 12):match.start()]
+        # “数据与资料库”只是组合材料清单，不是知识库子问题的开始；继续寻找后续真正
+        # 的“根据资料库说明/回答”分句。
+        if re.search(r"(?:数据|文档)\s*(?:与|和|及|、)\s*$", prefix):
+            skipped_combined_anchor_end = match.end()
+            continue
+        tail = normalized[match.end():]
+        query = re.split(r"[，,；;。！？!？]", tail, maxsplit=1)[0]
+        query = re.sub(r"^(?:中|里)?(?:的)?\s*(?:：|:)?\s*", "", query)
+        if len(query) >= 4:
+            return f"请根据当前资料库{query.rstrip('。')}。"
+
+    if skipped_combined_anchor_end:
+        # 组合清单后没有第二个资料库锚点时，保留后续目标分句；它至少不会把其它材料
+        # 的名字和组合动词一并塞进知识库模型上下文。
+        tail = normalized[skipped_combined_anchor_end:]
+        query = re.sub(r"^[：:,，；;\s]+", "", tail)
+        if len(query) >= 4:
+            return f"请根据当前资料库{query.rstrip('。')}。"
+    return normalized
 
 
 def _hint_can_influence_route(

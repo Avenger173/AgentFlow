@@ -44,7 +44,10 @@ from app.services.model_gateway import ModelGatewayError, ModelRuntime, resolve_
 
 
 _MAX_MODEL_SOURCES = 4
-_MAX_EVIDENCE_CHARS_PER_SOURCE = 6_000
+# K3 同时向模型发送多个父块时，不能把分块目标大小直接当成模型上下文预算。固定为
+# 4 x 3,200 字，连同 JSON 来源卡、系统约束和 2,048 输出预算仍有足够余量，避免部分
+# OpenAI-compatible Provider 在大父块组合上于请求层拒绝，而不是在可恢复的输出校验层失败。
+_MAX_EVIDENCE_CHARS_PER_SOURCE = 3_200
 _MAX_MODEL_OUTPUT_TOKENS = 2_048
 KNOWLEDGE_ANSWER_AGENT_ID = "knowledge_agent"
 KNOWLEDGE_RETRIEVAL_STEP_ID = "knowledge_retrieval"

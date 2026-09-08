@@ -27,7 +27,7 @@ from app.schemas.workflow import WorkflowRun, WorkflowStepRun
 from app.workflow import runtime
 
 
-_CALL_ID = "lgm5call_0123456789abcdef01234567"
+_CALL_ID = "lgm5call0123456789abcdef01234567"
 
 
 class _DocumentContextFixture:

@@ -94,6 +94,15 @@ class NativeCompositionStepCollector:
         self._execute_step = execute_step or _execute_native_step
         self._receipts: dict[str, NativeCompositionStepReceipt] = {}
         self._lock = Lock()
+        # Graph 的 Send 会并发调度多个 adapter。候选路径必须沿用 Native 组合 Runtime 的
+        # Provider 槽位策略，否则同一 Kimi 路由会在 Graph 侧重新并发，造成不公平的对照。
+        self._provider_slots: dict[str, asyncio.Semaphore] = {}
+        for plan_step in plan.steps:
+            if plan_step.parallel_group != "specialist_read_only":
+                continue
+            provider, limit = native_runtime._composition_model_lane_for_step(plan_step)
+            if provider not in self._provider_slots:
+                self._provider_slots[provider] = asyncio.Semaphore(limit)
 
     async def __call__(
         self,
@@ -114,21 +123,28 @@ class NativeCompositionStepCollector:
                 status="failed",
                 summary="已批准步骤无法映射到组合 invocation。",
             )
-        try:
-            step_run, tool_call, artifacts = await asyncio.to_thread(
-                self._execute_step,
-                runtime_task_id,
-                step,
-                plan,
-                self._output_dir,
-            )
-        except Exception:
-            return CommanderCompositionOutcome(
-                invocation_id=invocation_id,
-                status="failed",
-                summary="Native 专业步骤没有返回可合并回执。",
-                recovery_hint="可从已保存调用键恢复未完成步骤。",
-            )
+        provider, _limit = native_runtime._composition_model_lane_for_step(step)
+        slot = self._provider_slots.setdefault(provider, asyncio.Semaphore(1))
+        async with slot:
+            try:
+                step_run, tool_call, artifacts = await asyncio.to_thread(
+                    self._execute_step,
+                    runtime_task_id,
+                    step,
+                    plan,
+                    self._output_dir,
+                )
+            except Exception as exc:
+                # Graph 分支不能因为 Native executor 的未预期异常而只返回一个内存 outcome。
+                # 将它收束成同样可审计、可恢复的失败回执，父协调器才不会把该步骤遗留为 pending。
+                step_run, tool_call, artifacts = native_runtime._failed_safe_step(
+                    runtime_task_id=runtime_task_id,
+                    step=step,
+                    started_at=datetime.now(UTC),
+                    error_code="agent_delegate_failed",
+                    message="组合专业步骤未能返回可合并回执；其它独立步骤会继续完成。",
+                    details={"exception_type": type(exc).__name__},
+                )
         receipt = NativeCompositionStepReceipt(
             invocation_id=invocation_id,
             step_id=step.id,
@@ -387,6 +403,16 @@ def _merge_parent_receipts(
             step_id=step.id,
             message=step_run.message,
             level="info" if step_run.status == "completed" else "warning" if step_run.status == "blocked" else "error",
+        )
+    synthesis_run = step_states.get(synthesis.id)
+    if synthesis_run is not None and synthesis_run.status == "completed":
+        append_workflow_event(
+            task_id=runtime_task_id,
+            event_name="step_completed",
+            agent_id=synthesis.agent,
+            step_id=synthesis.id,
+            message=synthesis_run.message,
+            level="info",
         )
     append_workflow_event(
         task_id=runtime_task_id,

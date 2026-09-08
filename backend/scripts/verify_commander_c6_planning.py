@@ -34,6 +34,23 @@ class _ConflictingPlannerRuntime:
         type(self).received_system_prompt = system_prompt
         return "我目前无法直接访问您提到的资料库，因为没有对应检索工具。"
 
+    async def chat_json(
+        self,
+        *,
+        system_prompt: str,
+        user_message: str,
+        maximum_tokens: int = 512,
+    ) -> str:
+        """跟随当前语义意图 Runtime 契约，避免旧夹具跳过规划前置回合。"""
+
+        del system_prompt, user_message, maximum_tokens
+        return (
+            '{"version":"agentflow.commander_intent.v1","intent":"knowledge",'
+            '"is_follow_up":false,"delivery":"answer","preferred_agents":["knowledge_agent"],'
+            '"required_material_kinds":["knowledge_base"],"confidence":0.96,'
+            '"clarifying_question":""}'
+        )
+
 
 class _FixtureRouteResolution:
     """跟随 C6.5 路由解析协议的最小 fixture，不读取本地模型配置或密钥。"""

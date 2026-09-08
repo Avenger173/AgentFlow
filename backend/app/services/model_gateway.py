@@ -203,6 +203,10 @@ class ModelProviderProfile:
     sends_temperature: bool = True
     supports_json_output: bool = True
     supports_tool_calls: bool = True
+    # 同一供应商在组合任务中可安全占用的并行模型槽位。它不是账户 RPM 声明，而是
+    # AgentFlow 已验证的组合调度上限；未知 Provider 保守允许两个槽位，后续以真实
+    # 观测收紧或放宽。
+    composition_parallelism_limit: int = 2
     # 这是“当前已核验的协议行为”，不是命中率承诺。实际命中只能读取单次响应 usage。
     context_cache_mode: ContextCacheMode = "unknown"
     context_cache_note: str = "当前未验证可观测的上下文缓存协议。"
@@ -233,6 +237,7 @@ class ModelRuntime:
     sends_temperature: bool = True
     supports_json_output: bool = True
     supports_tool_calls: bool = True
+    composition_parallelism_limit: int = 2
     context_cache_mode: ContextCacheMode = "unknown"
     context_cache_note: str = "当前未验证可观测的上下文缓存协议。"
     # 仅由 ``resolve_model_runtime_for_route`` 写入的脱敏路由事实。运行时仍将 API Key 留在
@@ -624,6 +629,9 @@ _PROVIDER_PROFILES: dict[str, ModelProviderProfile] = {
         supports_thinking=True,
         completion_tokens_field="max_completion_tokens",
         sends_temperature=False,
+        # K3 与数据洞察同时走同一 Kimi 路由时曾出现请求层拒绝；在没有并发稳定性证据
+        # 前，组合 Runtime 对同一 Provider 串行化，普通独立任务不受此策略影响。
+        composition_parallelism_limit=1,
         context_cache_note="当前没有接入经核验的 Kimi 上下文缓存计量字段。",
         notes="Kimi K2.6 支持文本、图片、视频输入与 OpenAI-compatible Tool Calls。",
     ),
@@ -802,6 +810,7 @@ def resolve_model_runtime(
         sends_temperature=profile.sends_temperature,
         supports_json_output=profile.supports_json_output,
         supports_tool_calls=profile.supports_tool_calls,
+        composition_parallelism_limit=profile.composition_parallelism_limit,
         context_cache_mode=profile.context_cache_mode,
         context_cache_note=profile.context_cache_note,
     )
@@ -955,6 +964,7 @@ def resolve_model_runtime_for_test(
         sends_temperature=profile.sends_temperature,
         supports_json_output=profile.supports_json_output,
         supports_tool_calls=profile.supports_tool_calls,
+        composition_parallelism_limit=profile.composition_parallelism_limit,
         context_cache_mode=profile.context_cache_mode,
         context_cache_note=profile.context_cache_note,
     )

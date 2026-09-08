@@ -32,6 +32,7 @@ from app.database.knowledge_repository import create_knowledge_base, import_work
 from app.database.task_repository import load_task_log_events, load_workflow_run
 from app.schemas.knowledge import KnowledgeAnswerRequest
 from app.services.knowledge_answer import (
+    _compact_evidence,
     answer_knowledge_question,
     create_knowledge_answer_queued_run,
     get_knowledge_answer_task_result,
@@ -133,6 +134,12 @@ def _source_ids_from_messages(messages: list[ModelConversationMessage]) -> tuple
 
 def main() -> None:
     try:
+        # K3 父块可比固定分块更长，但模型上下文必须按实际交付预算截断；不能因一条来源
+        # 过大而把多来源可信问答变成 Provider 请求层失败。
+        compacted = _compact_evidence("x" * 20_000)
+        assert len(compacted) == 3_200
+        assert compacted.endswith("...")
+
         base = create_knowledge_base(name="K3 回答回归")
         _import_and_index(
             base.knowledge_base_id,

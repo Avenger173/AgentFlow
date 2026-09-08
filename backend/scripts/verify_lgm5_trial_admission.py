@@ -47,6 +47,7 @@ from app.harness.langgraph_composition_trial import (
     revoke_composition_developer_trial,
     revoke_composition_developer_trial_authorization,
 )
+from app.harness import langgraph_composition_trial as trial_module
 from app.schemas.chat import WorkflowPlan, WorkflowStep
 from app.schemas.events import TaskLogEvent
 from app.schemas.langgraph_trial import LangGraphCompositionTrialEvidence
@@ -185,7 +186,8 @@ def _completed_run(task_id: str, plan: WorkflowPlan) -> WorkflowRun:
         if step.id in {"step_2", "step_3"}:
             result = {"source_count": 2}
         elif step.id == "step_4":
-            result = {"completion_state": "completed"}
+            # Native Runtime 的既有客户交付契约使用 complete；Graph bridge 使用 completed。
+            result = {"completion_state": "complete"}
         else:
             result = {}
         steps.append(
@@ -485,6 +487,47 @@ def main() -> None:
     assert observation.evidence.event_delivery_comparison_passed
     assert observation.evidence.source_artifact_comparison_passed
     assert observation.evidence.recovery_semantics_passed
+
+    # 已保存失败事件在恢复成功后仍需留给审计，但最终客户状态应以最后一次步骤终态为准。
+    recovered_events = [
+        *_events(graph_run.task_id),
+        TaskLogEvent(
+            task_id=graph_run.task_id,
+            sequence=10,
+            event="step_failed",
+            agent_id="document_agent",
+            step_id="step_2",
+            message="fixture failure",
+            level="error",
+        ),
+        TaskLogEvent(
+            task_id=graph_run.task_id,
+            sequence=11,
+            event="step_completed",
+            agent_id="document_agent",
+            step_id="step_2",
+            message="fixture recovered",
+            level="info",
+        ),
+    ]
+    scoped_steps = trial_module._composition_scope_step_ids(plan)
+    assert trial_module._event_projection_signature(
+        _events(native_run.task_id), scoped_steps, native_run.status
+    ) == trial_module._event_projection_signature(
+        recovered_events, scoped_steps, graph_run.status
+    )
+
+    # 两条独立检索都拿到可定位来源即可；图表和表格数量仍由交付签名逐项比较。
+    source_count_variant = _completed_run("task_lgm57_source_variant", plan)
+    source_step = next(item for item in source_count_variant.steps if item.step_id == "step_2")
+    source_step.output["result"]["source_count"] = 3
+    assert trial_module._result_fact_signature(
+        native_run, scoped_steps
+    ) == trial_module._result_fact_signature(source_count_variant, scoped_steps)
+    source_step.output["result"]["source_count"] = 0
+    assert trial_module._result_fact_signature(
+        native_run, scoped_steps
+    ) != trial_module._result_fact_signature(source_count_variant, scoped_steps)
 
     mismatched_artifacts = _artifacts(graph_run.task_id)
     mismatched_artifacts[1] = mismatched_artifacts[1].model_copy(update={"kind": "file"})

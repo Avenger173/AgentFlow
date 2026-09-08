@@ -131,7 +131,7 @@ def _fixture_executor_factory(calls: Counter[str]):
         del plan, output_dir
         calls[step.id] += 1
         call_id = str(step.input.get("_agentflow_delegation_call_id", ""))
-        assert call_id.startswith("lgm5call_")
+        assert call_id.startswith("lgm5call")
         started_at = datetime.now(UTC)
         if step.id == "step_3" and calls[step.id] == 1:
             return runtime._failed_safe_step(
@@ -233,8 +233,15 @@ async def _verify_primary_path() -> None:
         "agentflow-task://fixture_child_step_4",
     }
     events = load_task_log_events(task_id) or []
-    assert [item.event for item in events].count("step_completed") == 3
+    # 首次部分汇总与恢复后的完整汇总都会形成独立合成步骤终态事件。
+    assert [item.event for item in events].count("step_completed") == 5
     assert [item.event for item in events].count("step_failed") == 1
+    assert any(
+        item.event == "step_completed"
+        and item.agent_id == "commander_agent"
+        and item.step_id == "step_5"
+        for item in events
+    )
     assert any(item.event == "task_waiting" for item in events)
     assert events[-1].event == "task_completed"
     delivery = build_delivery_card(
@@ -302,10 +309,44 @@ async def _verify_parent_checkpoint_failure() -> None:
     assert bridge is not None and bridge.status == "failed"
 
 
+async def _verify_executor_exception_receipt() -> None:
+    """未预期 executor 异常也必须投影为失败步骤，不能在父任务中遗留 pending。"""
+
+    task_id = "task_lgm5_exception_receipt"
+    plan = _plan(suffix="exception_receipt")
+    _save_parent(task_id=task_id, plan=plan)
+    base_executor = _fixture_executor_factory(Counter())
+
+    def executor(runtime_task_id, step, received_plan, output_dir):
+        if step.id == "step_3":
+            raise RuntimeError("fixture executor boundary failure")
+        return base_executor(runtime_task_id, step, received_plan, output_dir)
+
+    result = await LangGraphCompositionParentCoordinator(
+        runtime_task_id=task_id,
+        checkpoint_path=VERIFY_DATA_DIR / "graph" / "exception_receipt.sqlite",
+        output_dir=VERIFY_DATA_DIR / "outputs",
+        execute_step=executor,
+    ).execute()
+    assert result.workflow_run.status == "blocked"
+    assert result.graph_result.status == "partial"
+    steps = {item.step_id: item for item in result.workflow_run.steps}
+    assert steps["step_3"].status == "failed"
+    assert steps["step_3"].output["error"]["code"] == "agent_delegate_failed"
+    assert steps["step_5"].status == "completed"
+    bridge = load_langgraph_composition_bridge(task_id)
+    assert bridge is not None and bridge.status == "partial"
+    assert len(bridge.failed_invocation_ids) == 1
+    calls = {item.step_id: item for item in list_workflow_tool_calls(task_id)}
+    assert calls["step_3"].status == "failed"
+    assert calls["step_3"].failure_count == 1
+
+
 def main() -> None:
     asyncio.run(_verify_primary_path())
     asyncio.run(_verify_fallback())
     asyncio.run(_verify_parent_checkpoint_failure())
+    asyncio.run(_verify_executor_exception_receipt())
     print("LGM5 parent coordinator verification passed.")
 
 

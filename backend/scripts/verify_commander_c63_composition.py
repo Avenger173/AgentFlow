@@ -69,6 +69,11 @@ def main() -> None:
     assert all(step.depends_on == ["step_1"] for step in specialist_steps)
     assert all(step.parallel_group == "specialist_read_only" for step in specialist_steps)
 
+    knowledge_step = next(step for step in specialist_steps if step.agent == "knowledge_agent")
+    # 组合计划中的知识库步骤只接收资料库职责内的问题，不能把文档梳理、数据趋势和
+    # 最终汇总等全局要求原样透传给受约束的知识库问答模型。
+    assert knowledge_step.input["query"] == "请根据当前资料库梳理项目目标、数据趋势与资料依据。"
+
     synthesis = next(step for step in plan.steps if step.action == "synthesize_results")
     assert synthesis.execution_mode == "execute"
     assert set(synthesis.depends_on) == {step.id for step in specialist_steps}

@@ -12,9 +12,10 @@ from app.services.model_gateway import ModelRuntime, get_verified_model_context_
 
 
 # 字符预算是 AgentFlow 的输入防护阈值，不是假装精确的 tokenizer 或 Provider 账单。K3 的 4 条
-# 已核验证据、K4 的单章节 Map 与最多 6 个 checkpoint Reduce 都必须在这些上限内收束。
+# 已核验证据按每条 3,200 字收束，给系统约束、来源元数据和结构化输出留出稳定余量；K4 的
+# 单章节 Map 与最多 6 个 checkpoint Reduce 也必须在这些上限内收束。
 KNOWLEDGE_CONTEXT_CHAR_BUDGETS: dict[KnowledgeContextStage, int] = {
-    "knowledge_answer": 32_000,
+    "knowledge_answer": 18_000,
     "deep_map": 12_000,
     "deep_reduce": 18_000,
 }
