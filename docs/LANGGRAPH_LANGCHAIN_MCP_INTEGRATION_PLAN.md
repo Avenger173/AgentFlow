@@ -681,6 +681,10 @@ LGM1 交付的是受控协议内核，不是面向客户的“已支持 MCP”�
   不透明审批引用，状态仅为 `authorized`、`rejected`、`revoked`；预授权不能代替运行后的最终准入，
   也不能在撤销后重启同一 Runtime。`LangGraphCompositionDeveloperTrialCandidateRunner` 只接受这份
   预授权来收集候选 Graph 对照，失败显式要求 Native 重试，完成也只表示“等待审计”，不会改变客户路径。
+- `prepare_composition_developer_trial_pair()` 只接受已完成的 C6.4 dry-run 计划，并创建相同冻结计划的
+  Native 基线与 Graph 候选两条 Runtime。候选侧只执行 `step_1/analyze_task` 这条安全内置步骤；文档、
+  数据、知识库专业调用、文件读取、模型、联网和 MCP 都不会在准备阶段触发。它为后续真实试点排除
+  “手工复制计划”或“候选计划与基线计划不一致”的伪对照风险。
 - 后续真实试点必须先经 `observe_composition_developer_trial()` 由 Native/Graph 已保存的 Runtime
   结构化事实生成证据：它对照 C6.4 调用集合、受控 Tool 形态、产物类型、客户状态事件投影、
   交付投影及来源/图表/表格数量事实；不读取 prompt、模型正文、材料名、产物 URI 或路径。恢复
@@ -688,6 +692,8 @@ LGM1 交付的是受控协议内核，不是面向客户的“已支持 MCP”�
 - `verify_lgm5_trial_admission.py` 用临时 SQLite 与伪协调器覆盖：通用开关误开、fixture、资源超线、
   计划不一致和撤销均不可执行；已准入的 Graph 故障只给出 Native 重试路线；还覆盖结构化观察器对
   完整一致执行的证据生成和产物类型偏差的拒绝。未调用真实模型、网络、MCP 或客户文件。
+- `verify_lgm57_trial_preparation.py` 以临时 SQLite 覆盖成对 Runtime 创建、候选根步骤持久化、候选专业
+  分支保持 pending，以及未完成 dry-run 拒绝；它同样不会调用模型、网络、MCP 或客户文件。
 - **尚未进行真实材料/模型的开发者验收，也没有任何客户流量进入 LangGraph。**下一步只能在开发者
   明确授权、准备固定只读组合计划和实际基线采样后，手动运行一次受审计试点；失败即停驻并按 Native
   重试，不能据此注册客户 Router/API/Qt。
