@@ -32,7 +32,7 @@ from app.mcp.contracts import (  # noqa: E402
     McpToolReference,
     McpToolResult,
 )
-from app.services.commander import create_commander_plan  # noqa: E402
+from app.services.commander import build_commander_planning_reply, create_commander_plan  # noqa: E402
 from app.services.delivery_card import build_delivery_card  # noqa: E402
 from app.services.public_reference_mcp import (  # noqa: E402
     PublicReferenceResolution,
@@ -188,6 +188,12 @@ def main(*, live: bool = False) -> None:
         assert public_step.required_permissions == ["network", "shell"]
         assert public_step.requires_confirmation is True
         assert public_step.tool_name == "mcp.public-reference.search_wikimedia"
+        customer_reply = build_commander_planning_reply(enabled_plan)
+        assert "Wikimedia" in customer_reply
+        assert "回复“开始”" in customer_reply
+        assert "dry-run" not in customer_reply.lower()
+        assert "Runtime" not in customer_reply
+        assert "情报检索 Agent" not in customer_reply
 
         fixture_gateway = _FixtureGateway()
         resolution = asyncio.run(

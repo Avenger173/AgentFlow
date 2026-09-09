@@ -118,6 +118,7 @@ private:
     bool isCurrentDispatchDataChartDelivery() const;
     bool isCurrentDispatchDataWorkbookDelivery() const;
     bool isCurrentDispatchAutoReadOnlyTask() const;
+    bool isCurrentDispatchPublicReferenceSearch() const;
     bool isCurrentDispatchDirectConversation() const;
     QString currentDispatchAutoReadOnlyActivityText() const;
     QString currentDispatchKnowledgeBaseName() const;

@@ -11117,6 +11117,15 @@ bool MainWindow::isCurrentDispatchAutoReadOnlyTask() const
     return currentDispatchDirectKnowledgeAnswer || currentDispatchDirectDataAnalysis;
 }
 
+bool MainWindow::isCurrentDispatchPublicReferenceSearch() const
+{
+    return std::any_of(currentDispatchPlanSteps.cbegin(),
+                       currentDispatchPlanSteps.cend(),
+                       [](const WorkflowStepInfo &step) {
+                           return step.action == QStringLiteral("search_public_references");
+                       });
+}
+
 bool MainWindow::isCurrentDispatchDataChartDelivery() const
 {
     // 只识别既有的单数据图表写入闭环。它需要客户确认，不能因为含有“图表”一词就把任意
@@ -11655,7 +11664,10 @@ void MainWindow::beginCurrentDispatchRuntime(bool automaticallyApproved)
     currentDispatchExecutionSubmitted = false;
     updateDispatchActionButtons();
     ui->dispatchChatStatus->setText(
-        automaticallyApproved ? currentDispatchAutoReadOnlyActivityText() : QStringLiteral("请求执行"));
+        automaticallyApproved ? currentDispatchAutoReadOnlyActivityText()
+                              : (isCurrentDispatchPublicReferenceSearch()
+                                     ? QStringLiteral("正在请求联网授权")
+                                     : QStringLiteral("正在开始执行")));
     setDispatchActivityRunning(true);
     setProgressStep(5,
                     automaticallyApproved
@@ -15924,13 +15936,20 @@ void MainWindow::handleTaskExecutionCompleted(const WorkflowExecutionResult &res
                                    ? QStringLiteral("5 当前结论 · 正在分析已选数据")
                                    : QStringLiteral("5 当前结论 · 已提交 Runtime：%1").arg(dispatchStatus)),
                         QStringLiteral("badgeBlue"));
+        const bool runtimeActive = result.status == QStringLiteral("queued")
+            || result.status == QStringLiteral("pending") || result.status == QStringLiteral("running");
+        setDispatchActivityRunning(runtimeActive);
         if (isCurrentDispatchAutoReadOnlyTask()) {
             ui->dispatchChatStatus->setText(currentDispatchAutoReadOnlyActivityText());
             setDispatchActivityRunning(true);
+        } else if (isCurrentDispatchPublicReferenceSearch()) {
+            appendConversationHtml(
+                result.status == QStringLiteral("waiting_permission")
+                    ? QStringLiteral("<hr/><h3>AI 调度台</h3><p>已准备联网检索，等待你确认本次授权。</p>")
+                    : QStringLiteral("<hr/><h3>AI 调度台</h3><p>正在查询公开资料，完成后会直接返回参考链接。</p>"));
         } else {
             appendConversationHtml(
-                QStringLiteral("<p style=\"color:#2563EB;\"><b>系统</b> · %1。Runtime 任务：%2</p>")
-                    .arg(message.toHtmlEscaped(), result.runtimeTaskId.toHtmlEscaped()));
+                QStringLiteral("<p style=\"color:#2563EB;\">任务已开始处理，完成后会直接显示结果。</p>"));
         }
         backendClient->connectTaskLog(result.runtimeTaskId);
         backendClient->requestTaskDeliveryCard(result.runtimeTaskId);
@@ -15954,11 +15973,8 @@ void MainWindow::handleTaskExecutionCompleted(const WorkflowExecutionResult &res
     if (result.runtimeTaskId != currentHistoryTaskId) {
         historyOffset = 0;
     }
-    if (fromDispatch && !isCurrentDispatchAutoReadOnlyTask()) {
-        switchPage(12);
-    } else {
-        refreshTaskHistory();
-    }
+    // 从调度台发起的任务留在当前会话展示阶段与交付；历史页仍同步保留完整审计入口。
+    refreshTaskHistory();
 }
 
 void MainWindow::handleTaskExecutionFailed(const QString &message)
@@ -19135,7 +19151,9 @@ void MainWindow::sendDispatchMessage()
     // 误判为对上一轮计划的确认。真正的权限策略仍在 Runtime 内二次执行，不因这条便利
     // 入口跳过文件写入、联网或命令确认。
     const QString executionCommand = message.toLower().simplified();
-    const bool asksToExecute = executionCommand == QStringLiteral("开始执行")
+    const bool asksToExecute = executionCommand == QStringLiteral("开始")
+        || executionCommand == QStringLiteral("确认")
+        || executionCommand == QStringLiteral("开始执行")
         || executionCommand == QStringLiteral("确认执行")
         || executionCommand == QStringLiteral("开始做")
         || executionCommand == QStringLiteral("继续执行");
@@ -19368,7 +19386,9 @@ void MainWindow::submitDispatchMessage(const QString &message,
     currentDispatchRuntimeStatus.clear();
     currentDispatchHasPendingPermission = false;
     currentDispatchArtifactCount = 0;
-    setDispatchActivityRunning(false);
+    // 已经提交给后端的聊天请求也是可见的等待阶段。收到结果、失败或真正的 Runtime 状态后
+    // 会由对应回调收束，客户不必只靠一行状态文字猜测是否仍在处理。
+    setDispatchActivityRunning(true);
     if (dispatchUpdateRefreshTimer) {
         dispatchUpdateRefreshTimer->stop();
     }
@@ -19495,6 +19515,19 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
     } else if (currentDispatchDirectDataAnalysis) {
         appendConversationHtml(
             QStringLiteral("<hr/><h3>AI 调度台</h3><p>正在分析已选数据，完成后会直接给出主要趋势、差异和图表建议。</p>"));
+    } else if (isCurrentDispatchPublicReferenceSearch()) {
+        QString query = currentDispatchUserGoal;
+        for (const WorkflowStepInfo &step : currentDispatchPlanSteps) {
+            if (step.action == QStringLiteral("search_public_references")) {
+                query = step.input.value(QStringLiteral("query")).toString(query).trimmed();
+                break;
+            }
+        }
+        appendConversationHtml(
+            QStringLiteral("<hr/><h3>AI 调度台</h3><p><b>准备查询“%1”。</b></p>"
+                           "<p>本次仅使用固定的 Wikimedia 公开资料，最多返回 3 条带链接的参考。"
+                           "回复“开始”即可继续；联网授权会在执行前明确显示。</p>")
+                .arg(query.toHtmlEscaped()));
     } else if (currentDispatchDataChartDelivery) {
         appendConversationHtml(
             QStringLiteral("<hr/><h3>AI 调度台</h3><p><b>正在生成数据图表。</b></p>"
@@ -19530,7 +19563,7 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
     const bool needsClarification = currentDispatchNeedsClarification;
     const bool autoReadOnlyTask = isCurrentDispatchAutoReadOnlyTask();
     const bool directConversation = isCurrentDispatchDirectConversation();
-    QString dispatchStatus = QStringLiteral("预演中");
+    QString dispatchStatus = QStringLiteral("等待开始");
     if (needsClarification) {
         dispatchStatus = QStringLiteral("待补充");
     } else if (autoReadOnlyTask) {
@@ -19539,6 +19572,8 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
         dispatchStatus = QStringLiteral("正在生成图表");
     } else if (currentDispatchDataWorkbookDelivery) {
         dispatchStatus = QStringLiteral("正在生成分析 Excel");
+    } else if (isCurrentDispatchPublicReferenceSearch()) {
+        dispatchStatus = QStringLiteral("等待开始联网检索");
     } else if (currentDispatchPresentationHandoff) {
         dispatchStatus = QStringLiteral("已识别 PPT 制作需求");
     } else if (currentDispatchGuidedHandoff) {
@@ -19577,6 +19612,11 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
         stageThree = QStringLiteral("3 分析 Excel · 正在生成工作簿");
         stageFour = QStringLiteral("4 权限 / 产物 · 已按本次请求执行");
         stageFive = QStringLiteral("5 当前结论 · 等待工作簿回读验证");
+    } else if (isCurrentDispatchPublicReferenceSearch()) {
+        stageThree = QStringLiteral("3 公开资料检索 · 等待开始");
+        stageFour = QStringLiteral("4 联网授权 · 将在开始后请求");
+        stageFive = QStringLiteral("5 当前结论 · 等待公开资料参考");
+        stageThreeBadge = QStringLiteral("badgeGray");
     } else if (currentDispatchPresentationHandoff) {
         stageThree = currentDispatchPresentationRunning
             ? QStringLiteral("3 智能制作 PPT · 正在生成")
@@ -20018,6 +20058,14 @@ void MainWindow::applyDispatchTaskUpdates(const WorkflowTaskUpdateListResult &re
         ui->dispatchChatStatus->setText(statusText);
         ui->summaryVal3->setText(statusText);
     }
+
+    // 活动指示器只跟随后端已确认的 Runtime 状态。计划等待、权限等待和全部终态均停止，
+    // 避免客户把静止的阶段说明误读为仍在执行，或把已结束任务误读为卡住。
+    const bool runtimeActive = currentDispatchRuntimeMode == QStringLiteral("runtime")
+        && (currentDispatchRuntimeStatus == QStringLiteral("queued")
+            || currentDispatchRuntimeStatus == QStringLiteral("pending")
+            || currentDispatchRuntimeStatus == QStringLiteral("running"));
+    setDispatchActivityRunning(runtimeActive || currentDispatchPresentationRunning);
 
     if (currentDispatchHasPendingPermission) {
         ui->dispatchChatStatus->setText(QStringLiteral("待确认"));
@@ -20756,9 +20804,12 @@ void MainWindow::handleTaskLogReceived(const TaskLogEvent &event)
     if (isCurrentDispatchAutoReadOnlyTask()
         || currentDispatchDataChartDelivery
         || currentDispatchDataWorkbookDelivery
-        || currentDispatchPresentationRunning) {
+        || currentDispatchPresentationRunning
+        || isCurrentDispatchPublicReferenceSearch()) {
         ui->dispatchChatStatus->setText(currentDispatchPresentationRunning
                                             ? QStringLiteral("正在制作 PPT")
+                                        : isCurrentDispatchPublicReferenceSearch()
+                                            ? QStringLiteral("正在查询公开资料")
                                             : currentDispatchAutoReadOnlyActivityText());
         setDispatchActivityRunning(true);
     }

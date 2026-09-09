@@ -980,8 +980,22 @@ def build_commander_planning_reply(plan: WorkflowPlan) -> str:
 
     if plan.intent == "fresh_external_information":
         return (
-            "当前还不能检索最近新闻、实时动态或任意网站内容。"
-            "现有公开资料连接只支持固定的百科型参考，且不会转交给本地文档、数据或知识库助手。"
+            "目前还不能检索最近新闻、实时动态或任意网站内容。\n\n"
+            "现有的公开资料能力仅用于固定百科参考，不能替代新闻搜索。"
+        )
+
+    public_reference_step = next(
+        (step for step in plan.steps if step.action == "search_public_references"),
+        None,
+    )
+    if public_reference_step is not None:
+        query = str(public_reference_step.input.get("query", "")).strip()
+        query_label = f"“{query}”" if query else "本次主题"
+        return (
+            f"已准备查询 {query_label}。\n\n"
+            "本次只会检索固定的 Wikimedia 公开资料，最多返回 3 条带链接的参考；"
+            "不会检索新闻、任意网页或其他数据库。\n\n"
+            "回复“开始”即可继续。执行前会明确请求本次联网授权。"
         )
 
     material_names = {
@@ -1000,7 +1014,7 @@ def build_commander_planning_reply(plan: WorkflowPlan) -> str:
         if step.execution_mode == "execute" and step.agent != COMMANDER_AGENT_ID
     ]
 
-    lines = ["已生成本次可审阅计划。"]
+    lines = ["已准备好本次任务。"]
     if materials:
         lines.append("本次已明确绑定：" + "、".join(materials) + "。")
     if executable_steps:
@@ -1008,7 +1022,7 @@ def build_commander_planning_reply(plan: WorkflowPlan) -> str:
     if plan.clarifying_questions:
         lines.append("开始前还需要：" + "；".join(plan.clarifying_questions[:3]))
     else:
-        lines.append("当前尚未读取材料正文或生成专业结论；如计划无误，请回复“开始执行”进入真实 Runtime。")
+        lines.append("回复“开始”即可继续；需要的授权会在执行前明确显示。")
     return "\n\n".join(lines)
 
 
@@ -1019,6 +1033,11 @@ def reply_conflicts_with_commander_plan(reply: str, plan: WorkflowPlan) -> bool:
     无法访问或没有工具”的明确矛盾。遇到歧义宁可保留模型措辞；命中时再退回到上面的
     确定性说明，避免靠字符串重写制造新的虚假结论。
     """
+
+    if any(step.action == "search_public_references" for step in plan.steps):
+        # 公开资料首期只有一个固定 Tool。客户侧只呈现由计划事实生成的简短说明，避免表达
+        # 模型凭常识虚构“情报 Agent”、多站交叉验证或任意网页检索能力。
+        return True
 
     lowered = reply.lower()
     denied_markers = (

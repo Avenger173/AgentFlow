@@ -163,9 +163,13 @@ async def create_llm_chat_response(
     except ModelGatewayError as exc:
         raise LlmChatError(str(exc)) from exc
 
-    if workflow_plan is not None and workflow_plan.intent == "fresh_external_information":
+    if workflow_plan is not None and workflow_plan.intent in {
+        "fresh_external_information",
+        "public_reference_search",
+    }:
         # 时效外部信息尚无获批连接。让表达模型直接服从确定性边界，不能把“新闻资料”
-        # 想象成已选文档、历史标签或可联网的泛化搜索能力。
+        # 想象成已选文档、历史标签或可联网的泛化搜索能力。固定公开资料同样不能让表达
+        # 模型虚构未接入的 Provider、检索范围或验证策略。
         reply = build_commander_planning_reply(workflow_plan)
     elif workflow_plan is not None and reply_conflicts_with_commander_plan(reply, workflow_plan):
         # 模型可以润色计划，但不能覆盖 Runtime 已确认的材料范围。命中明确否认时宁可
