@@ -4,6 +4,7 @@
 #include <QHostAddress>
 #include <QTcpServer>
 #include <QTcpSocket>
+#include <QTemporaryDir>
 #include <QtTest>
 
 #include <utility>
@@ -65,6 +66,7 @@ class BackendManagerTest final : public QObject
 private slots:
     void acceptsAgentFlowHealthResponse();
     void rejectsForeignHttpServiceAndAllowsExplicitRetry();
+    void directoryReleaseRequiresBundledBackend();
 };
 
 void BackendManagerTest::acceptsAgentFlowHealthResponse()
@@ -104,6 +106,28 @@ void BackendManagerTest::rejectsForeignHttpServiceAndAllowsExplicitRetry()
     QVERIFY(unavailableSpy.at(1).at(0).toString().contains(QStringLiteral("已有服务")));
     QVERIFY(!manager.isReady());
     QVERIFY(!manager.ownsBackendProcess());
+}
+
+void BackendManagerTest::directoryReleaseRequiresBundledBackend()
+{
+    QTemporaryDir releaseRoot;
+    QVERIFY(releaseRoot.isValid());
+
+    const QByteArray previousMode = qgetenv("AGENTFLOW_RELEASE_MODE");
+    const QByteArray previousBackendDir = qgetenv("AGENTFLOW_BACKEND_DIR");
+    qputenv("AGENTFLOW_RELEASE_MODE", "directory");
+    qputenv("AGENTFLOW_BACKEND_DIR", releaseRoot.path().toUtf8());
+
+    BackendManager manager(QUrl(QStringLiteral("http://127.0.0.1:1")));
+    QSignalSpy unavailableSpy(&manager, &BackendManager::unavailable);
+    manager.ensureStarted();
+
+    QTRY_COMPARE_WITH_TIMEOUT(unavailableSpy.count(), 1, 4'000);
+    QVERIFY(unavailableSpy.at(0).at(0).toString().contains(QStringLiteral("目录式发行包中未找到")));
+    QVERIFY(!manager.ownsBackendProcess());
+
+    qputenv("AGENTFLOW_RELEASE_MODE", previousMode);
+    qputenv("AGENTFLOW_BACKEND_DIR", previousBackendDir);
 }
 
 QTEST_MAIN(BackendManagerTest)

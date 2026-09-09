@@ -65,9 +65,10 @@ signals:
     void stopped(const QString &message);
 
 private:
-    // 路径解析保持在 Qt 侧，方便以后打包时改为 backend exe 或便携目录。
+    // 路径解析保持在 Qt 侧。目录式发行只接受随包后端，不回退到客户机器的全局 Python。
     QString resolveBackendDir() const;
-    QString resolvePythonProgram(const QString &backendDir) const;
+    QString resolveBackendProgram(const QString &backendDir) const;
+    bool isDirectoryReleaseMode() const;
     QString processErrorText(QProcess::ProcessError error) const;
 
     // 真正执行 QProcess::start 的位置。调用前应已经确认没有可复用的手动后端。
@@ -103,9 +104,9 @@ private:
     // 当前固定为 127.0.0.1:8765；后续模型、插件或多实例支持会把它变成配置项。
     QUrl baseUrl_;
 
-    // 已解析出的后端目录和 Python 程序。启动失败时 UI 会用这些信息辅助定位。
+    // 已解析出的后端目录和启动程序。启动失败时 UI 会用这些信息辅助定位。
     QString backendDir_;
-    QString pythonProgram_;
+    QString backendProgram_;
 
     // 记录最近一次健康检查失败原因，最终超时时展示给用户。
     QString lastProbeError_;

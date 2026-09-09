@@ -8,6 +8,7 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QProcessEnvironment>
+#include <QStandardPaths>
 
 namespace {
 
@@ -104,7 +105,7 @@ void BackendManager::ensureStarted()
     startupFailureReported_ = false;
     startupElapsedTimer_.start();
     backendDir_ = resolveBackendDir();
-    pythonProgram_ = resolvePythonProgram(backendDir_);
+    backendProgram_ = resolveBackendProgram(backendDir_);
 
     // 首次探测只需要一次：如果端口已有健康后端，直接复用；
     // 如果失败，probeHealth 会进入 startProcess()。
@@ -218,12 +219,23 @@ QString BackendManager::resolveBackendDir() const
     });
 }
 
-QString BackendManager::resolvePythonProgram(const QString &backendDir) const
+bool BackendManager::isDirectoryReleaseMode() const
 {
-    // Python 选择顺序：
-    // 1. AGENTFLOW_PYTHON：用户或打包脚本明确指定。
-    // 2. backend/.venv/Scripts/python.exe：开发环境隔离依赖。
-    // 3. PATH 中的 python：兜底，适合本机已配置 Python 的情况。
+    const QString mode = QString::fromLocal8Bit(qgetenv("AGENTFLOW_RELEASE_MODE")).trimmed();
+    return mode.compare(QStringLiteral("directory"), Qt::CaseInsensitive) == 0;
+}
+
+QString BackendManager::resolveBackendProgram(const QString &backendDir) const
+{
+    // 目录发行只能启动随包的后端可执行文件。这样不会因为客户机器 PATH 中恰好有 Python
+    // 而运行到一套未知依赖；开发模式仍可显式使用项目虚拟环境。
+    if (isDirectoryReleaseMode()) {
+        const QString bundledBackend = QDir(backendDir).absoluteFilePath(QStringLiteral("AgentFlowBackend.exe"));
+        return QFileInfo::exists(bundledBackend) ? QDir::toNativeSeparators(bundledBackend) : QString();
+    }
+
+    // 开发模式选择顺序：显式解释器 -> 项目虚拟环境 -> 显式允许的系统 Python。
+    // 系统 Python 不再是默认兜底，避免开发目录不完整时误启动错误环境。
     const QString envPython = QString::fromLocal8Bit(qgetenv("AGENTFLOW_PYTHON")).trimmed();
     if (!envPython.isEmpty()) {
         return envPython;
@@ -234,7 +246,13 @@ QString BackendManager::resolvePythonProgram(const QString &backendDir) const
         return QDir::toNativeSeparators(venvPython);
     }
 
-    return QStringLiteral("python");
+    const QString allowSystemPython = QString::fromLocal8Bit(qgetenv("AGENTFLOW_ALLOW_SYSTEM_PYTHON")).trimmed();
+    if (allowSystemPython.compare(QStringLiteral("true"), Qt::CaseInsensitive) == 0
+        || allowSystemPython == QStringLiteral("1")) {
+        return QStringLiteral("python");
+    }
+
+    return QString();
 }
 
 QString BackendManager::processErrorText(QProcess::ProcessError error) const
@@ -259,9 +277,17 @@ QString BackendManager::processErrorText(QProcess::ProcessError error) const
 
 void BackendManager::startProcess()
 {
-    // 没有后端目录时不要尝试启动 python，否则错误会变成难懂的 uvicorn import 失败。
+    // 没有后端目录时不要尝试启动解释器，否则错误会变成难懂的 uvicorn import 失败。
     if (backendDir_.isEmpty()) {
         reportUnavailable(QStringLiteral("未找到 backend 目录，请确认程序从项目目录或打包目录启动。"));
+        return;
+    }
+
+    if (backendProgram_.isEmpty()) {
+        const QString message = isDirectoryReleaseMode()
+            ? QStringLiteral("目录式发行包中未找到 backend/AgentFlowBackend.exe，请重新安装完整程序。")
+            : QStringLiteral("未找到项目虚拟环境 Python；请从完整开发目录启动，或显式设置 AGENTFLOW_PYTHON。 ");
+        reportUnavailable(message.trimmed());
         return;
     }
 
@@ -275,29 +301,57 @@ void BackendManager::startProcess()
     environment.insert(QStringLiteral("PYTHONUTF8"), QStringLiteral("1"));
     environment.insert(QStringLiteral("PYTHONIOENCODING"), QStringLiteral("utf-8"));
 
+    if (isDirectoryReleaseMode()) {
+        // 发行目录可能位于 Program Files，不能把数据库、模型缓存、导出文件或客户插件写回
+        // 安装位置。已有环境变量优先，便于企业部署把数据定向到受管目录。
+        const QString appHome = QCoreApplication::applicationDirPath();
+        const QString userHome = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+        if (userHome.isEmpty()) {
+            reportUnavailable(QStringLiteral("无法确定本机应用数据目录，后端未启动。"));
+            return;
+        }
+        const auto setIfMissing = [&environment](const QString &key, const QString &value) {
+            if (environment.value(key).trimmed().isEmpty()) {
+                environment.insert(key, QDir::toNativeSeparators(value));
+            }
+        };
+        setIfMissing(QStringLiteral("AGENTFLOW_ENVIRONMENT"), QStringLiteral("production"));
+        setIfMissing(QStringLiteral("AGENTFLOW_PROJECT_ROOT"), appHome);
+        setIfMissing(QStringLiteral("AGENTFLOW_DATA_DIR"), QDir(userHome).absoluteFilePath(QStringLiteral("data")));
+        setIfMissing(QStringLiteral("AGENTFLOW_OUTPUT_DIR"), QDir(userHome).absoluteFilePath(QStringLiteral("output")));
+        setIfMissing(QStringLiteral("AGENTFLOW_USER_AGENTS_DIR"), QDir(userHome).absoluteFilePath(QStringLiteral("agents")));
+        setIfMissing(QStringLiteral("AGENTFLOW_NODE_HARNESS_RUNTIME_DIR"),
+                     QDir(appHome).absoluteFilePath(QStringLiteral("runtime/deepseek_harness_node")));
+        setIfMissing(QStringLiteral("AGENTFLOW_NODE_HARNESS_NODE_PROGRAM"),
+                     QDir(appHome).absoluteFilePath(QStringLiteral("runtime/node/node.exe")));
+    }
+
     backendProcess_.setProcessEnvironment(environment);
     // 工作目录必须指向 backend/，这样 uvicorn 才能 import main:app。
     backendProcess_.setWorkingDirectory(backendDir_);
     // 先合并 stdout/stderr，MVP 阶段 UI 只需要一条启动日志流。
     backendProcess_.setProcessChannelMode(QProcess::MergedChannels);
 
-    // MVP 仍启动开发形态的 FastAPI。后续 PyInstaller 打包后，只需要替换这里的 program/args。
-    const QStringList arguments = {
-        QStringLiteral("-m"),
-        QStringLiteral("uvicorn"),
-        QStringLiteral("main:app"),
-        QStringLiteral("--host"),
-        QStringLiteral("127.0.0.1"),
-        QStringLiteral("--port"),
-        QStringLiteral("8765")
-    };
+    const QStringList arguments = isDirectoryReleaseMode()
+        ? QStringList()
+        : QStringList({
+              QStringLiteral("-m"),
+              QStringLiteral("uvicorn"),
+              QStringLiteral("main:app"),
+              QStringLiteral("--host"),
+              QStringLiteral("127.0.0.1"),
+              QStringLiteral("--port"),
+              QStringLiteral("8765")
+          });
 
     // 先标记资源归属再 start：即使后续健康检查失败，stop/destructor 也知道它是本类启动的。
     processStartedByUs_ = true;
     // Uvicorn 冷启动可能需要一点时间；30 * 500ms 约 15 秒，足够覆盖普通依赖加载。
     remainingProbeAttempts_ = 30;
-    emit starting(QStringLiteral("正在启动后端：%1 -m uvicorn main:app").arg(pythonProgram_));
-    backendProcess_.start(pythonProgram_, arguments);
+    emit starting(isDirectoryReleaseMode()
+                      ? QStringLiteral("正在启动随程序发布的本地后端。")
+                      : QStringLiteral("正在启动开发后端：%1 -m uvicorn main:app").arg(backendProgram_));
+    backendProcess_.start(backendProgram_, arguments);
     scheduleProbe();
 }
 

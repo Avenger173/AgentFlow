@@ -778,6 +778,21 @@ LGM1 交付的是受控协议内核，不是面向客户的“已支持 MCP”�
 - 离线、依赖损坏和外部 Server 不可用时，基础 Native 能力仍可使用；
 - 卸载/删除连接不会删除客户原文件或历史产物。
 
+#### LGM7.0 实施记录（2026-09-08）
+
+- 已建立 Windows 目录发行的最小运行时契约：Qt 在 `directory` 模式只启动随包
+  `backend/AgentFlowBackend.exe`，不再在客户机静默退回 PATH 的 Python；开发环境仍保留显式
+  虚拟环境与受控系统 Python 兜底。目录发行的客户数据、输出、用户 Agent、Node Harness 状态和模型缓存
+  分别由启动器指向用户应用数据目录，安装目录保持只读资源。
+- 后端新增统一 `output_dir` 根，数据分析、PNG、字段加工、关联、文档草稿、文档处理、PPT 与知识库报告均
+  从该根派生；不改变开发环境已有 `output/` 默认。Node Harness 的 Node 程序可由发行环境指定为随包
+  `runtime/node/node.exe`，并会前置到 `dsh.cmd` 的 PATH；缺失时仍只使可选 Harness 不可用。
+- 新增 PyInstaller onedir 规格、后端入口和显式构建脚本。规格只收集正式 Python 包、内置 Agent 与只读
+  Harness profile，构建脚本要求空目标目录，默认不携带 Node，且拒绝 `.env`、客户数据、outputs、插件和
+  Node 探针状态。`verify_release_contract.py` 与 Qt `BackendManagerTests` 已覆盖契约；尚未安装 PyInstaller
+  或构建对外候选包，Qt 主程序/DLL 装配、SBOM、离线矩阵和性能验收留在 LGM7.1-LGM7.3。
+- 详细边界与里程碑见 [LGM7_RELEASE_ENGINEERING_PLAN.md](LGM7_RELEASE_ENGINEERING_PLAN.md)。
+
 ## 9. 测试与评估
 
 ### 9.1 MCP 回归
@@ -868,23 +883,24 @@ AGENTFLOW_LANGCHAIN_ADAPTERS_ENABLED=false
 
 文档记录的是架构约束，不锁死未来版本。每次依赖升级必须记录：精确包版本、Python/Windows 支持、协议版本、许可证、破坏性变化、包体和回归结果。
 
-## 13. 下一次开发起点
+## 13. 当前开发起点
 
-LGM0、LGM1、LGM2 与 LGM3 已完成。下一阶段候选是 **LGM4：知识库深度任务影子迁移**；它
-只能使用冻结输入、模型 fake 和影子结果验证状态、事件与恢复，不能直接切换客户任务或替换 Native Runtime。
-新的 MCP 连接、远程 MCP、LangGraph 客户路由与 LangChain 适配仍必须先由用户确认具体产品价值。
+LGM0-LGM5.7 已完成；LangGraph 真实开发者试点经资源闸门拒绝，LangChain 组件评审明确不接入。
+当前下一阶段是 **LGM7.1：候选目录装配与 SBOM**。它只能在隔离构建环境中生成一次可丢弃的发行候选，
+验证 Qt 主程序/Qt DLL 与 PyInstaller 后端的目录布局、最小 `/health`、启动停止和无敏感载荷清单；
+不能因此改变 Native 默认 Runtime、开启 Node Harness/MCP，或把候选包当作正式客户发行。
+
+详细分解见 [LGM7_RELEASE_ENGINEERING_PLAN.md](LGM7_RELEASE_ENGINEERING_PLAN.md)。
 
 推荐顺序：
 
 ```text
-LGM0 基线与依赖探针
-  -> LGM1 MCP Gateway 内核
-  -> LGM2 首个真实 MCP 客户闭环
-  -> LGM3 LangGraph ExecutionBackend
-  -> LGM4 K4 深度任务影子迁移
-  -> LGM5 Commander 组合任务试点
-  -> LGM6 LangChain 组件收敛
-  -> LGM7 打包与默认策略
+LGM0-LGM3 平台探针/治理/隔离图
+  -> LGM4 知识库深度任务影子迁移
+  -> LGM5 Commander 组合任务试点（Graph 最终拒绝）
+  -> LGM6 LangChain 组件收敛（不接入）
+  -> LGM7.0 目录发行运行时契约
+  -> LGM7.1 候选目录装配与 SBOM
 ```
 
 任何阶段未达到出口，都停在该阶段修复，不通过提高模型轮数、放宽权限、复制一套状态或隐藏失败来推进里程碑。

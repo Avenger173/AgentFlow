@@ -1,1 +1,3 @@
 -r requirements.txt
+# LGM7 目录式后端发行只使用 PyInstaller onedir；它仅在构建机安装，不进入客户运行时依赖。
+pyinstaller>=6.22.0,<7.0.0

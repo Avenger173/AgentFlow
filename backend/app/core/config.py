@@ -159,8 +159,19 @@ class Settings:
 
     @property
     def project_root(self) -> Path:
-        # 项目根目录用于扫描用户安装的 agents/。打包后可用环境变量覆盖此路径。
+        # 项目根目录只保存随程序发布的只读资源。目录发行由 Qt 启动器显式提供该路径，
+        # 客户数据与交付物仍必须落到 data/output 根，不能写回安装目录。
         return Path(os.getenv("AGENTFLOW_PROJECT_ROOT", self.backend_root.parent)).resolve()
+
+    @property
+    def output_dir(self) -> Path:
+        """返回所有正式交付物的受控根目录。
+
+        开发期保持项目根 ``output/`` 的既有行为；目录发行由启动器改到用户应用数据目录。
+        单个交付物属性仍允许环境变量精确覆盖，便于离线回归和企业部署。
+        """
+
+        return Path(os.getenv("AGENTFLOW_OUTPUT_DIR", self.project_root / "output")).resolve()
 
     @property
     def builtin_agents_dir(self) -> Path:
@@ -201,7 +212,7 @@ class Settings:
         return Path(
             os.getenv(
                 "AGENTFLOW_DATA_ANALYSIS_OUTPUT_DIR",
-                self.project_root / "output" / "data_analysis",
+                self.output_dir / "data_analysis",
             )
         ).resolve()
 
@@ -216,7 +227,7 @@ class Settings:
         return Path(
             os.getenv(
                 "AGENTFLOW_DATA_CHART_OUTPUT_DIR",
-                self.project_root / "output" / "data_charts",
+                self.output_dir / "data_charts",
             )
         ).resolve()
 
@@ -231,7 +242,7 @@ class Settings:
         return Path(
             os.getenv(
                 "AGENTFLOW_DATA_TRANSFORMATION_OUTPUT_DIR",
-                self.project_root / "output" / "data_transformations",
+                self.output_dir / "data_transformations",
             )
         ).resolve()
 
@@ -242,7 +253,7 @@ class Settings:
         return Path(
             os.getenv(
                 "AGENTFLOW_DATA_JOIN_OUTPUT_DIR",
-                self.project_root / "output" / "data_joins",
+                self.output_dir / "data_joins",
             )
         ).resolve()
 
@@ -256,6 +267,22 @@ class Settings:
                 self.backend_root / "runtime" / "deepseek_harness_node",
             )
         ).resolve()
+
+    @property
+    def node_harness_node_program(self) -> str:
+        """返回 Node Harness 使用的 Node 程序。
+
+        目录发行只接受随包的 Node；开发环境才允许解析 PATH 中的 ``node``。这样可选
+        Harness 不会在客户机器上悄悄绑定到未知版本的全局 Node.js。
+        """
+
+        configured = os.getenv("AGENTFLOW_NODE_HARNESS_NODE_PROGRAM", "").strip()
+        if configured:
+            return configured
+        if os.getenv("AGENTFLOW_RELEASE_MODE", "").strip().lower() == "directory":
+            executable = "node.exe" if os.name == "nt" else "node"
+            return str(self.project_root / "runtime" / "node" / executable)
+        return "node"
 
     @property
     def node_harness_state_dir(self) -> Path:
@@ -343,7 +370,7 @@ class Settings:
         return Path(
             os.getenv(
                 "AGENTFLOW_DOCUMENT_DRAFT_OUTPUT_DIR",
-                self.project_root / "output" / "document_drafts",
+                self.output_dir / "document_drafts",
             )
         ).resolve()
 
@@ -359,7 +386,7 @@ class Settings:
         return Path(
             os.getenv(
                 "AGENTFLOW_DOCUMENT_PROCESSING_OUTPUT_DIR",
-                self.project_root / "output" / "document_processing",
+                self.output_dir / "document_processing",
             )
         ).resolve()
 
@@ -374,7 +401,7 @@ class Settings:
         return Path(
             os.getenv(
                 "AGENTFLOW_DOCUMENT_PRESENTATION_OUTPUT_DIR",
-                self.project_root / "output" / "document_presentations",
+                self.output_dir / "document_presentations",
             )
         ).resolve()
 
@@ -389,7 +416,7 @@ class Settings:
         return Path(
             os.getenv(
                 "AGENTFLOW_KNOWLEDGE_REPORT_OUTPUT_DIR",
-                self.project_root / "output" / "knowledge_reports",
+                self.output_dir / "knowledge_reports",
             )
         ).resolve()
 

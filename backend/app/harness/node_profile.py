@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import os
 import subprocess
 from pathlib import Path
 
 from app.core.config import settings
 from app.harness.node_runtime import (
-    _SECRET_ENVIRONMENT_KEYS,
     _first_output_line,
+    _node_harness_process_environment,
     _node_harness_cli_path,
     get_node_harness_runtime_status,
 )
@@ -153,9 +152,7 @@ def _dump_profile_config(launch_dir: Path) -> str:
 def _profile_environment(launch_dir: Path) -> dict[str, str]:
     """为 profile 预检构造隔离环境，不继承任何模型密钥。"""
 
-    environment = dict(os.environ)
-    for key in _SECRET_ENVIRONMENT_KEYS:
-        environment.pop(key, None)
+    environment = _node_harness_process_environment()
     environment["DSH_TELEMETRY_DISABLED"] = "1"
     environment["DSH_HOME"] = str(settings.node_harness_state_dir)
     environment["DSH_CWD"] = str(launch_dir)

@@ -356,6 +356,8 @@ PPT V3 当前按用户确认的顺序推进：1）主题与内容版式系统已
 
 2026-08-14 DeepSeek Harness 评估与启动：官方 Node CLI `@deepseek-ai/dsh@0.1.0-rc.6` 已选为 Windows 首期外部 Runtime，Python SDK 的 Windows runtime wheel 仍作为未来候选。H0/H1 的项目内锁定安装、无密钥探针、Adapter/Fake 协议和受控 Bridge 已完成；H2 可继续做隔离只读真实试点，但不绑定代码工坊，也不迁移已稳定的文档/PPT 交付链。Router 只在专业 Agent 或总指挥的真实场景获批后接入客户任务；H3 权限与幂等、H4 MCP 按该场景需要启动，H5 只在发行版确定携带 Harness 时进入。Node Runtime 仅作为可回退的执行后端，不接管 AgentFlow 的产品控制平面。
 
+2026-09-08 LGM7.0 目录发行基础：已固定“Qt 主程序唯一入口 + PyInstaller onedir 后端 + 用户应用数据目录”的运行时契约。目录发行不使用全局 Python，所有 SQLite、导入副本、模型缓存、用户 Agent 和 outputs 均从安装目录分离；可选 Node Harness 仅在显式随包时使用便携 Node，缺失不会阻断 Native。当前具备后端发行规格、显式构建脚本和离线契约回归，但尚未构建对外候选包；下一步是 LGM7.1 装配 Qt/后端候选目录、生成 SBOM 并完成本地启动/关闭验证。详细方案见 `docs/LGM7_RELEASE_ENGINEERING_PLAN.md`。
+
 暂时不做：
 
 - 不继续扩大模型页功能。

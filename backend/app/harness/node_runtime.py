@@ -87,7 +87,7 @@ def _probe_node_harness_runtime() -> HarnessRuntimeStatus:
         )
 
     try:
-        node_version = _run_probe_command(("node", "--version"), runtime_root)
+        node_version = _run_probe_command((settings.node_harness_node_program, "--version"), runtime_root)
         harness_version = _run_probe_command((str(cli_path), "--version"), runtime_root)
     except NodeHarnessProbeError as error:
         return _status(
@@ -174,11 +174,27 @@ def _probe_environment() -> Mapping[str, str]:
     从 ModelGateway 临时注入最小 Key 集合，绝不复用这个探针环境。
     """
 
+    environment = _node_harness_process_environment()
+    environment["DSH_TELEMETRY_DISABLED"] = "1"
+    environment["DSH_HOME"] = str(settings.node_harness_state_dir)
+    return environment
+
+
+def _node_harness_process_environment() -> dict[str, str]:
+    """构造可供项目内 dsh 使用的无密钥进程环境。
+
+    Windows 的 ``dsh.cmd`` 仍经 PATH 查找 ``node``。目录发行时把随包 Node 的目录前置，
+    因而不依赖客户全局 Node；开发环境保留原有 PATH 行为。
+    """
+
     environment = dict(os.environ)
     for key in _SECRET_ENVIRONMENT_KEYS:
         environment.pop(key, None)
-    environment["DSH_TELEMETRY_DISABLED"] = "1"
-    environment["DSH_HOME"] = str(settings.node_harness_state_dir)
+    program = settings.node_harness_node_program
+    program_path = Path(program)
+    if program != "node" and program_path.parent != Path("."):
+        existing_path = environment.get("PATH", "")
+        environment["PATH"] = str(program_path.parent) + (os.pathsep + existing_path if existing_path else "")
     return environment
 
 
@@ -191,4 +207,3 @@ def _first_output_line(value: str) -> str:
 
 class NodeHarnessProbeError(RuntimeError):
     """Node Runtime 的本地启动或版本探针未通过。"""
-
