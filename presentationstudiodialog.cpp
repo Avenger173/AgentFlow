@@ -228,10 +228,12 @@ void PresentationStudioDialog::startDirectGeneration(const QString &goal)
 
     directGeneration = true;
     setInitialGoal(normalizedGoal);
-    // 直出默认只使用内置视觉版式，但保留模型数据规划能力；这样明确的“数据 PPT”不会
-    // 因没有手工勾选开关而退化成没有图表的普通文本页，也不会暗中联网下载素材。
+    // 客户已经在调度台明确要求“制作 PPT”。直出沿用工作台默认的 Seedream 配图，避免
+    // 这一条入口悄悄把客户期望的视觉素材降级成无图版式；真实调用仍只会发生在导出阶段，
+    // 并在窗口状态、交付回执和任务历史中明确留下记录。
     if (visualAssetProviderCombo) {
-        visualAssetProviderCombo->setCurrentIndex(0);
+        const int seedreamIndex = visualAssetProviderCombo->findData(QStringLiteral("seedream"));
+        visualAssetProviderCombo->setCurrentIndex(seedreamIndex >= 0 ? seedreamIndex : 0);
     }
     ui->licensedAssetsCheckBox->setChecked(true);
     ui->licensedAssetsCheckBox->setEnabled(false);

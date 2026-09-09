@@ -190,6 +190,20 @@ def export_presentation_studio_plan(
     if request.fetch_external_assets or request.fetch_licensed_assets:
         _emit_progress(progress_callback, "presentation_visual_started", "正在准备本次确认的外部视觉素材。")
     assets = _resolve_visual_assets(plan=plan, request=request, asset_slots=asset_slots)
+    visual_assets_requested = bool(
+        (request.fetch_external_assets or request.fetch_licensed_assets)
+        and plan.asset_plan.state == "planned"
+        and plan.asset_plan.provider
+    )
+    visual_asset_status = (
+        "not_requested"
+        if not visual_assets_requested
+        else "completed"
+        if len(assets.images) >= len(asset_slots)
+        else "partial"
+        if assets.images
+        else "failed"
+    )
     assets_by_slide_id = _assign_assets_to_slides(asset_slots=asset_slots, assets=assets.images)
     if request.fetch_public_research:
         _emit_progress(progress_callback, "presentation_public_reference_started", "正在读取本次确认的公开资料参考。")
@@ -270,9 +284,13 @@ def export_presentation_studio_plan(
             "source_slide_count": verification.source_slide_count,
             "verification_passed": verification.passed,
             "native_presentation_motion": motion.audit_metadata(),
+            "external_assets_requested": visual_assets_requested,
             "external_assets_fetched": bool(assets.images),
             "asset_plan_state": plan.asset_plan.state,
-            "asset_provider": assets.provider if assets.images else "",
+            # 即使本轮图片生成失败，也要保留客户选择的 Provider；历史页才能区分“没有
+            # 请求图片”和“已请求 Seedream 但生成失败”，而不是把两种情况都显示为空。
+            "asset_provider": assets.provider or plan.asset_plan.provider,
+            "asset_generation_status": visual_asset_status,
             "asset_count": len(assets.images),
             "asset_slot_count": len(asset_slots),
             "asset_assignments": [
@@ -323,6 +341,13 @@ def export_presentation_studio_plan(
             f"PPT 创作文件已导出并通过回读验证，已嵌入 {len(assets.images)} 张{assets.label}，"
             f"并记录 {len(research.sources)} 条公开资料参考和 "
             f"{len(structured_data_charts)} 个可编辑数据视图。{_motion_delivery_suffix(motion)}"
+        )
+    elif visual_assets_requested:
+        warning = next(iter(assets.warnings), "图片生成服务没有返回可嵌入的图片")
+        delivery_message = (
+            "PPT 创作文件已按内置版式导出并通过回读验证，但本次请求的 "
+            f"{assets.label} 未生成可嵌入图片：{warning}。可重新发起制作以重试图片生成。"
+            + _motion_delivery_suffix(motion)
         )
     elif research.sources or structured_data_charts:
         delivery_message = (

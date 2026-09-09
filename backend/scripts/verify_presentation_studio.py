@@ -2137,7 +2137,11 @@ def main() -> None:
         if item["artifact_id"] == seedream_export.json()["artifact_id"]
     )
     assert seedream_artifact["metadata"]["external_assets_fetched"] is False
+    assert seedream_artifact["metadata"]["external_assets_requested"] is True
+    assert seedream_artifact["metadata"]["asset_provider"] == "seedream"
+    assert seedream_artifact["metadata"]["asset_generation_status"] == "failed"
     assert seedream_artifact["metadata"]["asset_count"] == 0
+    assert "未生成可嵌入图片" in seedream_export.json()["message"]
 
     duplicate = client.post(
         f"/api/agents/document_agent/presentation-studio/{task_id}/export",
