@@ -96,6 +96,22 @@ def main() -> None:
         assert manifest["node_harness_included"] is False
         assert ".env" in manifest["excluded"]
 
+        sbom_script = BACKEND_ROOT / "scripts" / "generate_release_sbom.py"
+        sbom_path = verify_root / "release-sbom.json"
+        subprocess.run(
+            [sys.executable, "-X", "utf8", str(sbom_script), "--output", str(sbom_path)],
+            cwd=BACKEND_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        sbom = json.loads(sbom_path.read_text(encoding="utf-8"))
+        assert sbom["format"] == "agentflow.release-sbom.v1"
+        assert sbom["scope"] == "python-backend-runtime-direct-dependencies"
+        assert any(item["name"].casefold() == "fastapi" for item in sbom["packages"])
+        assert all(len(item["license"]) <= 200 for item in sbom["packages"])
+
         print(
             "LGM7 release contract verification passed: "
             "directory paths=user-data, bundled-node=explicit, packaging=no-secrets/no-node_modules."

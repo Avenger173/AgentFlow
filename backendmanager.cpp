@@ -222,7 +222,16 @@ QString BackendManager::resolveBackendDir() const
 bool BackendManager::isDirectoryReleaseMode() const
 {
     const QString mode = QString::fromLocal8Bit(qgetenv("AGENTFLOW_RELEASE_MODE")).trimmed();
-    return mode.compare(QStringLiteral("directory"), Qt::CaseInsensitive) == 0;
+    if (!mode.isEmpty()) {
+        return mode.compare(QStringLiteral("directory"), Qt::CaseInsensitive) == 0;
+    }
+
+    // 客户直接双击目录包时不会预先拥有环境变量。发布根与开发构建目录的稳定区别是：
+    // 只有发布根会把受控后端放在 AgentFlow.exe 同级的 backend/ 下。不要据此扫描磁盘，
+    // 也不要以是否存在全局 Python 作为判据，否则客户机器会意外落回开发启动路径。
+    const QString bundledBackend = QDir(QCoreApplication::applicationDirPath())
+                                       .absoluteFilePath(QStringLiteral("backend/AgentFlowBackend.exe"));
+    return QFileInfo(bundledBackend).isFile();
 }
 
 QString BackendManager::resolveBackendProgram(const QString &backendDir) const

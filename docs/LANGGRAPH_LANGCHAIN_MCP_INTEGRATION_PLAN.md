@@ -793,6 +793,18 @@ LGM1 交付的是受控协议内核，不是面向客户的“已支持 MCP”�
   或构建对外候选包，Qt 主程序/DLL 装配、SBOM、离线矩阵和性能验收留在 LGM7.1-LGM7.3。
 - 详细边界与里程碑见 [LGM7_RELEASE_ENGINEERING_PLAN.md](LGM7_RELEASE_ENGINEERING_PLAN.md)。
 
+#### LGM7.1 实施记录（2026-09-09）
+
+- 构建机已在 `backend/.venv` 安装 PyInstaller `6.22.2`，实际装配 Native 目录候选。候选根级只有
+  `AgentFlow.exe`，后端固定为 `backend/AgentFlowBackend.exe`；Qt DLL、插件与 `qt.conf` 同级部署，
+  没有客户可见的 `bin/` 双入口。PyInstaller 后端、Qt 客户端、SBOM 和发行清单均未带入 `.env`、客户数据、
+  outputs、用户插件、Node `node_modules` 或真实模型配置。
+- 首次构建还修复了两项真正的发行接缝：客户直接双击时，Qt 会据同级随包后端自动进入目录发行模式，不依赖
+  测试专用环境变量；Qt deployment 的运行时目录与根级入口同步，避免生成指向旧 `bin/` 的 `qt.conf`。
+- `verify_release_contract.py`、`verify_directory_release_layout.py`、打包后端 `/health` 回读和完整客户端
+  启动/正常关闭冒烟均通过。候选约 859.7 MiB、6,733 个文件，是未签名的诊断候选，默认不含 Node Harness，
+  **不能当作对外正式发行或性能达标声明。**
+
 ## 9. 测试与评估
 
 ### 9.1 MCP 回归
@@ -886,9 +898,9 @@ AGENTFLOW_LANGCHAIN_ADAPTERS_ENABLED=false
 ## 13. 当前开发起点
 
 LGM0-LGM5.7 已完成；LangGraph 真实开发者试点经资源闸门拒绝，LangChain 组件评审明确不接入。
-当前下一阶段是 **LGM7.1：候选目录装配与 SBOM**。它只能在隔离构建环境中生成一次可丢弃的发行候选，
-验证 Qt 主程序/Qt DLL 与 PyInstaller 后端的目录布局、最小 `/health`、启动停止和无敏感载荷清单；
-不能因此改变 Native 默认 Runtime、开启 Node Harness/MCP，或把候选包当作正式客户发行。
+LGM7.1 已完成一次可丢弃目录候选及启动/关闭回读。当前下一阶段是 **LGM7.2：可选运行时与离线故障矩阵**：
+验证 MCP/Node 默认缺失或禁用、配置损坏、端口占用、embedding/OCR 未准备、后端载荷损坏和旧任务回读时的
+客户提示与 Native 回退；不能改变 Native 默认 Runtime、开启客户 MCP/Node Harness，或把候选包当作正式发行。
 
 详细分解见 [LGM7_RELEASE_ENGINEERING_PLAN.md](LGM7_RELEASE_ENGINEERING_PLAN.md)。
 
@@ -900,7 +912,8 @@ LGM0-LGM3 平台探针/治理/隔离图
   -> LGM5 Commander 组合任务试点（Graph 最终拒绝）
   -> LGM6 LangChain 组件收敛（不接入）
   -> LGM7.0 目录发行运行时契约
-  -> LGM7.1 候选目录装配与 SBOM
+  -> LGM7.1 候选目录装配与 SBOM（已完成）
+  -> LGM7.2 可选运行时与离线故障矩阵
 ```
 
 任何阶段未达到出口，都停在该阶段修复，不通过提高模型轮数、放宽权限、复制一套状态或隐藏失败来推进里程碑。

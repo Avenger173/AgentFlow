@@ -20,6 +20,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 PROJECT_ROOT = BACKEND_ROOT.parent
 SPECIFICATION = BACKEND_ROOT / "packaging" / "agentflow_backend.spec"
 NODE_RUNTIME_SOURCE = BACKEND_ROOT / "runtime" / "deepseek_harness_node"
+SBOM_SCRIPT = BACKEND_ROOT / "scripts" / "generate_release_sbom.py"
 
 
 class ReleaseBuildError(RuntimeError):
@@ -65,6 +66,8 @@ def _release_manifest(*, node_harness_included: bool) -> dict[str, object]:
 def _validate_request(args: argparse.Namespace) -> None:
     if not SPECIFICATION.is_file():
         raise ReleaseBuildError("缺少 AgentFlowBackend PyInstaller 规格文件。")
+    if not SBOM_SCRIPT.is_file():
+        raise ReleaseBuildError("缺少目录发行 SBOM 生成脚本。")
     if args.node_runtime and not args.include_node_harness:
         raise ReleaseBuildError("--node-runtime 只能与 --include-node-harness 一起使用。")
     if args.include_node_harness:
@@ -134,6 +137,12 @@ def _build(args: argparse.Namespace) -> dict[str, object]:
     (release_root / "release-manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
+    )
+    # SBOM 与实际 PyInstaller 载荷同一步生成，避免候选包存在但来源清单被遗漏。
+    subprocess.run(
+        [sys.executable, "-X", "utf8", str(SBOM_SCRIPT), "--output", str(release_root / "release-sbom.json")],
+        cwd=BACKEND_ROOT,
+        check=True,
     )
     return manifest
 

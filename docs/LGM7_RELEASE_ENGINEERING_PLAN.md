@@ -40,7 +40,8 @@ AgentFlow/
 状态：**已完成工程基础，尚未构建对外候选包。**
 
 - Qt `BackendManager` 在 `AGENTFLOW_RELEASE_MODE=directory` 时只接受
-  `backend/AgentFlowBackend.exe`；缺失时明确停止，不再退回全局 Python。
+  `backend/AgentFlowBackend.exe`；客户直接双击目录包时也会根据同级受控后端自动识别发行模式。
+  缺失时明确停止，不再退回全局 Python。
 - 开发模式继续优先使用 `AGENTFLOW_PYTHON` 或 `backend/.venv/Scripts/python.exe`；系统 Python
   必须通过 `AGENTFLOW_ALLOW_SYSTEM_PYTHON=true` 显式允许。
 - 目录发行由 Qt 为后端注入受控的 `AGENTFLOW_DATA_DIR`、`AGENTFLOW_OUTPUT_DIR`、用户 Agent 根、
@@ -59,15 +60,27 @@ AgentFlow/
 
 ### LGM7.1：候选目录装配与 SBOM
 
+状态：**已完成一次本机构建候选验证，尚非对外发行。**
+
 - 在隔离构建环境安装锁定的 `requirements-dev.txt`；构建 `AgentFlowBackend` onedir 并运行离线
   `/health`、启动/停止、SQLite 写入、受控 artifact 回读测试。
 - 使用 CMake install / `qt_generate_deploy_app_script` 将 Release `AgentFlow.exe` 与 Qt DLL 装入同一目录；
-  根目录只保留一个客户启动入口。
+  根目录只保留一个客户启动入口。Qt 部署目录与入口统一为 `.`；
+  `verify_directory_release_layout.py` 拒绝遗留 `bin/` 等双入口布局。
 - 生成版本、Python、Qt、Node（如携带）、MCP SDK、许可证与哈希的 SBOM；禁止记录密钥、用户路径、
   文件名、材料正文和任务内容。
+- `generate_release_sbom.py` 只从正式 runtime requirements 与构建环境公开元数据生成 Python 依赖清单；
+  许可证只保存可读摘要，正文仍以第三方发行物为准。目录装配会自动写入该 SBOM。
+  `verify_directory_backend_payload.py` 在临时用户数据目录启动打包后端并回读 `/health`；
+  `verify_directory_client_smoke.py` 进一步验证根级 Qt 入口自动拉起随包后端并正常关闭。两者都不调用模型或读取客户材料。
 
-出口：全新临时目录中，未安装全局 Python/Node 时 Native `/health` 与核心 UI 可启动；可选 Node 未携带时
-清晰降级；发布清单与 SBOM 能完整解释载荷来源。
+本机候选事实：PyInstaller `6.22.2`、Release Qt 主程序、根级 `AgentFlow.exe`、随包
+`backend/AgentFlowBackend.exe`、Qt DLL/插件、`release-manifest.json` 与 `release-sbom.json` 已形成干净目录。
+候选共 6,733 个文件、约 859.7 MiB，仅用于工程诊断，未压缩、未签名、未对外发布；默认未携带 Node Harness。
+`verify_directory_release_layout.py`、`verify_directory_backend_payload.py` 与
+`verify_directory_client_smoke.py` 已通过，后者确认自动发现同级后端、`/health` 与正常关闭后的端口释放。
+
+出口：**已达到本机候选出口。**LGM7.2 仍需覆盖离线与损坏依赖矩阵，才能讨论客户可拿到的候选包。
 
 ### LGM7.2：可选运行时与离线故障矩阵
 

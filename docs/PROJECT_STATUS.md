@@ -36,7 +36,12 @@
 
 > **2026-09-08 LGM6 组件收敛结论：**复核当前官方 LangChain Tool/MCP 文档后，没有 LangChain 组件能在不复制现有治理的前提下删除足够适配代码。`langchain.mcp` 依赖完整 LangChain 与 beta FastMCP 生命周期，会重叠 AgentFlow MCPGateway；`ToolRuntime`、Memory 与 ChatModel 包装也会重复 ModelGateway、会话和 Pydantic/Node Contract 边界。因此不新增 LangChain/FastMCP 依赖或适配层，`AGENTFLOW_LANGCHAIN_ADAPTERS_ENABLED` 保持关闭；这是明确的降复杂度决定，不影响现有客户能力。
 
-> **2026-09-08 LGM7.0 目录发行基础：**Qt 启动器已区分开发与目录发行：目录发行只接受随包 `backend/AgentFlowBackend.exe`，缺失时明确停止且不会使用客户机器上的全局 Python；Qt 会把 SQLite、导入、模型缓存、用户 Agent 与正式 outputs 指向用户应用数据目录。后端新增统一 output 根，Node Harness 发行时只接受随包 Node，缺失仅降级可选 Harness。仓库现有 PyInstaller onedir 规格、后端入口、无敏感数据的显式构建脚本和离线契约回归；尚未构建正式候选包，Qt DLL 装配、SBOM、离线故障矩阵和性能验收属于后续 LGM7.1-LGM7.3。详见 [LGM7_RELEASE_ENGINEERING_PLAN.md](LGM7_RELEASE_ENGINEERING_PLAN.md)。
+> **2026-09-09 LGM7.1 目录候选：**已实际构建并回读一次未签名本机目录候选。根级 `AgentFlow.exe` 自动发现同级
+> `backend/AgentFlowBackend.exe`，不依赖系统 Python 或测试专用发布环境变量；Qt DLL/插件、`qt.conf`、发行清单与
+> SBOM 已装配，数据、输出和用户 Agent 仍从安装目录隔离。候选默认不含 Node Harness，约 859.7 MiB、6,733 个文件，
+> 仅作工程诊断，不能当作正式对外发行。发行契约、目录布局、打包后端 `/health` 与客户端启动/正常关闭（含 8765 端口释放）
+> 均已通过；下一步是 LGM7.2 的可选依赖缺失、配置损坏、端口占用和旧数据回读故障矩阵，不改变 Native 默认路径。详见
+> [LGM7_RELEASE_ENGINEERING_PLAN.md](LGM7_RELEASE_ENGINEERING_PLAN.md)。
 
 > **2026-08-31 R5.4B 字段加工自然语言闭环：**AI 调度台现在能在已绑定单个 CSV/XLSX 后识别“新增字段、排名、累计、月份、环比、占比、四舍五入、分段、清理文本和有限四则计算”等目标，先生成不写文件的 `DataTransformIntent v1` 预览，再在客户确认后委派 `data_agent.export_field_transform`。Runtime 复用已有确定性字段加工服务，在 `output/data_transformations/` 中保持原文件类型创建副本，按原字段之后追加最多 12 个派生字段，回读新字段/行数/格式和源哈希后才登记 artifact，并把文件名和新增字段摘要写回同一会话。自然语言不能执行公式、脚本或 SQL，源文件不会被修改。`verify_commander_data_transformation_delivery.py` 与字段加工、数据交付、Commander 回归已通过；本轮未调用真实模型或网络。R5.4C 两份数据关联首版已完成，复杂多表关系仍不自动开放。
 

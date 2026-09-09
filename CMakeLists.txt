@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.19)
 project(AgentFlow LANGUAGES CXX)
 
+# Qt 会在创建可执行目标时生成部署辅助文件，因此必须在 qt_add_executable 之前固定
+# 目录发行的运行时位置。客户目录只允许根级 AgentFlow.exe 作为启动入口。
+set(CMAKE_INSTALL_BINDIR "." CACHE PATH "AgentFlow directory release executable directory" FORCE)
+
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Network WebSockets Widgets)
 
 qt_standard_project_setup()
@@ -106,7 +110,9 @@ endif()
 
 install(TARGETS AgentFlow
     BUNDLE  DESTINATION .
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    # 目录发行根只保留一个客户入口 AgentFlow.exe；不能再默认落到 bin/，否则 Qt 启动器
+    # 无法以同级 backend/ 判定发行模式，客户也会看到多余层级。
+    RUNTIME DESTINATION .
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
 

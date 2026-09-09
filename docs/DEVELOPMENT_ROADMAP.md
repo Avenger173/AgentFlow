@@ -323,7 +323,7 @@ K0-K6 的既有知识库闭环不包含 OCR；K7 仅按已批准范围新增扫�
 
 ## 平台集成支线 LGM：LangGraph、LangChain 与 MCP
 
-状态：**LGM0-LGM4 的工程探针/影子对照与 LGM5.1-LGM5.6 Commander 组合影子图/bridge/业务 Adapter/稳定只读委派键/单父协调器已完成；LGM5.7 的默认关闭候选预授权、最终准入/撤销合同和审计观察器已完成，真实试点尚未授权。**首期只有默认停用的固定 Wikimedia `stdio` 连接；LangGraph 尚未接管客户任务，详细架构、阶段出口、回退条件和专项边界见 `docs/LANGGRAPH_LANGCHAIN_MCP_INTEGRATION_PLAN.md`。
+状态：**LGM0-LGM5.7 已完成；LangGraph 真实开发者试点因资源门槛拒绝，Native 继续是唯一客户 Runtime。LGM7.1 已完成一次未签名目录候选的后端/Qt/SBOM/启动关闭验证，仍未对外发行。**首期只有默认停用的固定 Wikimedia `stdio` 连接；LangGraph 尚未接管客户任务，详细架构、阶段出口、回退条件和专项边界见 `docs/LANGGRAPH_LANGCHAIN_MCP_INTEGRATION_PLAN.md`。
 
 该支线不会为了增加技术名词重写 AgentFlow。MCP 先作为独立且受治理的外部 Tool Gateway；LangGraph 只通过 `ExecutionBackend` 接入复杂、可恢复工作流；LangChain 只复用经实测有价值的模型、消息和 Tool 适配组件。Commander、ModelGateway、权限、审计、任务历史、产物、Verifier，以及现有 FTS5/Chroma/BGE/RRF/Evidence Gate 继续由 AgentFlow 持有。
 
@@ -331,7 +331,7 @@ K0-K6 的既有知识库闭环不包含 OCR；K7 仅按已批准范围新增扫�
 
 ## 当前下一步
 
-> **当前状态：LGM5.1-LGM5.6 已完成受控组合影子图、Native/Graph 交付对照、主任务/Graph checkpoint bridge、主库回读业务 Adapter、稳定 child task replay 和单父任务协调器；LGM5.7 已完成默认关闭的候选预授权、最终准入、基线、开始前撤销、审计投影观察器、候选目录与 Native/Graph 成对准备器。下一步是开发者明确授权后，对固定只读组合计划运行一次真实材料/模型候选试点并记录对照；候选完成不等于最终准入，在成功或失败前都不能注册客户 Router/API/Qt。**成对准备阶段只运行安全根步骤，不会读取材料或调用模型；候选目录只显示脱敏任务/计划身份。影子图只接受 C6.4 已批准的多材料只读计划。独立 LangGraph SQLite checkpoint 与 AgentFlow 主库 bridge 都只保存 invocation/计划摘要哈希、图线程和受限结果。业务 Adapter 会从主库重新核验已批准步骤，伪造摘要不会触发执行器；尚未注册客户 Router 或改变 Qt。固定 Wikimedia MCP 客户闭环继续默认停用，仍不是任意网页抓取、远程 MCP 市场或事实自动核验。详细记录见 `docs/LANGGRAPH_LANGCHAIN_MCP_INTEGRATION_PLAN.md`。
+> **当前状态：LGM7.1 已完成未签名目录候选的 Python 后端/Qt 客户端/SBOM/启动关闭回读；下一步为 LGM7.2 离线故障矩阵。**候选默认不携带 Node Harness、不启用 MCP，不改变 Native Runtime、权限或客户任务路由。LGM7.2 只验证可选依赖缺失、配置损坏、端口占用、模型/索引未准备与旧数据回读时的可理解提示和回退，不会把 LangGraph 重新注册为客户 Runtime。详细记录见 `docs/LANGGRAPH_LANGCHAIN_MCP_INTEGRATION_PLAN.md`。
 
 下方为各模块的历史里程碑与回归基线，不表示当前会并行启动这些事项。
 
