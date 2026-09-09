@@ -1,6 +1,6 @@
 # LangGraph、LangChain 与 MCP 平台集成计划
 
-最后更新：2026-09-08
+最后更新：2026-09-09
 
 状态：**LGM0-LGM4 已完成工程影子验证，LGM5.1-LGM5.6 已完成 Commander 组合任务影子图、Native 对照、主任务/Graph checkpoint bridge、业务 Adapter、稳定只读子任务调用键及单父任务协调器；LGM5.7 已完成默认关闭的开发者候选预授权、最终准入/撤销合同、真实材料/模型 Native-Graph 对照、恢复观察、独立同机资源测量及 Graph 初始化故障后的 Native 重试验证。最终准入已按门槛明确拒绝：当前 Graph 启动与常驻内存均超过 Native 的 10% 上限。MCP、LangGraph 与 LangChain 依赖已在开发后端环境锁定；项目已提供一个默认停用、固定边界的 Wikimedia 公开资料 MCP 客户闭环。Native Runtime 仍是唯一客户默认执行路径；LGM5 尚未注册客户 Router/API/Qt 入口，也未引入通用远程 MCP 连接。**
 
@@ -805,6 +805,17 @@ LGM1 交付的是受控协议内核，不是面向客户的“已支持 MCP”�
   启动/正常关闭冒烟均通过。候选约 859.7 MiB、6,733 个文件，是未签名的诊断候选，默认不含 Node Harness，
   **不能当作对外正式发行或性能达标声明。**
 
+#### LGM7.2 实施记录（2026-09-09）
+
+- `verify_directory_release_fault_matrix.py` 在临时用户数据根启动真实 PyInstaller 后端，验证 Native `/health`、
+  默认 Node Harness 缺失、默认 MCP 停用、Embedding/OCR 未准备、损坏 MCP JSON、无效 `AGENTFLOW_*` 数值配置
+  和正常终止；不读取 `.env`、客户资料、既有 SQLite、模型缓存或网络。
+- MCP 损坏状态不再只显示无法操作的提示：客户点击停用会原子覆写为默认关闭配置，再由客户自行决定是否重新启用。
+  随包后端使用稳定 ASCII 启动诊断码，Qt 映射为中文可操作提示，规避 Windows 控制台代码页乱码。
+- 向量能力探针改为 `find_spec` 的零导入检查，避免首次状态查询加载 `chromadb/fastembed` 造成短暂无响应。
+  旧 SQLite migration、OCR 解析/索引、K4 checkpoint/旧 artifact、LGM1 MCP Gateway、Release Qt 测试、目录布局/载荷/
+  故障矩阵/客户端启动关闭均已通过。真实远端 MCP、性能门槛和人工 UI 验收不在本阶段结论内。
+
 ## 9. 测试与评估
 
 ### 9.1 MCP 回归
@@ -898,9 +909,9 @@ AGENTFLOW_LANGCHAIN_ADAPTERS_ENABLED=false
 ## 13. 当前开发起点
 
 LGM0-LGM5.7 已完成；LangGraph 真实开发者试点经资源闸门拒绝，LangChain 组件评审明确不接入。
-LGM7.1 已完成一次可丢弃目录候选及启动/关闭回读。当前下一阶段是 **LGM7.2：可选运行时与离线故障矩阵**：
-验证 MCP/Node 默认缺失或禁用、配置损坏、端口占用、embedding/OCR 未准备、后端载荷损坏和旧任务回读时的
-客户提示与 Native 回退；不能改变 Native 默认 Runtime、开启客户 MCP/Node Harness，或把候选包当作正式发行。
+LGM7.2 已完成默认可选组件缺失、损坏 MCP 状态安全重置、无效配置、端口占用、后端缺失与旧任务回读的自动化
+离线回归。当前下一阶段是 **LGM7.3：性能与关闭验收**：在不改变 Native 默认 Runtime、不启用客户 Node Harness
+或真实外部 MCP 的前提下，测量目录候选的冷启动、健康检查、关闭清理与可选组件关闭成本；真实远端服务只在明确授权后验收。
 
 详细分解见 [LGM7_RELEASE_ENGINEERING_PLAN.md](LGM7_RELEASE_ENGINEERING_PLAN.md)。
 
@@ -913,7 +924,8 @@ LGM0-LGM3 平台探针/治理/隔离图
   -> LGM6 LangChain 组件收敛（不接入）
   -> LGM7.0 目录发行运行时契约
   -> LGM7.1 候选目录装配与 SBOM（已完成）
-  -> LGM7.2 可选运行时与离线故障矩阵
+  -> LGM7.2 可选运行时与离线故障矩阵（自动化离线出口已完成）
+  -> LGM7.3 性能与关闭验收
 ```
 
 任何阶段未达到出口，都停在该阶段修复，不通过提高模型轮数、放宽权限、复制一套状态或隐藏失败来推进里程碑。

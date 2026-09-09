@@ -139,6 +139,23 @@ def main(*, live: bool = False) -> None:
         disabled.raise_for_status()
         assert disabled.json()["connections"][0]["enabled"] is False
 
+        # 损坏的可选连接状态不能让客户失去恢复入口。停用操作应安全覆写为默认关闭，
+        # 不触发网络，也不影响其它任务数据。
+        corrupted_state = TEMP_DATA_DIR / "mcp_connections.json"
+        corrupted_state.write_text("{broken", encoding="utf-8")
+        degraded = client.get("/api/mcp/connections")
+        degraded.raise_for_status()
+        degraded_connection = degraded.json()["connections"][0]
+        assert degraded_connection["status"] == "degraded"
+        assert degraded_connection["enabled"] is False
+        assert degraded_connection["last_error_code"] == "connection_state_invalid"
+        reset = client.post("/api/mcp/connections/public-reference/disable")
+        reset.raise_for_status()
+        assert reset.json()["connection"]["status"] == "disabled"
+        assert reset.json()["connection"]["enabled"] is False
+        assert not reset.json()["connection"]["recovery_message"]
+        assert '"enabled": false' in corrupted_state.read_text(encoding="utf-8")
+
         disabled_plan = create_commander_plan(_message())
         assert not any(step.action == "search_public_references" for step in disabled_plan.steps)
         assert len(disabled_plan.clarifying_questions) == 1

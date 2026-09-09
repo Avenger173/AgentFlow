@@ -12,6 +12,7 @@ from app.mcp.connection_store import (
     McpConnectionStoreError,
     load_public_reference_connection,
     record_public_reference_check,
+    reset_public_reference_connection,
     set_public_reference_enabled,
 )
 from app.mcp.gateway import McpGateway
@@ -63,7 +64,16 @@ async def disable_public_reference_connection() -> McpConnectionMutationResponse
     try:
         set_public_reference_enabled(False)
     except McpConnectionStoreError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        # 仅本地可选连接的低频状态损坏时，将其重置为默认关闭。该操作不联网、不启动
+        # 子进程，也不会改动任务、资料库或其它 Agent 的状态。
+        try:
+            reset_public_reference_connection()
+        except McpConnectionStoreError as reset_exc:
+            raise HTTPException(status_code=500, detail=str(reset_exc)) from reset_exc
+        return McpConnectionMutationResponse(
+            connection=_public_reference_info(),
+            message="已重置损坏的 MCP 连接设置并保持停用；可在需要时重新启用。",
+        )
     return McpConnectionMutationResponse(
         connection=_public_reference_info(),
         message="已停用 Wikimedia 公开资料连接；后续对话不会再承诺该能力。",
@@ -111,12 +121,18 @@ async def test_public_reference_connection() -> McpConnectionMutationResponse:
 
 
 def _public_reference_info() -> McpConnectionInfo:
+    configuration_error = False
     try:
         state = load_public_reference_connection()
     except McpConnectionStoreError:
         state = None
+        configuration_error = True
     if not settings.mcp_enabled:
         status = "platform_disabled"
+    elif configuration_error:
+        # 损坏的本地状态文件不能被当作“未启用”静默吞掉。连接仍保持关闭，已有任务、
+        # 客户资料和其它 Native Agent 不受影响；Qt 可展示明确的恢复入口。
+        status = "degraded"
     elif state is None or not state.enabled:
         status = "disabled"
     elif state.last_check_status == "failed":
@@ -135,7 +151,17 @@ def _public_reference_info() -> McpConnectionInfo:
         origin_summary="AgentFlow 内置 MCP 服务 -> 固定 zh.wikipedia.org Action API",
         last_checked_at=state.last_checked_at if state is not None else "",
         last_tool_count=state.last_tool_count if state is not None else 0,
-        last_error_code=state.last_error_code if state is not None else "",
+        last_error_code=(
+            "connection_state_invalid"
+            if configuration_error
+            else state.last_error_code if state is not None else ""
+        ),
+        recovery_message=(
+            "本地 MCP 连接设置无法读取，连接已保持停用；已有任务和资料不会受影响。"
+            "请在插件管理中点击停用以重置设置，再按需启用连接。"
+            if configuration_error
+            else ""
+        ),
         tools=[
             McpConnectionToolInfo(
                 qualified_name="mcp.public-reference.search_wikimedia",

@@ -47,7 +47,19 @@ a = Analysis(
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
-    excludes=["pytest", "tests"],
+    # OCR 依赖不属于 requirements.txt。构建机可能为了 K7 开发安装 Paddle/PaddleX，
+    # 但目录发行的默认后端必须仍显示“可选组件未安装”，并在客户确认后才走安装入口。
+    # 否则构建机环境会静默改变客户发行物的能力、体积与离线故障行为。
+    excludes=[
+        "pytest",
+        "tests",
+        "paddle",
+        "paddleocr",
+        "paddlex",
+        "paddlenlp",
+        "paddle2onnx",
+        "paddleslim",
+    ],
 )
 pyz = PYZ(a.pure)
 exe = EXE(

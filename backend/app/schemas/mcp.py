@@ -31,6 +31,8 @@ class McpConnectionInfo(BaseModel):
     last_checked_at: str = ""
     last_tool_count: int = Field(default=0, ge=0, le=32)
     last_error_code: str = Field(default="", max_length=80)
+    # 仅在配置损坏、平台关闭等客户可处理状态下填写；不包含本机路径、异常堆栈或连接凭据。
+    recovery_message: str = Field(default="", max_length=260)
     tools: list[McpConnectionToolInfo] = Field(default_factory=list, max_length=8)
 
 

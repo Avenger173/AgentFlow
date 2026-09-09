@@ -36,6 +36,20 @@ QString cleanOutputLine(QString line)
     return line.replace(QLatin1Char('\r'), QString());
 }
 
+bool isCustomerStartupDiagnostic(const QString &line)
+{
+    return line.startsWith(QStringLiteral("AGENTFLOW_STARTUP_CONFIG_INVALID"));
+}
+
+QString customerStartupDiagnostic(const QString &line)
+{
+    if (isCustomerStartupDiagnostic(line)) {
+        return QStringLiteral("后端配置无效：端口、超时或数值设置格式不正确。"
+                              "请修正对应的 AGENTFLOW_* 系统设置后重试。");
+    }
+    return QString();
+}
+
 } // namespace
 
 BackendManager::BackendManager(QObject *parent)
@@ -67,6 +81,9 @@ BackendManager::BackendManager(const QUrl &baseUrl, QObject *parent)
             qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
             this,
             [this](int exitCode, QProcess::ExitStatus exitStatus) {
+                // Windows 上最后一段 stdout 可能和 finished 同一事件循环到达；先主动排空，
+                // 才能保留目录后端的固定配置诊断。
+                handleProcessOutput();
                 // finished 只说明本类持有的 QProcess 退出。
                 // 如果 ready_ 曾经为 true，说明服务运行后退出；否则更可能是启动阶段失败。
                 processStartedByUs_ = false;
@@ -76,7 +93,9 @@ BackendManager::BackendManager(const QUrl &baseUrl, QObject *parent)
                                      .arg(exitStatus == QProcess::NormalExit ? QStringLiteral("normal")
                                                                              : QStringLiteral("crash")));
                 } else {
-                    reportUnavailable(QStringLiteral("后端启动失败或提前退出：code=%1").arg(exitCode));
+                    reportUnavailable(startupFailureHint_.isEmpty()
+                                          ? QStringLiteral("后端启动失败或提前退出：code=%1").arg(exitCode)
+                                          : startupFailureHint_);
                 }
             });
 }
@@ -305,6 +324,8 @@ void BackendManager::startProcess()
         return;
     }
 
+    startupFailureHint_.clear();
+
     // 强制 Python 以 UTF-8 输出，配合 Qt 的 fromUtf8 读取，避免中文日志乱码。
     QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
     environment.insert(QStringLiteral("PYTHONUTF8"), QStringLiteral("1"));
@@ -490,6 +511,10 @@ void BackendManager::handleProcessOutput()
     for (const QString &line : lines) {
         const QString cleaned = cleanOutputLine(line);
         if (!cleaned.isEmpty()) {
+            const QString diagnostic = customerStartupDiagnostic(cleaned);
+            if (!diagnostic.isEmpty()) {
+                startupFailureHint_ = diagnostic;
+            }
             emit outputReceived(cleaned);
         }
     }

@@ -12103,6 +12103,9 @@ void MainWindow::updatePublicReferenceMcpUi(const McpConnectionInfo &connection,
     if (degraded && !connection.lastErrorCode.isEmpty()) {
         meta += QStringLiteral(" · 检测失败：%1").arg(connection.lastErrorCode);
     }
+    if (!connection.recoveryMessage.trimmed().isEmpty()) {
+        meta = connection.recoveryMessage.trimmed();
+    }
     if (meta.isEmpty()) {
         meta = QStringLiteral("启用连接不会联网；实际检索会单独请求联网与受控服务启动权限。");
     }

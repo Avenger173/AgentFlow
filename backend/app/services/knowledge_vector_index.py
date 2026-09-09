@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import gc
 from hashlib import sha256
+import importlib.util
 import json
 from pathlib import Path
 import shutil
@@ -58,18 +59,11 @@ _EMBEDDING_MARKER_NAME = "bge_small_zh_v1_5.ready"
 def vector_index_capability() -> VectorIndexCapability:
     """仅检查依赖与本项目成功初始化标记，不下载/加载任何模型。"""
 
-    try:
-        import chromadb  # noqa: F401
-
-        chroma_available = True
-    except ImportError:
-        chroma_available = False
-    try:
-        import fastembed  # noqa: F401
-
-        fastembed_available = True
-    except ImportError:
-        fastembed_available = False
+    # 能力面板和应用启动路径只需要知道可选包是否存在。直接 import chromadb/fastembed
+    # 会触发大量传递模块加载，目录包冷启动时可能阻塞数秒，甚至让普通知识库操作误以为
+    # 后端失联；真正的索引和向量化路径仍在 _load_embedding_model 中按确认后加载。
+    chroma_available = importlib.util.find_spec("chromadb") is not None
+    fastembed_available = importlib.util.find_spec("fastembed") is not None
     marker = _embedding_marker_path()
     model_initialized = marker.is_file()
     if not chroma_available or not fastembed_available:

@@ -111,6 +111,11 @@ class McpConnectionStore:
             last_error_code=current.last_error_code,
         ))
 
+    def reset_public_reference(self) -> McpConnectionState:
+        """用默认关闭状态替换无法读取的可选 MCP 本地设置。"""
+
+        return self._write(McpConnectionState(updated_at=_utc_now()))
+
     def record_check(self, *, tool_count: int = 0, error_code: str = "") -> McpConnectionState:
         current = self.load_public_reference()
         return self._write(current.__class__(
@@ -151,6 +156,10 @@ def load_public_reference_connection() -> McpConnectionState:
 
 def set_public_reference_enabled(enabled: bool) -> McpConnectionState:
     return _DEFAULT_STORE.set_enabled(enabled)
+
+
+def reset_public_reference_connection() -> McpConnectionState:
+    return _DEFAULT_STORE.reset_public_reference()
 
 
 def record_public_reference_check(*, tool_count: int = 0, error_code: str = "") -> McpConnectionState:

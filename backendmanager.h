@@ -111,6 +111,10 @@ private:
     // 记录最近一次健康检查失败原因，最终超时时展示给用户。
     QString lastProbeError_;
 
+    // 随包后端可在启动前输出固定的无敏感配置诊断。保留该行可让 Qt 把“提前退出”
+    // 还原成客户能处理的设置问题，而不是暴露 Python traceback 或笼统的退出码。
+    QString startupFailureHint_;
+
     // 仅用于脱敏、面向客户的启动耗时提示；不记录文件、请求正文或凭据。
     QElapsedTimer startupElapsedTimer_;
 

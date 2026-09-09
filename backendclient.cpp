@@ -73,6 +73,7 @@ McpConnectionInfo readMcpConnectionInfo(const QJsonObject &payload)
     result.lastCheckedAt = payload.value(QStringLiteral("last_checked_at")).toString();
     result.lastToolCount = payload.value(QStringLiteral("last_tool_count")).toInt();
     result.lastErrorCode = payload.value(QStringLiteral("last_error_code")).toString();
+    result.recoveryMessage = payload.value(QStringLiteral("recovery_message")).toString();
     return result;
 }
 

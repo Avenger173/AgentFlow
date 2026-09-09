@@ -1,6 +1,6 @@
 # AgentFlow 项目状态
 
-最后更新：2026-09-08
+最后更新：2026-09-09
 
 ## 当前仓库状态
 
@@ -42,6 +42,11 @@
 > 仅作工程诊断，不能当作正式对外发行。发行契约、目录布局、打包后端 `/health` 与客户端启动/正常关闭（含 8765 端口释放）
 > 均已通过；下一步是 LGM7.2 的可选依赖缺失、配置损坏、端口占用和旧数据回读故障矩阵，不改变 Native 默认路径。详见
 > [LGM7_RELEASE_ENGINEERING_PLAN.md](LGM7_RELEASE_ENGINEERING_PLAN.md)。
+
+> **2026-09-09 LGM7.2 目录发行离线故障出口：**真实 PyInstaller 后端和 Qt 客户端已通过默认 Node/OCR 缺失、
+> MCP 默认停用、损坏 MCP 状态重置、Embedding 未初始化、无效配置、端口占用/后端缺失、旧 SQLite/OCR/K4 artifact
+> 回读及目录启动关闭回归。默认候选显式排除 Paddle/PaddleOCR/PaddleX，向量状态查询不再导入大型依赖。此结论不包括
+> 真实远端 MCP、客户模型、性能门槛或人工 UI 验收；下一步为 LGM7.3 性能与关闭验收。
 
 > **2026-08-31 R5.4B 字段加工自然语言闭环：**AI 调度台现在能在已绑定单个 CSV/XLSX 后识别“新增字段、排名、累计、月份、环比、占比、四舍五入、分段、清理文本和有限四则计算”等目标，先生成不写文件的 `DataTransformIntent v1` 预览，再在客户确认后委派 `data_agent.export_field_transform`。Runtime 复用已有确定性字段加工服务，在 `output/data_transformations/` 中保持原文件类型创建副本，按原字段之后追加最多 12 个派生字段，回读新字段/行数/格式和源哈希后才登记 artifact，并把文件名和新增字段摘要写回同一会话。自然语言不能执行公式、脚本或 SQL，源文件不会被修改。`verify_commander_data_transformation_delivery.py` 与字段加工、数据交付、Commander 回归已通过；本轮未调用真实模型或网络。R5.4C 两份数据关联首版已完成，复杂多表关系仍不自动开放。
 

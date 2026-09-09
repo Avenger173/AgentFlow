@@ -80,6 +80,8 @@ def main() -> None:
         assert "agentflow_profile" in spec_text
         assert '(str(RUNTIME_ROOT / "node_modules")' not in spec_text
         assert 'BACKEND_ROOT / ".env"' not in spec_text
+        for optional_ocr_package in ("paddle", "paddleocr", "paddlex"):
+            assert f'"{optional_ocr_package}"' in spec_text
 
         build_script = BACKEND_ROOT / "scripts" / "build_directory_backend.py"
         dry_run = subprocess.run(

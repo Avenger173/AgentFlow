@@ -1100,6 +1100,7 @@ struct McpConnectionInfo
     QString lastCheckedAt;
     int lastToolCount = 0;
     QString lastErrorCode;
+    QString recoveryMessage;
 };
 
 class BackendClient : public QObject
