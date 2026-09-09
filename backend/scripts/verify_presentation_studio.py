@@ -380,6 +380,24 @@ def main() -> None:
     assert len(default_payload["slides"]) == 10
     assert default_payload["asset_plan"]["state"] == "not_requested"
     assert "内置主题" in default_payload["asset_plan"]["notice"]
+
+    # 即使旧客户端或调度台没有同步 structured_data_enabled，只要客户原话明确点名表格与
+    # 图表，就必须从意图层启用数据合同。mock 路径也要走同一保守蓝图，不能只在真模型
+    # 路径看起来正确。
+    inferred_data_plan = client.post(
+        "/api/agents/document_agent/presentation-studio/run",
+        json={
+            "intent": "帮我做一个C罗生涯介绍的 PPT，要有多种数据表格支撑，饼状图、折线图、柱状图都要有。",
+            "visual_asset_provider": "none",
+        },
+    )
+    assert inferred_data_plan.status_code == 200, inferred_data_plan.text
+    inferred_data_payload = inferred_data_plan.json()
+    assert inferred_data_payload["data_plan"]["state"] == "research_planned"
+    assert inferred_data_payload["data_plan"]["requested_visuals"] == [
+        "comparison_table", "trend_table", "comparison_bar", "trend_line", "share_pie"
+    ]
+    assert inferred_data_payload["data_plan"]["required_pie_chart_count"] == 1
     assert default_payload["research_plan"]["state"] == "not_requested"
 
     # 公开资料 Provider 只允许固定的中文 Wikimedia API。这里使用 MockTransport 覆盖解析、
@@ -1027,8 +1045,110 @@ def main() -> None:
     assert single_fallback is not None
     assert single_fallback.entities == ["梅西"]
     assert single_fallback.recommended_visuals == [
-        "comparison_table", "horizontal_bar", "trend_line"
+        "comparison_table", "horizontal_bar", "trend_line", "trend_area"
     ]
+    # 调度台直出不能依赖某个界面勾选框刚好同步成功。客户原话已明确要求表格、柱图、
+    # 折线图和饼图时，Harness 必须解析完整合同，并在研究 JSON 失败后仍能从体育生涯
+    # 语义建立可执行的保守蓝图，而不是把数据章节静默降级掉。
+    ronaldo_contract_request = PresentationStudioPlanRequest(
+        intent="帮我做一个C罗生涯介绍的 PPT，要有多种数据表格支撑，饼状图、折线图、柱状图都要有。",
+        structured_data_enabled=True,
+    )
+    ronaldo_intent = _data_visual_intent(ronaldo_contract_request)
+    assert (
+        ronaldo_intent.table_count,
+        ronaldo_intent.bar_count,
+        ronaldo_intent.line_count,
+        ronaldo_intent.pie_count,
+        ronaldo_intent.total,
+    ) == (2, 1, 1, 1, 5)
+    ronaldo_fallback = _infer_conservative_research_blueprint(
+        request=ronaldo_contract_request,
+        output=research_planner_output.model_copy(
+            update={
+                "title": "C罗职业生涯数据全景",
+                "content_slides": [
+                    _StudioContentSlide(
+                        title="进球、荣誉与赛季轨迹",
+                        bullets=["观察进球与助攻的生涯积累。", "用赛季表现解释长期竞争力。"],
+                        layout="metrics",
+                        visual_direction="使用数据视图。",
+                    )
+                ],
+            }
+        ),
+    )
+    assert ronaldo_fallback is not None
+    assert ronaldo_fallback.entities == ["C罗"]
+    assert ronaldo_fallback.recommended_visuals == [
+        "comparison_table", "trend_table", "comparison_bar", "trend_line", "share_pie"
+    ]
+    assert len(ronaldo_fallback.metrics) >= 3
+    ronaldo_data_plan = _data_plan(
+        ronaldo_contract_request,
+        slides=[
+            PresentationStudioSlidePlan(
+                slide_id=f"content_{index}",
+                role="content",
+                title=f"C罗数据视图 {index}",
+                bullets=["展示结构化数据。"],
+                visual_direction="按数据用途选择版式。",
+            )
+            for index in range(1, 6)
+        ],
+        brief=PresentationStudioBrief(
+            title="C罗职业生涯数据全景",
+            purpose="用多种数据视图说明职业生涯。",
+            audience="足球爱好者",
+            core_message="数据表与图表分别呈现总量、趋势和构成。",
+            theme="impact_contrast",
+            theme_reason="适合数据表达。",
+            fact_check_notice="所有数字均需核验来源。",
+        ),
+        blueprint=ronaldo_fallback,
+    )
+    assert ronaldo_data_plan.requested_visuals == ronaldo_fallback.recommended_visuals
+    assert (
+        ronaldo_data_plan.required_table_count,
+        ronaldo_data_plan.required_bar_chart_count,
+        ronaldo_data_plan.required_line_chart_count,
+        ronaldo_data_plan.required_pie_chart_count,
+        ronaldo_data_plan.required_visual_count,
+    ) == (2, 1, 1, 1, 5)
+
+    class RonaldoDraftRuntime:
+        """覆盖单对象多视图：两张表、柱图、折线图与饼图必须都能形成。"""
+
+        async def tool_turn(self, **_: object) -> ModelToolTurn:
+            entity = ronaldo_data_plan.entities[0]
+            first_metric, second_metric, third_metric = ronaldo_data_plan.metrics[:3]
+            trend_metric = ronaldo_data_plan.trend_metric
+            return ModelToolTurn(
+                content=json.dumps(
+                    {
+                        "status": "complete",
+                        "title": "C罗职业生涯数据草稿",
+                        "points": [
+                            {"entity": entity, "metric": first_metric, "value": 950, "unit": "次", "period": "职业生涯"},
+                            {"entity": entity, "metric": second_metric, "value": 1300, "unit": "次", "period": "职业生涯"},
+                            {"entity": entity, "metric": third_metric, "value": 260, "unit": "次", "period": "职业生涯"},
+                            {"entity": entity, "metric": trend_metric, "value": 31, "unit": "球", "period": "2019/20"},
+                            {"entity": entity, "metric": trend_metric, "value": 29, "unit": "球", "period": "2020/21"},
+                            {"entity": entity, "metric": trend_metric, "value": 24, "unit": "球", "period": "2021/22"},
+                            {"entity": entity, "metric": trend_metric, "value": 26, "unit": "球", "period": "2022/23"},
+                        ],
+                        "notes": ["离线数据草稿只验证图表交付形态。"],
+                    },
+                    ensure_ascii=False,
+                )
+            )
+
+    ronaldo_charts = fetch_ai_knowledge_draft_chart_data(
+        ronaldo_data_plan,
+        runtime=RonaldoDraftRuntime(),  # type: ignore[arg-type]
+    )
+    assert [chart.chart_type for chart in ronaldo_charts.charts] == ronaldo_data_plan.requested_visuals
+    assert len(ronaldo_charts.charts) == 5
     no_metric_output = research_planner_output.model_copy(
         update={
             "title": "甲与乙：主题介绍",
@@ -1277,6 +1397,10 @@ def main() -> None:
     assert not contract_warnings
     assert _structured_data_contract_gap(explicit_plan, contract_charts) == ""
     assert _structured_data_contract_gap(explicit_plan, contract_charts[:3]) == "柱状图 0/1、折线图 0/1、数据视图 3/5"
+    pie_contract = explicit_plan.model_copy(
+        update={"required_pie_chart_count": 1, "required_visual_count": 6}
+    )
+    assert _structured_data_contract_gap(pie_contract, contract_charts) == "饼图 0/1、数据视图 5/6"
     assert _research_source_marker_present(
         "S20 · 甲队与乙队多期统计 · https://stats.example.com/multi-vi",
         multi_view_source,

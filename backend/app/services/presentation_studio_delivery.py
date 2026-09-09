@@ -346,7 +346,9 @@ def export_presentation_studio_plan(
         warning = next(iter(assets.warnings), "图片生成服务没有返回可嵌入的图片")
         delivery_message = (
             "PPT 创作文件已按内置版式导出并通过回读验证，但本次请求的 "
-            f"{assets.label} 未生成可嵌入图片：{warning}。可重新发起制作以重试图片生成。"
+            f"{assets.label} 未生成可嵌入图片：{warning}。"
+            f"本次已写入 {len(structured_data_charts)} 个可编辑数据视图；"
+            "可重新发起制作以重试图片生成。"
             + _motion_delivery_suffix(motion)
         )
     elif research.sources or structured_data_charts:
@@ -545,6 +547,9 @@ def _structured_data_contract_gap(
     table_total = sum(chart.chart_type in {"comparison_table", "trend_table"} for chart in charts)
     bar_total = sum(chart.chart_type in {"comparison_bar", "grouped_bar", "horizontal_bar"} for chart in charts)
     line_total = sum(chart.chart_type in {"trend_line", "trend_area"} for chart in charts)
+    pie_total = sum(chart.chart_type == "share_pie" for chart in charts)
+    doughnut_total = sum(chart.chart_type == "share_doughnut" for chart in charts)
+    area_total = sum(chart.chart_type == "trend_area" for chart in charts)
     gaps: list[str] = []
     if table_total < contract.required_table_count:
         gaps.append(f"表格 {table_total}/{contract.required_table_count}")
@@ -552,6 +557,12 @@ def _structured_data_contract_gap(
         gaps.append(f"柱状图 {bar_total}/{contract.required_bar_chart_count}")
     if line_total < contract.required_line_chart_count:
         gaps.append(f"折线图 {line_total}/{contract.required_line_chart_count}")
+    if pie_total < contract.required_pie_chart_count:
+        gaps.append(f"饼图 {pie_total}/{contract.required_pie_chart_count}")
+    if doughnut_total < contract.required_doughnut_chart_count:
+        gaps.append(f"环形图 {doughnut_total}/{contract.required_doughnut_chart_count}")
+    if area_total < contract.required_area_chart_count:
+        gaps.append(f"面积图 {area_total}/{contract.required_area_chart_count}")
     if len(charts) < contract.required_visual_count:
         gaps.append(f"数据视图 {len(charts)}/{contract.required_visual_count}")
     return "、".join(gaps)

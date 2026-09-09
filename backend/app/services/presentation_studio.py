@@ -190,6 +190,15 @@ async def build_presentation_studio_plan(
 ) -> PresentationStudioPlanResponse:
     """为一句用户意图创建可确认的 PPT 创作计划并写入任务历史。"""
 
+    # “包含表格、柱图、折线图”等直接写在客户原话中的交付合同，优先级高于客户端的
+    # 智能补充开关。这样调度台直出、旧窗口或短暂 UI 状态不同步时，也不会把明确的数据
+    # 需求悄悄降级成纯文字 PPT。
+    inferred_structured_data = (
+        not request.structured_data_enabled
+        and _has_explicit_data_research_intent(request.intent)
+    )
+    if inferred_structured_data:
+        request = request.model_copy(update={"structured_data_enabled": True})
     stable_task_id = task_id or f"task_presentation_studio_{uuid4().hex[:12]}"
     started_at = datetime.now(UTC)
     requested_slide_count = _requested_slide_count(request.target_slide_count)
@@ -201,6 +210,8 @@ async def build_presentation_studio_plan(
 
     mode = "mock"
     warnings: list[str] = []
+    if inferred_structured_data:
+        warnings.append("已根据客户明确点名的数据表格或图表要求，自动启用结构化数据交付。")
     repair_used = False
     research_planner_used = False
     # 研究规划器最多调用两次：首次规划与一次纯格式修复。这个数字必须进入任务历史，
@@ -242,9 +253,17 @@ async def build_presentation_studio_plan(
                 except (ModelGatewayError, PresentationStudioServiceError) as exc:
                     if isinstance(exc, _ResearchBlueprintRequestError):
                         research_planner_call_count = exc.call_count
-                    # 研究复核失败不能拖垮已经通过契约校验的主创作计划；计划预览会明确说明
-                    # 本次没有形成数据蓝图，后续也不会联网猜数。
-                    warnings.append(f"数据研究规划未通过校验，本次不生成数据图表：{exc}")
+                    # 研究复核失败不能拖垮已经通过契约校验的主创作计划。对客户已经明确
+                    # 点名的数据合同，仍尝试从本轮已生成的标题、实体与量化语义建立保守蓝图，
+                    # 防止一个 JSON 偶发失败让所有数据页静默消失。
+                    fallback = _infer_conservative_research_blueprint(request=request, output=output)
+                    if fallback is not None:
+                        output = output.model_copy(update={"research_blueprint": fallback})
+                        warnings.append(
+                            "数据研究规划器未能收束 JSON；已按客户明确的数据视图要求建立保守数据蓝图。"
+                        )
+                    else:
+                        warnings.append(f"数据研究规划未通过校验，本次不生成数据图表：{exc}")
                 else:
                     output = output.model_copy(update={"research_blueprint": research_blueprint})
                     research_planner_used = True
@@ -273,6 +292,21 @@ async def build_presentation_studio_plan(
             f"已调用 {research_planner_call_count} 次无工具研究规划复核；"
             "该步骤没有联网，也没有生成或补入事实数值。"
         )
+    # mock/fallback 运行模式和研究规划请求整体失败都可能绕开上方的专用规划器。客户已经
+    # 明确点名数据交付时，不能因为这条旁路留下空蓝图并最终导出纯文字 PPT；尽量复用已生成
+    # 的主题与页面语义建立保守计划，只有连实体或量化维度都无法识别时才如实保留失败说明。
+    if (
+        request.structured_data_enabled
+        and _has_explicit_data_research_intent(request.intent)
+        and _normalize_research_blueprint(output.research_blueprint) is None
+    ):
+        fallback = _infer_conservative_research_blueprint(request=request, output=output)
+        if fallback is not None:
+            output = output.model_copy(update={"research_blueprint": fallback})
+            if not any("保守数据蓝图" in warning for warning in warnings):
+                warnings.append("已按客户明确的数据视图要求建立保守数据蓝图。")
+        else:
+            warnings.append("无法从当前主题识别可交付的数据对象或指标，本次不会伪造图表。")
     # 创作规划与数据研究分属不同职责。即使主模型没有联网，它仍可能把记忆中的数字写进正文；
     # 这些数字既没有来源，也可能与导出阶段真正核验出的表格冲突，因此必须在计划落库前移除。
     output, stripped_numeric_claims = _strip_unverified_numeric_claims(output, request=request)
@@ -393,6 +427,10 @@ async def _request_research_blueprint(
         "minimum_native_tables": visual_intent.table_count,
         "minimum_bar_charts": visual_intent.bar_count,
         "minimum_line_charts": visual_intent.line_count,
+        "minimum_pie_charts": visual_intent.pie_count,
+        "minimum_doughnut_charts": visual_intent.doughnut_count,
+        "minimum_area_charts": visual_intent.area_count,
+        "minimum_visuals": visual_intent.total,
         "minimum_comparison_metrics": minimum_comparison_metrics,
     }
     system_prompt = (
@@ -562,6 +600,28 @@ def _validate_blueprint_visual_contract(
         )
     if contract.get("minimum_line_charts", 0) and not blueprint.trend_metric.strip():
         raise PresentationStudioServiceError("数据研究蓝图缺少折线图所需的逐期指标。")
+    visuals = list(blueprint.recommended_visuals)
+    visual_counts = {
+        "tables": sum(value in {"comparison_table", "trend_table"} for value in visuals),
+        "bars": sum(value in {"comparison_bar", "grouped_bar", "horizontal_bar"} for value in visuals),
+        "lines": sum(value in {"trend_line", "trend_area"} for value in visuals),
+        "pies": visuals.count("share_pie"),
+        "doughnuts": visuals.count("share_doughnut"),
+        "areas": visuals.count("trend_area"),
+    }
+    required_visuals = (
+        ("tables", "minimum_native_tables", "数据表"),
+        ("bars", "minimum_bar_charts", "柱状图"),
+        ("lines", "minimum_line_charts", "折线图"),
+        ("pies", "minimum_pie_charts", "饼图"),
+        ("doughnuts", "minimum_doughnut_charts", "环形图"),
+        ("areas", "minimum_area_charts", "面积图"),
+    )
+    for actual_key, required_key, label in required_visuals:
+        if visual_counts[actual_key] < contract.get(required_key, 0):
+            raise PresentationStudioServiceError(f"数据研究蓝图缺少客户明确要求的{label}。")
+    if len(visuals) < contract.get("minimum_visuals", 0):
+        raise PresentationStudioServiceError("数据研究蓝图的视图数量不足，无法满足客户明确的数据交付要求。")
 
 
 def _normalize_research_details_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -720,7 +780,17 @@ def _infer_conservative_research_blueprint(
         [request.intent, output.title, *[slide.title for slide in output.content_slides],
          *[bullet for slide in output.content_slides for bullet in slide.bullets]]
     ).casefold()
-    metrics = _infer_research_metrics(context)
+    visual_intent = _data_visual_intent(request)
+    minimum_metric_count = 2 if visual_intent.explicit else 1
+    # 单对象饼图需要至少三个可加总的组成项；两项数据即使能渲染，也无法承担客户点名的
+    # 构成分析。此处把指标下限抬高，交给后续 AI 数据底稿生成器填入对应数值。
+    if visual_intent.pie_count or visual_intent.doughnut_count:
+        minimum_metric_count = max(minimum_metric_count, 3)
+    metrics = _supplement_conservative_research_metrics(
+        context,
+        _infer_research_metrics(context),
+        minimum=minimum_metric_count,
+    )
     if not metrics:
         return None
     target_slide_index = _infer_data_target_slide_index(output.content_slides)
@@ -729,7 +799,7 @@ def _infer_conservative_research_blueprint(
         if not entity:
             return None
         trend_metric = _trend_metric_for(metrics[0])
-        return _StudioResearchBlueprint(
+        blueprint = _StudioResearchBlueprint(
             needed=True,
             research_question=f"整理{entity}的{'、'.join(metrics)}及{trend_metric}，明确单位和统计期间。",
             entities=[entity],
@@ -749,6 +819,23 @@ def _infer_conservative_research_blueprint(
                 f"{entity} career profile data statistics",
             ],
             preferred_source_types=["official_statistics", "official_profile"],
+        )
+        requested_visuals = _requested_data_visuals(request, blueprint)
+        visual_metrics = _data_visual_metric_groups(
+            requested_visuals,
+            metrics=metrics,
+            trend_metric=trend_metric,
+            entity_count=1,
+            recommended_visuals=blueprint.recommended_visuals,
+            recommended_groups=blueprint.visual_metrics,
+        )
+        return blueprint.model_copy(
+            update={
+                "chart_type": requested_visuals[0],
+                "recommended_visuals": requested_visuals,
+                "visual_metrics": visual_metrics,
+                "required_data_points": _data_point_budget(blueprint, requested_visuals),
+            }
         )
     first, second = entity_pair
     return _StudioResearchBlueprint(
@@ -776,7 +863,7 @@ def _infer_single_data_entity(candidates: list[str]) -> str:
     """仅从“某对象生涯/经营数据”这类明确短句中提取单对象，不从普通主题猜测。"""
 
     pattern = re.compile(
-        r"(?P<entity>[A-Za-z0-9\u4e00-\u9fff·' -]{1,40}?)(?=(?:的)?(?:职业)?生涯(?:数据|统计)|(?:的)?数据(?:全景|统计|\s*ppt|$))",
+        r"(?P<entity>[A-Za-z0-9\u4e00-\u9fff·' -]{1,40}?)(?=(?:的)?(?:职业)?生涯(?:数据|统计|介绍|概览|全景)|(?:的)?数据(?:全景|统计|\s*ppt|$))",
         flags=re.IGNORECASE,
     )
     for candidate in candidates:
@@ -876,6 +963,32 @@ def _infer_research_metrics(context: str) -> list[str]:
 
     metrics = [metric for markers, metric in metric_rules if any(contains_marker(marker) for marker in markers)]
     return list(dict.fromkeys(metrics))[:3]
+
+
+def _supplement_conservative_research_metrics(
+    context: str,
+    metrics: list[str],
+    *,
+    minimum: int,
+) -> list[str]:
+    """仅在已明确的体育生涯语义下补足可视化所需的常见量化维度。
+
+    正常路径仍由专用规划模型选择指标；这里是它两次无法收束时的最后兜底。不能向普通主题
+    凭空塞入“指标一/指标二”，否则虽然能画图，却会制造看似完整、实际无意义的交付。
+    """
+
+    values = list(dict.fromkeys(metric for metric in metrics if metric.strip()))
+    sport_markers = (
+        "足球", "球员", "进球", "助攻", "联赛", "欧冠", "赛季", "c罗", "梅西", "内马尔",
+        "football", "soccer", "ronaldo", "messi", "neymar",
+    )
+    if len(values) < minimum and any(marker in context for marker in sport_markers):
+        for metric in ("职业生涯总进球数", "职业生涯出场次数", "职业生涯助攻数", "冠军奖杯数"):
+            if metric not in values:
+                values.append(metric)
+            if len(values) >= max(minimum, 3):
+                break
+    return values[:6]
 
 
 def _infer_data_target_slide_index(slides: list[_StudioContentSlide]) -> int:
@@ -1398,6 +1511,9 @@ def _data_plan(
             required_table_count=visual_intent.table_count,
             required_bar_chart_count=visual_intent.bar_count,
             required_line_chart_count=visual_intent.line_count,
+            required_pie_chart_count=visual_intent.pie_count,
+            required_doughnut_chart_count=visual_intent.doughnut_count,
+            required_area_chart_count=visual_intent.area_count,
             required_visual_count=visual_intent.total,
             visual_contract_explicit=visual_intent.explicit,
             max_points=data_point_budget,

@@ -172,6 +172,9 @@ class PresentationStudioDataPlan(BaseModel):
     required_table_count: int = Field(default=0, ge=0, le=6)
     required_bar_chart_count: int = Field(default=0, ge=0, le=2)
     required_line_chart_count: int = Field(default=0, ge=0, le=2)
+    required_pie_chart_count: int = Field(default=0, ge=0, le=2)
+    required_doughnut_chart_count: int = Field(default=0, ge=0, le=2)
+    required_area_chart_count: int = Field(default=0, ge=0, le=2)
     # “4 张图表”这类总数量合同不能被分类计数遗漏；导出后按实际原生对象总数复核。
     required_visual_count: int = Field(default=0, ge=0, le=8)
     visual_contract_explicit: bool = False
