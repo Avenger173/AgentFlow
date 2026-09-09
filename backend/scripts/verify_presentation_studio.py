@@ -2062,6 +2062,7 @@ def main() -> None:
     assert research_export_payload["verification"]["passed"] is True
     research_presentation = Presentation(_VERIFY_ROOT / "presentations" / "智能制造公开资料验证.pptx")
     source_text = "\n".join(shape.text for shape in research_presentation.slides[-1].shapes if getattr(shape, "has_text_frame", False))
+    assert research_sample.sources[0].source_id in source_text
     assert research_sample.sources[0].title in source_text
     assert research_sample.sources[0].page_url in source_text
     research_artifact = next(

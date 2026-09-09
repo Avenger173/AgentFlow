@@ -1617,7 +1617,10 @@ def _render_sources(
     if research_sources:
         entries.append("公开资料参考：以下页面仅补充出处，不自动作为统计数据、结论或引用依据。")
         entries.extend(
-            f"{source.title} · {source.page_url} · 抓取于 {source.retrieved_at}"
+            # 来源 ID、标题和域名必须先出现：来源页是面向客户的简短索引，而 artifact
+            # 保存完整审计元数据。这样长链接被视觉层截断时，回读仍能稳定确认它属于本次
+            # 已确认的公开资料，而不会把可交付的 PPT 误撤回。
+            f"{source.source_id} · {source.title} · {source.page_url} · 抓取于 {source.retrieved_at}"
             for source in research_sources
         )
     research_data_sources: dict[str, object] = {}
@@ -1768,6 +1771,17 @@ def _verify_studio_presentation(
     source_slide_count = sum(1 for item in plan.slides if item.role == "sources")
     if source_slide_count != 1:
         raise PresentationStudioPlanConflictError("PPT 创作计划必须包含唯一事实核验页。")
+    source_slide = next(
+        (
+            slide
+            for planned, slide in zip(plan.slides, opened.slides, strict=True)
+            if planned.role == "sources"
+        ),
+        None,
+    )
+    if source_slide is None:
+        raise PresentationStudioPlanConflictError("PPT 创作文件缺少已确认的事实核验页，已停止交付。")
+    source_text = _read_slide_text(source_slide)
     if assets.images:
         embedded_picture_total = sum(
             1 for slide in opened.slides for shape in slide.shapes if hasattr(shape, "image")
@@ -1775,12 +1789,18 @@ def _verify_studio_presentation(
         if embedded_picture_total < len(assets.images):
             raise PresentationStudioPlanConflictError("PPT 创作文件缺少已确认的外部视觉素材，已停止交付。")
     if research.sources:
-        source_text = _read_slide_text(opened.slides[-1])
-        if not all(source.title in source_text and source.page_url in source_text for source in research.sources):
-            raise PresentationStudioPlanConflictError("PPT 创作文件缺少已确认的公开资料来源，已停止交付。")
+        missing_sources = [
+            source.source_id
+            for source in research.sources
+            if not _research_source_marker_present(source_text, source)
+        ]
+        if missing_sources:
+            raise PresentationStudioPlanConflictError(
+                "PPT 创作文件缺少已确认的公开资料来源标记："
+                f"{', '.join(missing_sources[:3])}。"
+            )
     structured_data_charts = _structured_data_charts(structured_data)
     if structured_data_charts:
-        source_text = _read_slide_text(opened.slides[-1])
         for chart in structured_data_charts:
             chart_slide = next(
                 (
@@ -1846,7 +1866,11 @@ def _research_source_marker_present(source_text: str, source: object) -> bool:
 
     source_id = str(getattr(source, "source_id", "")).strip()
     title = str(getattr(source, "title", "")).strip()
-    source_url = str(getattr(source, "source_url", "")).strip()
+    # Wikimedia 公开资料使用 page_url，ResearchGateway 证据使用 source_url；来源页
+    # 回读要识别两种受控来源对象，不能因字段名不同把正常交付误判为缺失。
+    source_url = str(
+        getattr(source, "source_url", "") or getattr(source, "page_url", "")
+    ).strip()
     hostname = (urlparse(source_url).hostname or "").strip()
     title_prefix = _compact_text(title, 48)
     return bool(
