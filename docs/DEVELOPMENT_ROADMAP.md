@@ -323,7 +323,7 @@ K0-K6 的既有知识库闭环不包含 OCR；K7 仅按已批准范围新增扫�
 
 ## 平台集成支线 LGM：LangGraph、LangChain 与 MCP
 
-状态：**LGM0-LGM5.7 已完成；LangGraph 真实开发者试点因资源门槛拒绝，Native 继续是唯一客户 Runtime。LGM7.1 目录候选与 LGM7.2 自动化离线故障出口已完成，仍未对外发行。**首期只有默认停用的固定 Wikimedia `stdio` 连接；LangGraph 尚未接管客户任务，详细架构、阶段出口、回退条件和专项边界见 `docs/LANGGRAPH_LANGCHAIN_MCP_INTEGRATION_PLAN.md`。
+状态：**LGM0-LGM5.7 已完成；LangGraph 真实开发者试点因资源门槛拒绝，Native 继续是唯一客户 Runtime。LGM7.1 目录候选、LGM7.2 离线故障矩阵与 LGM7.3 自动化性能/关闭出口均已完成，仍未对外发行。**首期只有默认停用的固定 Wikimedia `stdio` 连接；LangGraph 尚未接管客户任务，详细架构、阶段出口、回退条件和专项边界见 `docs/LANGGRAPH_LANGCHAIN_MCP_INTEGRATION_PLAN.md`。
 
 该支线不会为了增加技术名词重写 AgentFlow。MCP 先作为独立且受治理的外部 Tool Gateway；LangGraph 只通过 `ExecutionBackend` 接入复杂、可恢复工作流；LangChain 只复用经实测有价值的模型、消息和 Tool 适配组件。Commander、ModelGateway、权限、审计、任务历史、产物、Verifier，以及现有 FTS5/Chroma/BGE/RRF/Evidence Gate 继续由 AgentFlow 持有。
 
@@ -331,7 +331,7 @@ K0-K6 的既有知识库闭环不包含 OCR；K7 仅按已批准范围新增扫�
 
 ## 当前下一步
 
-> **当前状态：LGM7.2 自动化离线故障出口已完成；下一步为 LGM7.3 性能与关闭验收。**候选默认不携带 Node Harness、不启用 MCP；损坏 MCP 状态可安全重置，默认 OCR 不随包，模型状态查询不加载模型。LGM7.3 只测量冷启动、健康检查、关闭清理和可选组件关闭成本，不会把 LangGraph 重新注册为客户 Runtime，也不会未授权连接真实远端 MCP。详细记录见 `docs/LANGGRAPH_LANGCHAIN_MCP_INTEGRATION_PLAN.md`。
+> **当前状态：LGM7.3 自动化离线出口已完成；候选等待一次人工 Qt 验收与后续发行决策。**候选默认不携带 Node Harness、不启用 MCP；损坏 MCP 状态可安全重置，默认 OCR 不随包，模型状态查询不加载模型。LGM7.3 已测量冷启动、健康检查、只读状态并发和关闭清理，不会把 LangGraph 重新注册为客户 Runtime，也不会未授权连接真实远端 MCP。人工验收按 `docs/LGM7_RELEASE_MANUAL_ACCEPTANCE.md` 进行；详细记录见 `docs/LANGGRAPH_LANGCHAIN_MCP_INTEGRATION_PLAN.md`。
 
 下方为各模块的历史里程碑与回归基线，不表示当前会并行启动这些事项。
 

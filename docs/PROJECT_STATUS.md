@@ -48,6 +48,13 @@
 > 回读及目录启动关闭回归。默认候选显式排除 Paddle/PaddleOCR/PaddleX，向量状态查询不再导入大型依赖。此结论不包括
 > 真实远端 MCP、客户模型、性能门槛或人工 UI 验收；下一步为 LGM7.3 性能与关闭验收。
 
+> **2026-09-09 LGM7.3 目录发行自动化出口：**`benchmark_directory_release.py` 已对真实目录候选完成三轮
+> 临时/mock 启动基线：中位就绪 `6664ms`、Qt/随包后端 RSS `323.8MiB`、关闭到端口释放 `2149ms`，运行时仅
+> `AgentFlow.exe` 与 `AgentFlowBackend.exe` 两个进程。候选在 12 路受控只读状态请求后仍可正常关闭；Map/Reduce
+> 深度任务和异步图表交付的协作式取消也已离线回归。该数值只是当前构建机基线，不是跨设备承诺；真实 Provider/远端 MCP
+> 仍未执行。客户可见 Qt 检查已写入 [LGM7_RELEASE_MANUAL_ACCEPTANCE.md](LGM7_RELEASE_MANUAL_ACCEPTANCE.md)，
+> 候选依然未签名、未安装、未对外发布。
+
 > **2026-08-31 R5.4B 字段加工自然语言闭环：**AI 调度台现在能在已绑定单个 CSV/XLSX 后识别“新增字段、排名、累计、月份、环比、占比、四舍五入、分段、清理文本和有限四则计算”等目标，先生成不写文件的 `DataTransformIntent v1` 预览，再在客户确认后委派 `data_agent.export_field_transform`。Runtime 复用已有确定性字段加工服务，在 `output/data_transformations/` 中保持原文件类型创建副本，按原字段之后追加最多 12 个派生字段，回读新字段/行数/格式和源哈希后才登记 artifact，并把文件名和新增字段摘要写回同一会话。自然语言不能执行公式、脚本或 SQL，源文件不会被修改。`verify_commander_data_transformation_delivery.py` 与字段加工、数据交付、Commander 回归已通过；本轮未调用真实模型或网络。R5.4C 两份数据关联首版已完成，复杂多表关系仍不自动开放。
 
 > **2026-08-25 补充校正：**知识库 K5.8 已完成。后端现以已保存的索引耗时、当前进程无正文的检索/深度耗时、逻辑核数和数据目录可用空间生成性能建议；同类索引或深度任务 FIFO 串行，低配全局串行、中高配最多一条索引与一条深度链并行。它不保存客户正文、问题、文件名、路径或设备身份；进程队列不会替代 SQLite checkpoint。

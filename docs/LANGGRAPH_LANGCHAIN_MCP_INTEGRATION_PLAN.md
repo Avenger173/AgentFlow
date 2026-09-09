@@ -816,6 +816,18 @@ LGM1 交付的是受控协议内核，不是面向客户的“已支持 MCP”�
   旧 SQLite migration、OCR 解析/索引、K4 checkpoint/旧 artifact、LGM1 MCP Gateway、Release Qt 测试、目录布局/载荷/
   故障矩阵/客户端启动关闭均已通过。真实远端 MCP、性能门槛和人工 UI 验收不在本阶段结论内。
 
+#### LGM7.3 实施记录（2026-09-09）
+
+- `verify_directory_client_smoke.py` 在真实候选 Qt 窗口就绪后，采样 Qt 与随包后端进程树 RSS，并发访问
+  `/health`、MCP 连接、向量能力和 OCR 能力四类只读状态端点；关闭时同时回读 `8765` 释放和所有本轮进程退出。
+  该验证使用独立临时用户目录与 mock，不读取 `.env`、材料、模型设置或 outputs，也不拉起 Node/MCP 子进程。
+- `benchmark_directory_release.py` 将该行为重复三至五轮，防止只凭一次 Windows 冷启动判断发行质量。当前三轮本机构建
+  中位数为 `6664ms / 323.8MiB / 2149ms`（就绪/RSS/关闭），12 路只读状态请求后进程树仍为客户端与随包后端两项；
+  数值是后续同机比较的诊断基线，不是用户设备性能承诺。
+- `verify_knowledge_deep_task_map.py` 与 `verify_data_charts.py` 同时覆盖协作式取消、checkpoint/部分结果边界和
+  未登记 artifact 清理。客户可见 Qt 检查集中在 `LGM7_RELEASE_MANUAL_ACCEPTANCE.md`；真实 Provider 或远端 MCP
+  仍不因本阶段完成而自动调用。
+
 ## 9. 测试与评估
 
 ### 9.1 MCP 回归
@@ -910,8 +922,9 @@ AGENTFLOW_LANGCHAIN_ADAPTERS_ENABLED=false
 
 LGM0-LGM5.7 已完成；LangGraph 真实开发者试点经资源闸门拒绝，LangChain 组件评审明确不接入。
 LGM7.2 已完成默认可选组件缺失、损坏 MCP 状态安全重置、无效配置、端口占用、后端缺失与旧任务回读的自动化
-离线回归。当前下一阶段是 **LGM7.3：性能与关闭验收**：在不改变 Native 默认 Runtime、不启用客户 Node Harness
-或真实外部 MCP 的前提下，测量目录候选的冷启动、健康检查、关闭清理与可选组件关闭成本；真实远端服务只在明确授权后验收。
+离线回归。LGM7.3 的自动化离线发行验收也已完成：目录候选重复测量启动、健康、RSS、12 路受控只读状态请求和
+关闭清理，并回归长任务/异步交付的协作式取消。默认 Native Runtime 没有启动客户 Node Harness 或真实外部 MCP；
+真实远端服务仍只在明确授权后验收，客户可见 Qt 检查按 `docs/LGM7_RELEASE_MANUAL_ACCEPTANCE.md` 执行。
 
 详细分解见 [LGM7_RELEASE_ENGINEERING_PLAN.md](LGM7_RELEASE_ENGINEERING_PLAN.md)。
 
@@ -925,7 +938,7 @@ LGM0-LGM3 平台探针/治理/隔离图
   -> LGM7.0 目录发行运行时契约
   -> LGM7.1 候选目录装配与 SBOM（已完成）
   -> LGM7.2 可选运行时与离线故障矩阵（自动化离线出口已完成）
-  -> LGM7.3 性能与关闭验收
+  -> LGM7.3 性能与关闭验收（自动化离线出口已完成，等待人工 Qt 验收）
 ```
 
 任何阶段未达到出口，都停在该阶段修复，不通过提高模型轮数、放宽权限、复制一套状态或隐藏失败来推进里程碑。
