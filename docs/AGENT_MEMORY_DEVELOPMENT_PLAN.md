@@ -1,6 +1,6 @@
 # AgentFlow 记忆系统开发与验收计划
 
-> 状态：待实施
+> 状态：实施中（MEM-0 已完成，MEM-1 待执行）
 >
 > 建立日期：2026-09-10
 >
@@ -128,6 +128,12 @@ flowchart LR
 - 所有夹具不含真实客户正文、路径或凭据，并可在临时 SQLite 中离线重复运行。
 - 相同提交连续运行三次，required 结果完全一致。
 - 基线报告如实保留失败项，不以调整预期答案让旧实现通过。
+
+**实施记录（2026-09-10）**
+
+- 已建立 `backend/scripts/fixtures/memory_eval_cases_v1.json` 与 `backend/scripts/verify_commander_memory_quality.py`，覆盖 48 例合成脱敏夹具。
+- 三次 baseline 的 required 结果签名一致；48 个分类夹具当前为 26 例通过、2 例失败、20 例未支持，另有 2 个 MEM-1 确定性探针失败。`--mode gate` 已确认会对未通过 required 用例返回非零。
+- 详细基线、指标和失败证据见 `docs/AGENT_MEMORY_MEM0_BASELINE.md`；下一阶段只能修复该报告中的确定性遗漏，不能通过放宽夹具预期放行。
 
 ### MEM-1：修复确定性召回遗漏
 

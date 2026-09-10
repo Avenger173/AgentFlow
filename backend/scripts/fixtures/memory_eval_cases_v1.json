@@ -1,0 +1,457 @@
+{
+  "version": "agentflow.memory_eval.v1",
+  "description": "AgentFlow 记忆系统的脱敏离线质量夹具。所有标识、内容和路径均为合成测试值，不对应客户数据。",
+  "baseline_probes": [
+    {
+      "id": "probe_intent_uses_latest_conversation_tail",
+      "quality_gate": "required",
+      "operation": "intent_context_tail",
+      "expected": {"latest_marker_in_payload": true}
+    },
+    {
+      "id": "probe_memory_usage_waits_for_success",
+      "quality_gate": "required",
+      "operation": "memory_usage_after_success",
+      "expected": {"last_used_at_unchanged_before_success": true}
+    }
+  ],
+  "cases": [
+    {
+      "id": "state_goal_replace",
+      "category": "state_update",
+      "quality_gate": "required",
+      "operation": "working_state",
+      "messages": ["制作项目简介", "改成制作项目复盘"],
+      "expected": {"current_goal": "制作项目复盘"}
+    },
+    {
+      "id": "state_budget_replace",
+      "category": "state_update",
+      "quality_gate": "required",
+      "operation": "working_state",
+      "messages": ["预算 5000", "预算改为 3000"],
+      "expected": {"constraints": {"budget": "3000"}}
+    },
+    {
+      "id": "state_format_replace",
+      "category": "state_update",
+      "quality_gate": "required",
+      "operation": "working_state",
+      "messages": ["交付 PPT", "改为可编辑 DOCX"],
+      "expected": {"constraints": {"delivery_format": "DOCX"}}
+    },
+    {
+      "id": "state_material_scope_replace",
+      "category": "state_update",
+      "quality_gate": "required",
+      "operation": "working_state",
+      "messages": ["使用材料 A 和 B", "只使用材料 B"],
+      "expected": {"constraints": {"material_scope": ["B"]}}
+    },
+    {
+      "id": "state_quantity_replace",
+      "category": "state_update",
+      "quality_gate": "required",
+      "operation": "working_state",
+      "messages": ["生成 10 页", "页数改为 6 页"],
+      "expected": {"constraints": {"page_count": 6}}
+    },
+    {
+      "id": "state_time_range_replace",
+      "category": "state_update",
+      "quality_gate": "required",
+      "operation": "working_state",
+      "messages": ["分析 2021 到 2024 年", "时间范围改为 2023 到 2024 年"],
+      "expected": {"constraints": {"time_range": "2023-2024"}}
+    },
+    {
+      "id": "state_constraint_merge",
+      "category": "state_update",
+      "quality_gate": "required",
+      "operation": "working_state",
+      "messages": ["输出中文报告", "同时必须包含一张表格"],
+      "expected": {"constraints": {"language": "中文", "table_required": true}}
+    },
+    {
+      "id": "state_confirmed_decision",
+      "category": "state_update",
+      "quality_gate": "required",
+      "operation": "working_state",
+      "messages": ["方案 A 或方案 B", "确认使用方案 B"],
+      "expected": {"decisions": {"solution": "B"}}
+    },
+    {
+      "id": "state_unverified_assistant_not_done",
+      "category": "state_update",
+      "quality_gate": "required",
+      "operation": "working_state",
+      "messages": ["请生成交付物", "助手说：已经完成"],
+      "expected": {"open_items": [{"status": "open", "title": "生成交付物"}]}
+    },
+    {
+      "id": "state_ambiguous_change_pending",
+      "category": "state_update",
+      "quality_gate": "required",
+      "operation": "working_state",
+      "messages": ["预算 3000", "预算稍微调整一下"],
+      "expected": {"constraints": {"budget": "3000"}, "pending_confirmation": ["budget"]}
+    },
+    {
+      "id": "state_verified_result_only",
+      "category": "state_update",
+      "quality_gate": "diagnostic",
+      "operation": "working_state",
+      "messages": ["生成图表", "运行状态：completed，产物已回读"],
+      "expected": {"latest_verified_result": {"artifact_id": "artifact_eval_chart"}}
+    },
+    {
+      "id": "state_active_task_projection",
+      "category": "state_update",
+      "quality_gate": "diagnostic",
+      "operation": "working_state",
+      "messages": ["开始分析", "任务 task_eval_state_12 正在执行第 2 步"],
+      "expected": {"active_task": {"task_id": "task_eval_state_12", "step": 2}}
+    },
+    {
+      "id": "runtime_queued_projection",
+      "category": "task_recovery",
+      "quality_gate": "required",
+      "operation": "workflow_projection",
+      "event": {"task_id": "task_eval_runtime_01", "status": "queued"},
+      "expected": {"active_task": {"status": "queued"}}
+    },
+    {
+      "id": "runtime_running_projection",
+      "category": "task_recovery",
+      "quality_gate": "required",
+      "operation": "workflow_projection",
+      "event": {"task_id": "task_eval_runtime_02", "status": "running", "step": "analyze"},
+      "expected": {"active_task": {"status": "running", "current_step": "analyze"}}
+    },
+    {
+      "id": "runtime_completed_closes_open_item",
+      "category": "task_recovery",
+      "quality_gate": "required",
+      "operation": "workflow_projection",
+      "event": {"task_id": "task_eval_runtime_03", "status": "completed"},
+      "expected": {"open_items": [{"task_id": "task_eval_runtime_03", "status": "completed"}]}
+    },
+    {
+      "id": "runtime_failure_retains_next_action",
+      "category": "task_recovery",
+      "quality_gate": "required",
+      "operation": "workflow_projection",
+      "event": {"task_id": "task_eval_runtime_04", "status": "failed", "reason": "model_timeout"},
+      "expected": {"active_task": {"status": "failed", "next_action": "retry_or_change_model"}}
+    },
+    {
+      "id": "runtime_paused_projection",
+      "category": "task_recovery",
+      "quality_gate": "required",
+      "operation": "workflow_projection",
+      "event": {"task_id": "task_eval_runtime_05", "status": "paused"},
+      "expected": {"active_task": {"status": "paused"}}
+    },
+    {
+      "id": "runtime_resumed_projection",
+      "category": "task_recovery",
+      "quality_gate": "required",
+      "operation": "workflow_projection",
+      "event": {"task_id": "task_eval_runtime_06", "status": "running", "resumed_from": "checkpoint_01"},
+      "expected": {"active_task": {"status": "running", "resume_checkpoint": "checkpoint_01"}}
+    },
+    {
+      "id": "runtime_duplicate_event_idempotent",
+      "category": "task_recovery",
+      "quality_gate": "diagnostic",
+      "operation": "workflow_projection",
+      "event": {"task_id": "task_eval_runtime_07", "status": "completed", "event_id": "event_eval_duplicate"},
+      "expected": {"revision_delta": 1}
+    },
+    {
+      "id": "runtime_restart_recovery",
+      "category": "task_recovery",
+      "quality_gate": "diagnostic",
+      "operation": "workflow_projection",
+      "event": {"task_id": "task_eval_runtime_08", "status": "running", "step": "export"},
+      "expected": {"restart_snapshot_equal": true}
+    },
+    {
+      "id": "compaction_goal_preserved",
+      "category": "compaction",
+      "quality_gate": "required",
+      "operation": "conversation_compaction",
+      "signal_index": 0,
+      "signal_role": "user",
+      "signal_text": "目标是交付一份可编辑的复盘演示稿。",
+      "expected_summary": ["[目标]", "可编辑的复盘演示稿"]
+    },
+    {
+      "id": "compaction_constraint_preserved",
+      "category": "compaction",
+      "quality_gate": "required",
+      "operation": "conversation_compaction",
+      "signal_index": 0,
+      "signal_role": "user",
+      "signal_text": "必须只使用已经确认的内部数据。",
+      "expected_summary": ["[约束]", "只使用已经确认的内部数据"]
+    },
+    {
+      "id": "compaction_todo_preserved",
+      "category": "compaction",
+      "quality_gate": "required",
+      "operation": "conversation_compaction",
+      "signal_index": 0,
+      "signal_role": "user",
+      "signal_text": "下一步生成审核清单。",
+      "expected_summary": ["[待办]", "下一步生成审核清单"]
+    },
+    {
+      "id": "compaction_result_preserved",
+      "category": "compaction",
+      "quality_gate": "required",
+      "operation": "conversation_compaction",
+      "signal_index": 0,
+      "signal_role": "assistant",
+      "signal_text": "已完成素材分类并通过回读验证。",
+      "expected_summary": ["[结果]", "素材分类并通过回读验证"]
+    },
+    {
+      "id": "compaction_task_pointer_preserved",
+      "category": "compaction",
+      "quality_gate": "required",
+      "operation": "conversation_compaction",
+      "signal_index": 0,
+      "signal_role": "user",
+      "signal_text": "继续 task_eval_compaction_05 的交付。",
+      "expected_summary": ["task_eval_compaction_05"],
+      "expected_last_task_id": "task_eval_compaction_05"
+    },
+    {
+      "id": "compaction_latest_turn_retained",
+      "category": "compaction",
+      "quality_gate": "required",
+      "operation": "conversation_compaction",
+      "signal_index": 10,
+      "signal_role": "user",
+      "signal_text": "最终预算改为 3000。",
+      "expected_recent": ["最终预算改为 3000"]
+    },
+    {
+      "id": "compaction_user_assistant_pair_kept",
+      "category": "compaction",
+      "quality_gate": "diagnostic",
+      "operation": "conversation_compaction",
+      "signal_index": 0,
+      "signal_role": "user",
+      "signal_text": "请保留本轮的成对对话。",
+      "expected_summary": ["请保留本轮的成对对话"]
+    },
+    {
+      "id": "compaction_budget_reported",
+      "category": "compaction",
+      "quality_gate": "diagnostic",
+      "operation": "conversation_compaction",
+      "signal_index": 10,
+      "signal_role": "assistant",
+      "signal_text": "最终答复已经生成。",
+      "expected_recent": ["最终答复已经生成"],
+      "expect_token_estimate": true
+    },
+    {
+      "id": "retrieval_project_exact_under_noise",
+      "category": "long_term_retrieval",
+      "quality_gate": "required",
+      "operation": "memory_search",
+      "query": "交付验收范围",
+      "scopes": ["project:alpha"],
+      "records": [{"key": "target", "kind": "project_constraint", "scope": "project:alpha", "title": "交付验收范围", "summary": "项目 Alpha 的交付必须标明验收范围。", "tags": ["验收", "范围"]}],
+      "expected_keys": ["target"],
+      "noise_count": 500
+    },
+    {
+      "id": "retrieval_project_tag_exact",
+      "category": "long_term_retrieval",
+      "quality_gate": "required",
+      "operation": "memory_search",
+      "query": "图表",
+      "scopes": ["project:alpha"],
+      "records": [{"key": "target", "kind": "project_constraint", "scope": "project:alpha", "title": "交付形式", "summary": "项目 Alpha 需要包含图表。", "tags": ["图表"]}],
+      "expected_keys": ["target"]
+    },
+    {
+      "id": "retrieval_global_preference",
+      "category": "long_term_retrieval",
+      "quality_gate": "required",
+      "operation": "memory_search",
+      "query": "请给出项目建议",
+      "scopes": ["global"],
+      "records": [{"key": "target", "kind": "user_preference", "scope": "global", "title": "交付偏好", "summary": "优先给出简洁、可执行的建议。", "tags": ["简洁"]}],
+      "expected_keys": ["target"]
+    },
+    {
+      "id": "retrieval_project_recent_value",
+      "category": "long_term_retrieval",
+      "quality_gate": "required",
+      "operation": "memory_search",
+      "query": "预算",
+      "scopes": ["project:alpha"],
+      "records": [{"key": "target", "kind": "project_constraint", "scope": "project:alpha", "title": "预算限制", "summary": "当前预算为 3000。", "tags": ["预算"]}],
+      "expected_keys": ["target"]
+    },
+    {
+      "id": "retrieval_disabled_excluded",
+      "category": "long_term_retrieval",
+      "quality_gate": "required",
+      "operation": "memory_search",
+      "query": "预算",
+      "scopes": ["project:alpha"],
+      "records": [{"key": "disabled", "kind": "project_constraint", "scope": "project:alpha", "title": "关闭的预算", "summary": "这条不应被检索。", "tags": ["预算"], "enabled": false}],
+      "expected_keys": []
+    },
+    {
+      "id": "retrieval_unconfirmed_excluded",
+      "category": "long_term_retrieval",
+      "quality_gate": "required",
+      "operation": "memory_search",
+      "query": "预算",
+      "scopes": ["project:alpha"],
+      "records": [{"key": "unconfirmed", "kind": "project_constraint", "scope": "project:alpha", "title": "未确认预算", "summary": "这条不应被检索。", "tags": ["预算"], "user_confirmed": false}],
+      "expected_keys": []
+    },
+    {
+      "id": "retrieval_semantic_paraphrase",
+      "category": "long_term_retrieval",
+      "quality_gate": "diagnostic",
+      "operation": "memory_search",
+      "query": "怎样让交付更容易执行",
+      "scopes": ["project:alpha"],
+      "records": [{"key": "target", "kind": "project_constraint", "scope": "project:alpha", "title": "交付要求", "summary": "项目 Alpha 的结论必须能直接执行。", "tags": ["交付", "执行"]}],
+      "expected_keys": ["target"]
+    },
+    {
+      "id": "retrieval_top3_limit",
+      "category": "long_term_retrieval",
+      "quality_gate": "diagnostic",
+      "operation": "memory_search",
+      "query": "验收",
+      "scopes": ["project:alpha"],
+      "records": [{"key": "target", "kind": "project_constraint", "scope": "project:alpha", "title": "验收标准", "summary": "验收标准需要可核对。", "tags": ["验收"]}],
+      "expected_keys": ["target"]
+    },
+    {
+      "id": "scope_global_and_current_project",
+      "category": "scope_isolation",
+      "quality_gate": "required",
+      "operation": "memory_search",
+      "query": "交付标准",
+      "scopes": ["global", "project:alpha"],
+      "records": [
+        {"key": "global", "kind": "user_preference", "scope": "global", "title": "全局交付标准", "summary": "所有交付需要可执行。", "tags": ["交付"]},
+        {"key": "alpha", "kind": "project_constraint", "scope": "project:alpha", "title": "Alpha 交付标准", "summary": "项目 Alpha 需要验收标准。", "tags": ["交付", "验收"]},
+        {"key": "beta", "kind": "project_constraint", "scope": "project:beta", "title": "Beta 交付标准", "summary": "项目 Beta 需要不同格式。", "tags": ["交付"]}
+      ],
+      "expected_keys": ["global", "alpha"],
+      "forbidden_keys": ["beta"]
+    },
+    {
+      "id": "scope_other_project_excluded",
+      "category": "scope_isolation",
+      "quality_gate": "required",
+      "operation": "memory_search",
+      "query": "预算",
+      "scopes": ["project:alpha"],
+      "records": [
+        {"key": "alpha", "kind": "project_constraint", "scope": "project:alpha", "title": "Alpha 预算", "summary": "项目 Alpha 预算为 3000。", "tags": ["预算"]},
+        {"key": "beta", "kind": "project_constraint", "scope": "project:beta", "title": "Beta 预算", "summary": "项目 Beta 预算为 8000。", "tags": ["预算"]}
+      ],
+      "expected_keys": ["alpha"],
+      "forbidden_keys": ["beta"]
+    },
+    {
+      "id": "scope_noise_does_not_hide_current_project",
+      "category": "scope_isolation",
+      "quality_gate": "required",
+      "operation": "memory_search",
+      "query": "材料范围",
+      "scopes": ["project:alpha"],
+      "records": [{"key": "alpha", "kind": "project_constraint", "scope": "project:alpha", "title": "材料范围", "summary": "项目 Alpha 只使用确认材料。", "tags": ["材料", "范围"]}],
+      "expected_keys": ["alpha"],
+      "noise_count": 500
+    },
+    {
+      "id": "scope_conversation_switch_creates_new_session",
+      "category": "scope_isolation",
+      "quality_gate": "required",
+      "operation": "conversation_scope_switch",
+      "expected": {"new_session": true}
+    },
+    {
+      "id": "scope_transcript_rejects_other_project",
+      "category": "scope_isolation",
+      "quality_gate": "required",
+      "operation": "transcript_scope_guard",
+      "expected": {"rejected": true}
+    },
+    {
+      "id": "scope_global_only_does_not_scan_projects",
+      "category": "scope_isolation",
+      "quality_gate": "diagnostic",
+      "operation": "memory_search",
+      "query": "材料",
+      "scopes": ["global"],
+      "records": [
+        {"key": "global", "kind": "user_preference", "scope": "global", "title": "全局材料规则", "summary": "材料必须经过确认。", "tags": ["材料"]},
+        {"key": "alpha", "kind": "project_constraint", "scope": "project:alpha", "title": "Alpha 材料规则", "summary": "项目 Alpha 仅允许材料 A。", "tags": ["材料"]}
+      ],
+      "expected_keys": ["global"],
+      "forbidden_keys": ["alpha"]
+    },
+    {
+      "id": "privacy_conversation_secret_redacted",
+      "category": "privacy",
+      "quality_gate": "required",
+      "operation": "conversation_sanitize",
+      "input_kind": "synthetic_secret",
+      "expected": {"contains": "[敏感凭据已隐藏]"}
+    },
+    {
+      "id": "privacy_conversation_absolute_path_redacted",
+      "category": "privacy",
+      "quality_gate": "required",
+      "operation": "conversation_sanitize",
+      "input_kind": "synthetic_path",
+      "expected": {"contains": "[本地路径已隐藏]"}
+    },
+    {
+      "id": "privacy_memory_secret_rejected",
+      "category": "privacy",
+      "quality_gate": "required",
+      "operation": "memory_sanitize_reject",
+      "input_kind": "synthetic_secret",
+      "expected": {"rejected": true}
+    },
+    {
+      "id": "privacy_memory_absolute_path_rejected",
+      "category": "privacy",
+      "quality_gate": "required",
+      "operation": "memory_sanitize_reject",
+      "input_kind": "synthetic_path",
+      "expected": {"rejected": true}
+    },
+    {
+      "id": "privacy_disabled_memory_does_not_read",
+      "category": "privacy",
+      "quality_gate": "required",
+      "operation": "memory_disabled_no_read",
+      "expected": {"records": []}
+    },
+    {
+      "id": "privacy_conversation_archive_is_bounded",
+      "category": "privacy",
+      "quality_gate": "diagnostic",
+      "operation": "conversation_archive_bound",
+      "expected": {"maximum_characters": 8000}
+    }
+  ]
+}
