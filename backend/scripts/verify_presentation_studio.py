@@ -53,7 +53,9 @@ from app.schemas.presentation_studio import (
 )
 from app.services.presentation_studio_delivery import (
     _bounded_verification_warnings,
+    _displayed_research_table_points,
     _effective_asset_slots,
+    _research_trend_table_axes,
     _research_source_marker_present,
     _structured_data_contract_gap,
 )
@@ -1208,6 +1210,28 @@ def main() -> None:
     )
     assert [chart.chart_type for chart in ronaldo_charts.charts] == ronaldo_data_plan.requested_visuals
     assert len(ronaldo_charts.charts) == 5
+    # 趋势表的一页版面只容纳八期，完整序列由折线图交付。回读必须与渲染器使用相同
+    # 的可见数据窗口，不能要求表格页包含被设计为由折线图承载的更早期间。
+    long_trend_chart = next(chart for chart in ronaldo_charts.charts if chart.chart_type == "trend_table")
+    long_trend_chart = replace(
+        long_trend_chart,
+        points=tuple(
+            ResearchGatewayDataPoint(
+                entity=ronaldo_data_plan.entities[0],
+                metric=ronaldo_data_plan.trend_metric,
+                value=float(index + 10),
+                unit="球",
+                period=f"{2010 + index}/{str(11 + index)[-2:]}",
+                source_ids=(),
+                evidence_quote="",
+            )
+            for index in range(12)
+        ),
+    )
+    assert _research_trend_table_axes(long_trend_chart)[1] == [
+        "2014/15", "2015/16", "2016/17", "2017/18", "2018/19", "2019/20", "2020/21", "2021/22"
+    ]
+    assert len(_displayed_research_table_points(long_trend_chart)) == 8
     no_metric_output = research_planner_output.model_copy(
         update={
             "title": "甲与乙：主题介绍",

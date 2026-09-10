@@ -1116,8 +1116,7 @@ def _render_research_comparison_table(
 ) -> None:
     """通用研究默认优先用表格承载多指标，避免把不同量纲硬塞进一根纵轴。"""
 
-    entities = list(dict.fromkeys(point.entity for point in chart.points))[:4]
-    metrics = list(dict.fromkeys(point.metric for point in chart.points))[:3]
+    entities, metrics = _research_comparison_table_axes(chart)
     table = slide.shapes.add_table(
         len(entities) + 1,
         len(metrics) + 1,
@@ -1164,8 +1163,7 @@ def _render_research_trend_table(
 ) -> None:
     """把折线图背后的逐期序列同时交付为可编辑明细表。"""
 
-    entities = list(dict.fromkeys(point.entity for point in chart.points))[:4]
-    periods = list(dict.fromkeys(point.period for point in chart.points))[:8]
+    entities, periods = _research_trend_table_axes(chart)
     values = {(point.period, point.entity): point for point in chart.points}
     table = slide.shapes.add_table(
         len(periods) + 1,
@@ -1198,6 +1196,48 @@ def _render_research_trend_table(
             cell.fill.solid()
             cell.fill.fore_color.rgb = palette.surface if row % 2 else palette.background
             _style_table_cell(cell, palette.text, bold=False, font_size=10)
+
+
+def _research_comparison_table_axes(chart: ResearchGatewayChartData) -> tuple[list[str], list[str]]:
+    """返回可在一页内清楚呈现的横向表格对象与指标。"""
+
+    return (
+        list(dict.fromkeys(point.entity for point in chart.points))[:4],
+        list(dict.fromkeys(point.metric for point in chart.points))[:3],
+    )
+
+
+def _research_trend_table_axes(chart: ResearchGatewayChartData) -> tuple[list[str], list[str]]:
+    """趋势表保留最近八期；完整序列仍由同批原生折线图承载。"""
+
+    return (
+        list(dict.fromkeys(point.entity for point in chart.points))[:4],
+        list(dict.fromkeys(point.period for point in chart.points))[-8:],
+    )
+
+
+def _displayed_research_table_points(chart: ResearchGatewayChartData) -> tuple[ResearchGatewayDataPoint, ...]:
+    """返回渲染器实际写入当前一页表格的点，供回读校验共享同一版面边界。"""
+
+    if chart.chart_type == "comparison_table":
+        entities, metrics = _research_comparison_table_axes(chart)
+        values = {(point.entity, point.metric): point for point in chart.points}
+        return tuple(
+            point
+            for entity in entities
+            for metric in metrics
+            if (point := values.get((entity, metric))) is not None
+        )
+    if chart.chart_type == "trend_table":
+        entities, periods = _research_trend_table_axes(chart)
+        values = {(point.period, point.entity): point for point in chart.points}
+        return tuple(
+            point
+            for period in periods
+            for entity in entities
+            if (point := values.get((period, entity))) is not None
+        )
+    return chart.points
 
 
 def _render_research_grouped_bar_chart(
@@ -1285,9 +1325,13 @@ def _chart_subtitle(chart: _StructuredDataChart) -> str:
     if isinstance(chart, WorldBankChartData):
         return f"World Bank Indicators API · {chart.indicator_code} · 数据仅按已确认计划读取"
     if chart.evidence_level == "ai_knowledge_draft":
-        return "AI 智能生成数据 · 已写入可编辑原生图表"
-    source_count = len(chart.sources)
-    return f"ResearchGateway · {source_count} 条已读取来源 · 每个数值均带证据与来源 ID"
+        notice = "AI 智能生成数据 · 已写入可编辑原生图表"
+    else:
+        source_count = len(chart.sources)
+        notice = f"ResearchGateway · {source_count} 条已读取来源 · 每个数值均带证据与来源 ID"
+    if chart.chart_type == "trend_table" and len(dict.fromkeys(point.period for point in chart.points)) > 8:
+        return f"{notice} · 表格展示最近 8 个期间"
+    return notice
 
 
 def _point_entity(point: object) -> str:
@@ -1894,7 +1938,7 @@ def _research_table_values_present(slide: object, chart: ResearchGatewayChartDat
     ]
     expected_values = [
         _format_chart_value(point, chart).strip()
-        for point in chart.points
+        for point in _displayed_research_table_points(chart)
     ]
     return bool(cell_values) and all(
         value and any(value in cell_value for cell_value in cell_values)
