@@ -1084,6 +1084,65 @@ def main() -> None:
         "comparison_table", "trend_table", "comparison_bar", "trend_line", "share_pie"
     ]
     assert len(ronaldo_fallback.metrics) >= 3
+    # 客户常把人物和“生涯 PPT”连写，模型标题还会在姓名后加入中文冒号。这两种明确
+    # 的单对象数据需求都必须进入可交付的数据合同，不能在研究 JSON 偶发失败时退化成
+    # 纯文字 PPT。
+    lewandowski_contract_request = PresentationStudioPlanRequest(
+        intent="帮我生成球星莱万多夫斯基的生涯ppt，要有数据支撑，要有表格，折线图，柱状图，饼状图支撑",
+        structured_data_enabled=True,
+    )
+    lewandowski_fallback = _infer_conservative_research_blueprint(
+        request=lewandowski_contract_request,
+        output=research_planner_output.model_copy(
+            update={
+                "title": "罗伯特·莱万多夫斯基：生涯数据全景",
+                "content_slides": [
+                    _StudioContentSlide(
+                        title="进球、出场与赛季趋势",
+                        bullets=["用生涯总量和逐赛季进球呈现前锋表现。", "用构成视图呈现关键指标。"],
+                        layout="metrics",
+                        visual_direction="使用表格与原生数据图表。",
+                    )
+                ],
+            }
+        ),
+    )
+    assert lewandowski_fallback is not None
+    assert lewandowski_fallback.entities == ["莱万多夫斯基"]
+    assert lewandowski_fallback.recommended_visuals == [
+        "trend_table", "comparison_bar", "trend_line", "share_pie"
+    ]
+    lewandowski_data_plan = _data_plan(
+        lewandowski_contract_request,
+        slides=[
+            PresentationStudioSlidePlan(
+                slide_id=f"content_{index}",
+                role="content",
+                title=f"莱万多夫斯基数据视图 {index}",
+                bullets=["展示结构化数据。"],
+                visual_direction="按数据用途选择版式。",
+            )
+            for index in range(1, 5)
+        ],
+        brief=PresentationStudioBrief(
+            title="罗伯特·莱万多夫斯基：生涯数据全景",
+            purpose="用多种数据视图说明职业生涯。",
+            audience="足球爱好者",
+            core_message="数据表与图表分别呈现总量、趋势和构成。",
+            theme="impact_contrast",
+            theme_reason="适合数据表达。",
+            fact_check_notice="所有数字均需核验来源。",
+        ),
+        blueprint=lewandowski_fallback,
+    )
+    assert lewandowski_data_plan.state == "research_planned"
+    assert lewandowski_data_plan.requested_visuals == lewandowski_fallback.recommended_visuals
+    assert (
+        lewandowski_data_plan.required_table_count,
+        lewandowski_data_plan.required_bar_chart_count,
+        lewandowski_data_plan.required_line_chart_count,
+        lewandowski_data_plan.required_pie_chart_count,
+    ) == (1, 1, 1, 1)
     ronaldo_data_plan = _data_plan(
         ronaldo_contract_request,
         slides=[

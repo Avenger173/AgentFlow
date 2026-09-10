@@ -863,7 +863,10 @@ def _infer_single_data_entity(candidates: list[str]) -> str:
     """仅从“某对象生涯/经营数据”这类明确短句中提取单对象，不从普通主题猜测。"""
 
     pattern = re.compile(
-        r"(?P<entity>[A-Za-z0-9\u4e00-\u9fff·' -]{1,40}?)(?=(?:的)?(?:职业)?生涯(?:数据|统计|介绍|概览|全景)|(?:的)?数据(?:全景|统计|\s*ppt|$))",
+        # 客户常写“球星莱万多夫斯基的生涯 PPT”，而模型标题也常写成
+        # “罗伯特·莱万多夫斯基：生涯数据全景”。两种形式都已经给出了单对象和
+        # 明确的数据交付意图，不能因“PPT”后缀或中文冒号而把图表计划降级掉。
+        r"(?P<entity>[A-Za-z0-9\u4e00-\u9fff·' -]{1,40}?)(?=(?:的|[：:]\s*)?(?:职业)?生涯\s*(?:数据|统计|介绍|概览|全景|pptx?|演示文稿|报告|分析)(?:\s|的|$|[，,。；;！!?])|(?:的)?数据(?:全景|统计|\s*ppt|$))",
         flags=re.IGNORECASE,
     )
     for candidate in candidates:
@@ -915,7 +918,7 @@ def _clean_inferred_entity(value: str) -> str:
 
     text = _compact_text(value, 80)
     text = re.sub(
-        r"^(?:(?:请|帮我|帮忙|制作|生成|创建|审查|核验|检查|分析|做一份|做个|做|关于|一个|一位|两位|两名)\s*)+",
+        r"^(?:(?:请|帮我|帮忙|制作|生成|创建|审查|核验|检查|分析|做一份|做个|做|关于|一个|一位|两位|两名|球星|球员|运动员)\s*)+",
         "",
         text,
     )
@@ -979,7 +982,7 @@ def _supplement_conservative_research_metrics(
 
     values = list(dict.fromkeys(metric for metric in metrics if metric.strip()))
     sport_markers = (
-        "足球", "球员", "进球", "助攻", "联赛", "欧冠", "赛季", "c罗", "梅西", "内马尔",
+        "足球", "球星", "球员", "进球", "助攻", "联赛", "欧冠", "赛季", "c罗", "梅西", "内马尔",
         "football", "soccer", "ronaldo", "messi", "neymar",
     )
     if len(values) < minimum and any(marker in context for marker in sport_markers):
