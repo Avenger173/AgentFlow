@@ -16,8 +16,17 @@ from app.schemas.conversation import (
 )
 
 
-MAX_RECENT_MESSAGES = 8
+MAX_RECENT_MESSAGES = 20
+RECENT_MESSAGE_TOKEN_BUDGET = 18_000
+LEGACY_RECENT_MESSAGE_FALLBACK = 8
+CONVERSATION_SUMMARY_MAX_LENGTH = 1400
 CONVERSATION_TITLE_MAX_LENGTH = 42
+
+_SUMMARY_CLAUSE_SPLIT_PATTERN = re.compile(r"[。！？!?；;\n]+")
+_CONSTRAINT_SIGNAL_PATTERN = re.compile(
+    r"(?:必须|不得|不能|不要|只能|只需|固定|统一|保持|预算|格式|范围|来源|要求|约束)"
+)
+_PENDING_SIGNAL_PATTERN = re.compile(r"(?:继续|接下来|下一步|还要|尚未|待办|待处理|之后再|稍后)")
 
 
 def create_conversation(*, project_scope: str) -> ConversationSessionRecord:
@@ -65,12 +74,28 @@ def get_conversation(conversation_id: str) -> ConversationSessionRecord | None:
 
 
 def get_conversation_context(conversation_id: str) -> ConversationContext:
-    """读取一段会话的摘要与最后有限轮次，按时间正序返回给 Prompt 组装层。"""
+    """读取结构化摘要与受 token 预算约束的近轮原文。"""
 
-    session = get_conversation(conversation_id)
-    if session is None:
-        raise LookupError("未找到指定会话。")
     with get_connection() as connection:
+        session_row = connection.execute(
+            "SELECT * FROM commander_conversations WHERE conversation_id = ?",
+            (conversation_id,),
+        ).fetchone()
+        if session_row is None:
+            raise LookupError("未找到指定会话。")
+        total = int(
+            connection.execute(
+                "SELECT COUNT(*) FROM commander_conversation_messages WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()[0]
+        )
+        summarized_count = min(_summary_message_count(session_row), total)
+        unsummarized_count = max(0, total - summarized_count)
+        # 迁移前的有限窗口可能被整体标成“已摘要”。这种旧会话仍回退显示最后 8 条；
+        # 新写入会话始终至少保留一条未摘要原文，因此不会走这个兼容分支。
+        row_limit = min(MAX_RECENT_MESSAGES, unsummarized_count)
+        if row_limit == 0 and total > 0:
+            row_limit = min(LEGACY_RECENT_MESSAGE_FALLBACK, total)
         rows = connection.execute(
             """
             SELECT * FROM (
@@ -81,9 +106,19 @@ def get_conversation_context(conversation_id: str) -> ConversationContext:
             )
             ORDER BY created_at ASC, message_id ASC
             """,
-            (conversation_id, MAX_RECENT_MESSAGES),
+            (conversation_id, row_limit),
         ).fetchall()
-    return ConversationContext(session=session, recent_messages=[_row_to_message(row) for row in rows])
+    recent_messages = _fit_recent_messages([_row_to_message(row) for row in rows])
+    session = _row_to_session(session_row)
+    estimated_memory_tokens = estimate_conversation_tokens(session.summary) + sum(
+        estimate_conversation_tokens(item.content) + 6 for item in recent_messages
+    )
+    return ConversationContext(
+        session=session,
+        recent_messages=recent_messages,
+        summarized_message_count=summarized_count,
+        estimated_memory_tokens=estimated_memory_tokens,
+    )
 
 
 def list_conversations(*, project_scope: str, limit: int = 40) -> ConversationSessionList:
@@ -196,25 +231,11 @@ def save_conversation_turn(
             ),
         )
 
-        total = connection.execute(
-            "SELECT COUNT(*) FROM commander_conversation_messages WHERE conversation_id = ?",
-            (conversation_id,),
-        ).fetchone()[0]
-        summary_boundary = max(0, int(total) - MAX_RECENT_MESSAGES)
-        summary_message_count = _summary_message_count(session_row)
-        summary = session.summary
-        if summary_boundary > summary_message_count:
-            rows = connection.execute(
-                """
-                SELECT * FROM commander_conversation_messages
-                WHERE conversation_id = ?
-                ORDER BY created_at ASC, message_id ASC
-                LIMIT ? OFFSET ?
-                """,
-                (conversation_id, summary_boundary - summary_message_count, summary_message_count),
-            ).fetchall()
-            summary = _merge_summary(summary, [_row_to_message(row) for row in rows])
-            summary_message_count = summary_boundary
+        summary, summary_message_count = _compact_conversation_window(
+            connection=connection,
+            conversation_id=conversation_id,
+            session_row=session_row,
+        )
 
         # 完整归档保留在 SQLite；模型上下文由 get_conversation_context() 单独取最后有限消息。
         # 不能再 DELETE 早期消息，否则客户切换会话后无法像正常聊天产品一样回看历史。
@@ -279,26 +300,11 @@ def append_conversation_assistant_delivery(
             (message_id, conversation_id, assistant_message, task_id, now),
         ).rowcount
         if inserted:
-            session = _row_to_session(session_row)
-            total = connection.execute(
-                "SELECT COUNT(*) FROM commander_conversation_messages WHERE conversation_id = ?",
-                (conversation_id,),
-            ).fetchone()[0]
-            summary_boundary = max(0, int(total) - MAX_RECENT_MESSAGES)
-            summary_message_count = _summary_message_count(session_row)
-            summary = session.summary
-            if summary_boundary > summary_message_count:
-                rows = connection.execute(
-                    """
-                    SELECT * FROM commander_conversation_messages
-                    WHERE conversation_id = ?
-                    ORDER BY created_at ASC, message_id ASC
-                    LIMIT ? OFFSET ?
-                    """,
-                    (conversation_id, summary_boundary - summary_message_count, summary_message_count),
-                ).fetchall()
-                summary = _merge_summary(summary, [_row_to_message(row) for row in rows])
-                summary_message_count = summary_boundary
+            summary, summary_message_count = _compact_conversation_window(
+                connection=connection,
+                conversation_id=conversation_id,
+                session_row=session_row,
+            )
             connection.execute(
                 """
                 UPDATE commander_conversations
@@ -309,6 +315,70 @@ def append_conversation_assistant_delivery(
             )
 
     return get_conversation_context(conversation_id)
+
+
+def estimate_conversation_tokens(value: str) -> int:
+    """给多供应商会话窗口使用的保守 token 估算，不冒充 Provider 账单。"""
+
+    if not value:
+        return 0
+    wide_characters = sum(1 for character in value if ord(character) > 127)
+    ascii_characters = len(value) - wide_characters
+    return wide_characters + (ascii_characters + 2) // 3
+
+
+def _fit_recent_messages(messages: list[ConversationMessageRecord]) -> list[ConversationMessageRecord]:
+    """从最新消息向前装箱，同时受消息数量和近轮 token 预算双重约束。"""
+
+    selected: list[ConversationMessageRecord] = []
+    used_tokens = 0
+    for item in reversed(messages[-MAX_RECENT_MESSAGES:]):
+        item_tokens = estimate_conversation_tokens(item.content) + 6
+        if selected and used_tokens + item_tokens > RECENT_MESSAGE_TOKEN_BUDGET:
+            break
+        selected.append(item)
+        used_tokens += item_tokens
+    selected.reverse()
+    return selected
+
+
+def _compact_conversation_window(*, connection, conversation_id: str, session_row) -> tuple[str, int]:
+    """把近轮 token 窗口之外的消息合并进摘要，并保持摘要水位单调前进。"""
+
+    total = int(
+        connection.execute(
+            "SELECT COUNT(*) FROM commander_conversation_messages WHERE conversation_id = ?",
+            (conversation_id,),
+        ).fetchone()[0]
+    )
+    existing_count = min(_summary_message_count(session_row), total)
+    recent_rows = connection.execute(
+        """
+        SELECT * FROM (
+            SELECT * FROM commander_conversation_messages
+            WHERE conversation_id = ?
+            ORDER BY created_at DESC, message_id DESC
+            LIMIT ?
+        )
+        ORDER BY created_at ASC, message_id ASC
+        """,
+        (conversation_id, MAX_RECENT_MESSAGES),
+    ).fetchall()
+    recent_messages = _fit_recent_messages([_row_to_message(row) for row in recent_rows])
+    summary_boundary = max(existing_count, total - len(recent_messages))
+    summary = str(session_row["summary"] or "")
+    if summary_boundary > existing_count:
+        rows = connection.execute(
+            """
+            SELECT * FROM commander_conversation_messages
+            WHERE conversation_id = ?
+            ORDER BY created_at ASC, message_id ASC
+            LIMIT ? OFFSET ?
+            """,
+            (conversation_id, summary_boundary - existing_count, existing_count),
+        ).fetchall()
+        summary = _merge_summary(summary, [_row_to_message(row) for row in rows])
+    return summary, summary_boundary
 
 
 def _row_to_session(row) -> ConversationSessionRecord:
@@ -362,16 +432,49 @@ def _summary_message_count(row) -> int:
 
 
 def _merge_summary(existing_summary: str, expired: list[ConversationMessageRecord]) -> str:
-    """以确定性短句压缩旧轮次，避免为会话摘要额外调用模型。"""
+    """生成目标/约束/待办/结果摘要，避免旧实现只保留截断流水账。"""
 
-    parts = [existing_summary.strip()] if existing_summary.strip() else []
+    grouped: dict[str, list[str]] = {key: [] for key in ("目标", "约束", "待办", "结果", "历史")}
+    for line in existing_summary.splitlines():
+        match = re.match(r"^\[(目标|约束|待办|结果|历史)\]\s*(.+)$", line.strip())
+        if match:
+            _append_summary_value(grouped[match.group(1)], match.group(2))
+        elif line.strip():
+            _append_summary_value(grouped["历史"], line.strip()[:180])
+
     for item in expired:
-        role = "用户" if item.role == "user" else "系统"
         compact = " ".join(item.content.split())
-        if compact:
-            parts.append(f"{role}曾说明：{compact[:220]}")
-    merged = "\n".join(parts)
-    return merged[-1400:]
+        if not compact:
+            continue
+        task_hint = (item.task_id or "无任务ID")[:48]
+        if item.role == "user":
+            _append_summary_value(grouped["目标"], f"({task_hint}) {compact[:180]}")
+            for clause in _SUMMARY_CLAUSE_SPLIT_PATTERN.split(compact):
+                normalized_clause = clause.strip()
+                if not normalized_clause:
+                    continue
+                if _CONSTRAINT_SIGNAL_PATTERN.search(normalized_clause):
+                    _append_summary_value(grouped["约束"], f"({task_hint}) {normalized_clause[:120]}")
+                if _PENDING_SIGNAL_PATTERN.search(normalized_clause):
+                    _append_summary_value(grouped["待办"], f"({task_hint}) {normalized_clause[:120]}")
+        else:
+            _append_summary_value(grouped["结果"], f"({task_hint}) {compact[:180]}")
+
+    limits = {"目标": 1, "约束": 3, "待办": 1, "结果": 1, "历史": 1}
+    rendered: list[str] = []
+    for label in ("目标", "约束", "待办", "结果", "历史"):
+        for value in reversed(grouped[label][-limits[label] :]):
+            line = f"[{label}] {value}"
+            candidate = "\n".join([*rendered, line])
+            if len(candidate) <= CONVERSATION_SUMMARY_MAX_LENGTH:
+                rendered.append(line)
+    return "\n".join(rendered)
+
+
+def _append_summary_value(values: list[str], value: str) -> None:
+    normalized = " ".join(value.split())
+    if normalized and normalized not in values:
+        values.append(normalized)
 
 
 def _title_from_message(message: str) -> str:

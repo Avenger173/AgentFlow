@@ -41,16 +41,18 @@ class ConversationMessageRecord(BaseModel):
     message_id: str = Field(min_length=8, max_length=80)
     conversation_id: str = Field(min_length=8, max_length=64)
     role: ConversationRole
-    content: str = Field(min_length=1, max_length=2200)
+    content: str = Field(min_length=1, max_length=8000)
     task_id: str = Field(default="", max_length=160)
     created_at: str
 
 
 class ConversationContext(BaseModel):
-    """一次新请求开始前给 Commander 的有限会话快照。"""
+    """一次新请求开始前给 Commander 的有限会话快照与压缩水位。"""
 
     session: ConversationSessionRecord
-    recent_messages: list[ConversationMessageRecord] = Field(default_factory=list, max_length=8)
+    recent_messages: list[ConversationMessageRecord] = Field(default_factory=list, max_length=20)
+    summarized_message_count: int = Field(default=0, ge=0)
+    estimated_memory_tokens: int = Field(default=0, ge=0)
 
 
 class ConversationSessionList(BaseModel):

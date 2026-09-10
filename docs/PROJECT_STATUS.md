@@ -1,6 +1,6 @@
 # AgentFlow 项目状态
 
-最后更新：2026-09-09
+最后更新：2026-09-10
 
 ## 当前仓库状态
 
@@ -19,6 +19,8 @@
 - `docs/WORKLOG.md`：记录有复盘价值的历史开发流水，不把逐轮临时验证长期堆在状态文档里。
 - `docs/DEVELOPMENT_ROADMAP.md`：记录阶段门槛、技术路线和长期目标。
 - `docs/AGENT_ENGINEERING_GUIDE.md`：记录 Agent / Harness / 检索 / 评估方法论。
+- `docs/Agent开发技术要点（持续更新）.md`：用户持续补充的技术学习基线；按本次主题读取，不直接当作项目已实现事实。
+- `docs/AGENT_MEMORY_IMPLEMENTATION_AUDIT.md`：记忆管理要求与真实实现、证据、差距、改进优先级和简历表述的当前对照。
 - `docs/AGENT_SPECIFICATIONS.md`：记录每个内置 Agent 的方案确认表；正式实现 Agent 前必须先讨论并确认。
 - `docs/KNOWLEDGE_BASE_PRODUCT_SPEC.md`：记录已批准的本地知识库产品边界、Retrieval 架构、K0-K5 门槛和验收；知识库开发前必须阅读。
 - `docs/KNOWLEDGE_BASE_K0_ADR.md`：记录 K0 的固定夹具、Windows 技术试验、依赖取舍和未决风险；进入 K1 前必须阅读。
@@ -29,6 +31,8 @@
 当前处于：**阶段 5：内置 Agent MVP。文档助手 V1 和数据工作台均已完成当前基础闭环，后续按已确认的客户价值扩展；总指挥已完成 C0-C4、C5.1 全库深度总结受控委派、C5.2 父子任务真实状态镜像与 C5.3 关联深度任务工作台入口。知识库已完成 K0-K4.15、K5.1-K5.7：全库任务冻结全部活动章节，以可恢复 Map/Reduce 执行；同 generation 的本地检索证据可短时复用，ModelGateway 只记录 Provider 实际返回的 cache usage，K4 任务累计部分可观测指标，索引任务记录阶段耗时与解析复用数，版本/Profile 不变时复用已验证 generation；增量索引仅可在同 Profile、同 child ID、同内容哈希下从活动向量代次受限复用向量。K5.7 已对 K3/K4 的实际模型输入写入无正文路由和字符预算，不把已确认的长窗口能力变成整库直灌。资料对照仍只在知识库工作台由客户明确选择材料后启动。**
 
 > 当前阶段以本节为准：阶段 5 内置 Agent MVP；知识库已完成 K4.1-K4.15、K5.1 本地检索短缓存、K5.2 Provider usage 基础可观测、K5.3 K4 任务指标聚合、K5.4 索引性能事实、K5.5 无变化索引快路径、K5.6 受控增量向量复用与 K5.7 上下文路由/预算边界，Commander 已完成 C5.1 的全库深度总结受控委派、C5.2 的父子状态镜像、C5.3 的关联工作台入口和 R5.4A/B/R5.4C 首版数据交付。文档助手与数据工作台是可用的基础闭环，仍保留后续扩展空间；资料对照仍仅在知识库工作台启动。
+
+> **2026-09-10 Agent 记忆管理对照与短期记忆修正：**已按持续技术基线复核会话、长期记忆、Runtime 状态和程序性规则的真实调用链。短期记忆从固定 8 条升级为最多 20 条、约 18k token 的受控近轮窗口，Prompt 不再把原文二次截成 6 条、每条 420 字；归档单条上限增至 8000 字，旧消息压缩为带 task_id 的目标/约束/待办/结果摘要，并暴露摘要水位与估算 token 供诊断。长期记忆仍保持用户确认、默认关闭和 global/project 隔离，不照搬静默永久写入；向量 + BM25、typed session state 和会话 TTL 仍是有验收门槛的后续项。完整结论见 `docs/AGENT_MEMORY_IMPLEMENTATION_AUDIT.md`。
 
 > **2026-09-08 LGM5.7 CLI 自验证：**`verify_lgm57_trial_cli.py` 会在独立临时 SQLite 中真实执行候选目录与成对准备 CLI，覆盖候选列出、缺少 `--confirm-prepare` 时拒绝写入、确认后创建 Native/Graph Runtime 对及输出脱敏。内部开发验证不再要求用户手动运行该命令；真实任务库没有 C6.4 候选只代表没有经批准的真实组合计划，不能通过伪造任务绕过试点授权。
 

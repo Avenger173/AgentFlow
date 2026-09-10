@@ -17,7 +17,15 @@ sys.path.insert(0, str(BACKEND_ROOT))
 
 from fastapi.testclient import TestClient
 
-from app.database.conversation_repository import get_conversation_context
+from app.database.conversation_repository import (
+    MAX_RECENT_MESSAGES,
+    RECENT_MESSAGE_TOKEN_BUDGET,
+    create_conversation,
+    estimate_conversation_tokens,
+    get_conversation_context,
+    save_conversation_turn,
+)
+from app.services.conversation_memory import build_conversation_prompt_context
 from main import app
 
 
@@ -74,9 +82,9 @@ def main() -> None:
         assert _knowledge_step(second_body)["input"]["knowledge_base_id"] == "kb_c6conv01"
         assert "复用了同一会话此前明确选择的材料范围" in second_body["workflow_plan"]["conversation_context_summary"][0]
 
-        # 继续多轮，验证近轮数有硬上限，较早文本会被确定性摘要替代，避免无限长 Prompt。
+        # 继续多轮，验证短消息可在 token 预算内保留更多原文，较早文本由结构化摘要替代。
         # 同时 C6.2.5 必须仍保留完整脱敏归档，不能再为了控制 Prompt 删除客户已看过的消息。
-        for index in range(4):
+        for index in range(10):
             response = client.post(
                 "/api/chat",
                 json={
@@ -88,8 +96,11 @@ def main() -> None:
             assert response.json()["conversation_id"] == conversation_id
 
         context = get_conversation_context(conversation_id)
-        assert len(context.recent_messages) == 8
+        assert len(context.recent_messages) == MAX_RECENT_MESSAGES
         assert context.session.summary
+        assert "[目标]" in context.session.summary
+        assert context.summarized_message_count == 4
+        assert context.estimated_memory_tokens > 0
         assert context.session.material_bindings[0].ref == "kb_c6conv01"
 
         transcript = client.get(
@@ -98,8 +109,8 @@ def main() -> None:
         )
         assert transcript.status_code == 200, transcript.text
         transcript_body = transcript.json()
-        assert transcript_body["total"] == 12
-        assert len(transcript_body["messages"]) == 12
+        assert transcript_body["total"] == 24
+        assert len(transcript_body["messages"]) == 24
         assert [item["role"] for item in transcript_body["messages"][:2]] == ["user", "assistant"]
         assert "请根据资料库回答" in transcript_body["messages"][0]["content"]
 
@@ -108,7 +119,7 @@ def main() -> None:
         listed = next(
             item for item in session_list.json()["conversations"] if item["conversation_id"] == conversation_id
         )
-        assert listed["archived_message_count"] == 12
+        assert listed["archived_message_count"] == 24
         assert listed["title"] == "根据资料库回答 Agent 如何制作。"
 
         # 客户端重启后只通过稳定 ID 恢复有限近轮和确定性摘要；不存在的 ID 不会被读取接口
@@ -117,7 +128,8 @@ def main() -> None:
         assert restored.status_code == 200, restored.text
         restored_body = restored.json()
         assert restored_body["session"]["conversation_id"] == conversation_id
-        assert len(restored_body["recent_messages"]) == 8
+        assert len(restored_body["recent_messages"]) == MAX_RECENT_MESSAGES
+        assert restored_body["summarized_message_count"] == 4
         missing = client.get("/api/chat/conversations/conv_missing000000")
         assert missing.status_code == 404, missing.text
 
@@ -155,7 +167,44 @@ def main() -> None:
         )
         assert cross_scope.status_code == 404, cross_scope.text
 
-    print("Commander C6.2/C6.2.5 conversation archive verification passed.")
+        # 长消息不再按固定条数盲目进入 Prompt。窗口会提前压缩，但最近原文不再二次截成
+        # 420 字；摘要必须保留目标、约束、待办、结果和来源任务标识。
+        token_session = create_conversation(project_scope="project:token-window")
+        for index in range(6):
+            save_conversation_turn(
+                conversation_id=token_session.conversation_id,
+                user_message=(
+                    f"第 {index + 1} 轮必须保持中文格式，接下来继续核对任务状态。"
+                    + "长上下文" * 470
+                    + f" 用户尾部标记-{index}"
+                ),
+                assistant_message=(
+                    f"已完成第 {index + 1} 轮受控结果。"
+                    + "结果正文" * 470
+                    + f" 助手尾部标记-{index}"
+                ),
+                material_bindings=[],
+                task_id=f"task_token_window_{index}",
+                plan_id=f"plan_token_window_{index}",
+            )
+        token_context = get_conversation_context(token_session.conversation_id)
+        recent_token_count = sum(
+            estimate_conversation_tokens(item.content) + 6
+            for item in token_context.recent_messages
+        )
+        assert recent_token_count <= RECENT_MESSAGE_TOKEN_BUDGET, recent_token_count
+        assert 0 < len(token_context.recent_messages) < 12
+        assert token_context.summarized_message_count + len(token_context.recent_messages) == 12
+        assert all(
+            label in token_context.session.summary
+            for label in ("[目标]", "[约束]", "[待办]", "[结果]")
+        ), token_context.session.summary
+        assert "task_token_window_" in token_context.session.summary
+        prompt_context = build_conversation_prompt_context(token_context)
+        assert token_context.recent_messages[-1].content in prompt_context
+        assert "助手尾部标记-5" in prompt_context
+
+    print("Commander C6.2/C6.2.5 token-window conversation verification passed.")
 
 
 if __name__ == "__main__":
