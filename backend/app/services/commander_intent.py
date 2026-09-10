@@ -23,11 +23,6 @@ _SEMANTIC_INTENT_MARKERS = (
     "ppt", "演示", "幻灯片", "制作", "生成", "导出", "审查", "分析",
     "联网", "搜索", "检索", "百科", "新闻", "实时", "行情", "天气", "赛程",
 )
-_INTENT_CONVERSATION_CONTEXT_MAX_CHARS = 2200
-_INTENT_CONVERSATION_CONTEXT_HEAD_CHARS = 600
-_INTENT_CONTEXT_OMISSION_MARKER = "\n[中间会话上下文已省略；已保留最新消息]\n"
-
-
 def should_resolve_commander_intent(
     message: str,
     *,
@@ -62,8 +57,10 @@ async def resolve_commander_intent_candidate(
 
     system_prompt = _build_intent_system_prompt(agents)
     user_payload = {
-        "current_message": message[:1200],
-        "conversation_context": _fit_intent_conversation_context(conversation_context),
+        # The caller owns ContextEnvelope construction. Do not add an Intent-only clipping
+        # rule here, otherwise routing and final reply could see different facts.
+        "current_message": message,
+        "conversation_context": conversation_context,
         "bound_materials": [
             {
                 "kind": item.kind,
@@ -82,16 +79,6 @@ async def resolve_commander_intent_candidate(
     except ModelGatewayError as exc:
         raise CommanderIntentResolutionError(str(exc)) from exc
     return parse_commander_intent_candidate(content)
-
-
-def _fit_intent_conversation_context(value: str) -> str:
-    """在固定 Intent 预算内保留会话锚点和最新状态，避免只截前段丢掉客户刚修改的要求。"""
-
-    if len(value) <= _INTENT_CONVERSATION_CONTEXT_MAX_CHARS:
-        return value
-    head_size = min(_INTENT_CONVERSATION_CONTEXT_HEAD_CHARS, _INTENT_CONVERSATION_CONTEXT_MAX_CHARS // 2)
-    tail_size = _INTENT_CONVERSATION_CONTEXT_MAX_CHARS - head_size - len(_INTENT_CONTEXT_OMISSION_MARKER)
-    return value[:head_size] + _INTENT_CONTEXT_OMISSION_MARKER + value[-tail_size:]
 
 
 def parse_commander_intent_candidate(content: str) -> CommanderIntentCandidate:

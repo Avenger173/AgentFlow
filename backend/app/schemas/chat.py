@@ -4,6 +4,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from app.schemas.commander_intent import CommanderIntentResolution
+from app.schemas.context_envelope import ContextEnvelopeAudit
 from app.schemas.model import ModelRouteAuditSnapshot
 from app.schemas.workflow import WorkflowRun
 
@@ -110,7 +111,7 @@ class CommanderAgentHint(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    message: str = Field(min_length=1)
+    message: str = Field(min_length=1, max_length=4000)
     agent_id: str | None = None
     task_id: str | None = None
     # 同一调度会话的稳定、无业务含义 ID。缺省时由后端创建；它只关联有限短期上下文，
@@ -200,6 +201,9 @@ class WorkflowPlan(BaseModel):
     # 仅保留本次真正注入的短摘要，便于计划/历史页审计；完整记录仍由记忆管理 API 管理。
     memory_context_summary: list[str] = Field(default_factory=list, max_length=3)
     conversation_context_summary: list[str] = Field(default_factory=list, max_length=2)
+    # This contains selected-section counts and local estimates only. It must never carry
+    # customer text or be presented as provider-reported token usage.
+    context_envelope_audit: ContextEnvelopeAudit | None = None
     # 模型只能提出固定枚举的语义候选；Harness 最终是否采用仍由材料、权限和 Action
     # Admission 裁决。该摘要不包含模型 Prompt、原始思考或完整会话正文。
     intent_resolution: CommanderIntentResolution = Field(default_factory=CommanderIntentResolution)

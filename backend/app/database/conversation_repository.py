@@ -426,11 +426,39 @@ def estimate_conversation_tokens(value: str) -> int:
 
 
 def _fit_recent_messages(messages: list[ConversationMessageRecord]) -> list[ConversationMessageRecord]:
-    """从最新消息向前装箱，同时受消息数量和近轮 token 预算双重约束。"""
+    """保留连续后缀，但只从完整 user/assistant 轮次的边界开始裁剪。"""
+
+    window = messages[-MAX_RECENT_MESSAGES:]
+    complete_turns: list[tuple[int, int]] = []
+    pending_user_index: int | None = None
+    for index, item in enumerate(window):
+        if item.role == "user":
+            pending_user_index = index
+        elif item.role == "assistant" and pending_user_index is not None:
+            complete_turns.append((pending_user_index, index))
+            pending_user_index = None
+    if not complete_turns:
+        # Legacy sessions can contain a standalone asynchronous delivery. Preserve it for
+        # transcript/recovery compatibility; ContextEnvelope separately excludes it from
+        # model prompt turns because it has no paired user message.
+        return _fit_unpaired_recent_messages(window)
+
+    selected_start = len(window)
+    for user_index, _assistant_index in reversed(complete_turns):
+        candidate = window[user_index:]
+        candidate_tokens = sum(estimate_conversation_tokens(item.content) + 6 for item in candidate)
+        if candidate_tokens > RECENT_MESSAGE_TOKEN_BUDGET:
+            break
+        selected_start = user_index
+    return window[selected_start:]
+
+
+def _fit_unpaired_recent_messages(messages: list[ConversationMessageRecord]) -> list[ConversationMessageRecord]:
+    """Retain legacy delivery-only records when no complete conversational pair exists."""
 
     selected: list[ConversationMessageRecord] = []
     used_tokens = 0
-    for item in reversed(messages[-MAX_RECENT_MESSAGES:]):
+    for item in reversed(messages):
         item_tokens = estimate_conversation_tokens(item.content) + 6
         if selected and used_tokens + item_tokens > RECENT_MESSAGE_TOKEN_BUDGET:
             break

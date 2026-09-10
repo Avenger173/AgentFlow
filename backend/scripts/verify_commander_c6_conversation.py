@@ -195,6 +195,11 @@ def main() -> None:
         assert recent_token_count <= RECENT_MESSAGE_TOKEN_BUDGET, recent_token_count
         assert 0 < len(token_context.recent_messages) < 12
         assert token_context.summarized_message_count + len(token_context.recent_messages) == 12
+        assert token_context.recent_messages[0].role == "user"
+        assert all(
+            token_context.recent_messages[index].role != token_context.recent_messages[index + 1].role
+            for index in range(len(token_context.recent_messages) - 1)
+        )
         assert all(
             label in token_context.session.summary
             for label in ("[目标]", "[约束]", "[待办]", "[结果]")

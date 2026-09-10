@@ -18,6 +18,7 @@ from app.schemas.chat import (
     WorkflowWorkspaceScope,
 )
 from app.schemas.commander_intent import CommanderIntentCandidate, CommanderIntentResolution
+from app.schemas.context_envelope import ContextEnvelopeAudit
 from app.schemas.memory import LongTermMemoryRecord
 from app.services.long_term_memory import build_memory_context_summary
 from app.services.data_join import DataJoinError, build_data_join_intent
@@ -117,9 +118,11 @@ def create_commander_plan(
     materials: Iterable[WorkflowMaterialBinding] | None = None,
     agent_hints: Iterable[CommanderAgentHint] | None = None,
     memory_context: Iterable[LongTermMemoryRecord] | None = None,
+    memory_context_summary_override: list[str] | None = None,
     project_scope: str = "global",
     conversation_id: str = "",
     conversation_context_summary: list[str] | None = None,
+    context_envelope_audit: ContextEnvelopeAudit | None = None,
     has_conversation_context: bool = False,
     semantic_intent: CommanderIntentCandidate | None = None,
     semantic_intent_note: str = "",
@@ -132,7 +135,11 @@ def create_commander_plan(
     """
 
     available_agent_list = list(available_agents or [])
-    memory_context_summary = build_memory_context_summary(memory_context or ())
+    memory_context_summary = (
+        list(memory_context_summary_override[:3])
+        if memory_context_summary_override is not None
+        else build_memory_context_summary(memory_context or ())
+    )
     supplied_material_bindings = _normalize_material_bindings(message, materials or ())
     normalized_agent_hints = _normalize_agent_hints(message, agent_hints or ())
     hinted_agent_ids = {hint.agent_id for hint in normalized_agent_hints}
@@ -820,6 +827,7 @@ def create_commander_plan(
         conversation_id=conversation_id,
         memory_context_summary=memory_context_summary,
         conversation_context_summary=(conversation_context_summary or [])[:2],
+        context_envelope_audit=context_envelope_audit,
         intent_resolution=intent_resolution,
         steps=steps,
         max_risk_level=max_risk_level,

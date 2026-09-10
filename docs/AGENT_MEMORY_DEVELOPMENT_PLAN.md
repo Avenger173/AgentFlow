@@ -1,6 +1,6 @@
 # AgentFlow 记忆系统开发与验收计划
 
-> 状态：实施中（MEM-0、MEM-1、MEM-2 已完成，MEM-3 待执行）
+> 状态：实施中（MEM-0、MEM-1、MEM-2、MEM-3 已完成，MEM-4 待执行）
 >
 > 建立日期：2026-09-10
 >
@@ -200,6 +200,14 @@ flowchart LR
 - Compaction 后目标、有效约束、未完成事项、task/plan ID 的 required 保留率 100%。
 - 摘要失败、Provider 超时或 JSON 无效时回退到确定性摘要，不丢失当前状态、不重复写库。
 - 不把 token 估算写成 Provider 实际 usage；真实 usage 仅采用供应商响应。
+
+**实施记录（2026-09-10）**
+
+- 新增 `ContextEnvelope` 和无正文 `ContextEnvelopeAudit`：同一份被选择的上下文由 Intent JSON、Commander 计划审计和最终回复共同消费；移除了 Intent 独有的 2200 字符二次截断。
+- 预算统一按 `context_window - output_reserve - system/tool_reserve - current_input - safety_margin` 计算，已核验 DeepSeek V4 使用 1M 窗口，其它 Runtime 固定回退为 16,384 token；记忆输入硬上限为 20k。估算值明确标记为本地估算，不能作为 Provider usage。
+- 选择顺序固定为 Working State、已确认长期记忆、确定性压缩摘要/会话锚点和最近完整 user/assistant 对话；超额时只在信封内成对压缩，异步 delivery-only 助手消息不会作为半轮上下文注入。无法同时保留工作状态与最新完整轮次时在模型调用前明确失败，不静默丢字段。
+- Working State Prompt 摘要补充 active task 的 plan ID、所有未完成事项和已验证 artifact 标识。`verify_commander_context_envelope.py` 以合成夹具覆盖已核验/回退预算、20k 上限、三路径一致性、完整轮次、过长轮次裁剪和无安全预算拒绝；详情见 `docs/AGENT_MEMORY_MEM3_ACCEPTANCE.md`。
+- LLM 摘要未准入：当前确定性 compaction 未显示需要用额外模型调用替代的量化收益，且还没有对应的成本记录与失败回退证据。
 
 ### MEM-4：长期记忆沉淀与冲突治理
 

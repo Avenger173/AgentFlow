@@ -39,6 +39,8 @@
 
 > **2026-09-10 Agent 记忆 MEM-2 当前工作状态出口：**已新增 scope-bound、revisioned 的 `ConversationWorkingState` 与 SQLite 前向 migration，用户成功消息通过白名单 Reducer 覆盖或合并目标、预算、格式、材料范围、数量、时间范围等字段，含糊修改保持旧值并进入待确认。Workflow checkpoint 成功落库后才投影 active task、步骤、下一动作和 open item；`latest_verified_result` 严格限定真实 Runtime 已登记 artifact，dry-run 虚拟产物不会再伪装成交付。Prompt、计划审计和恢复 API 使用同一快照。MEM-2 门禁的 48 个夹具与 3 个既有探针共 51 项全部通过，状态字段准确率、任务恢复一致性为 100%，跨范围泄漏为 0；旧库升级、真实 Runtime checkpoint、重复事件和 FastAPI 恢复接口均有临时 SQLite/mock 回归。未改 Qt、未调用真实模型或网络；下一步固定为 MEM-3 的统一 `ContextEnvelope` 与模型感知预算。详情见 `docs/AGENT_MEMORY_MEM2_ACCEPTANCE.md`。
 
+> **2026-09-10 Agent 记忆 MEM-3 统一上下文出口：**已新增 `ContextEnvelope`，让 Intent JSON、Commander 计划审计和最终回复消费同一份选材结果，移除 Intent 独有的 2200 字符截断。预算按已核验模型窗口或 16,384-token 保守回退，扣除输出、系统/工具、当前输入和安全余量后计算，记忆输入封顶 20k；工作状态优先于长期记忆、确定性摘要和最近完整 user/assistant 轮次。工作状态摘要已补全 active task/plan、未完成事项和最小 artifact 标识；空间不足会在模型调用前失败，不静默丢状态。计划仅记录无正文估算和选择计数，明确不是 Provider usage。专项夹具及既有 C6、MEM-2 回归均已通过；未调用真实模型、网络或客户材料，未改 Qt。下一步固定为 MEM-4 的长期记忆候选生命周期、冲突治理与 compaction 前待确认候选，详情见 `docs/AGENT_MEMORY_MEM3_ACCEPTANCE.md`。
+
 > **2026-09-08 LGM5.7 CLI 自验证：**`verify_lgm57_trial_cli.py` 会在独立临时 SQLite 中真实执行候选目录与成对准备 CLI，覆盖候选列出、缺少 `--confirm-prepare` 时拒绝写入、确认后创建 Native/Graph Runtime 对及输出脱敏。内部开发验证不再要求用户手动运行该命令；真实任务库没有 C6.4 候选只代表没有经批准的真实组合计划，不能通过伪造任务绕过试点授权。
 
 > **2026-09-08 LGM5.7 真实开发者试点与最终闸门：**在用户授权的固定只读组合计划、已选本地材料和当前模型路由下，Native 基线与 LangGraph 候选都完成了专业步骤、Tool、artifact 与客户交付投影对照；Graph 初次仅一条专业分支失败，恢复时只重放该分支，已完成分支没有重复调用。实测修复了专业问题拆分、同 Provider 组合槽位、稳定 delegation key 与 synthesis 终态事件投影四个接缝。后续独立进程资源探针测得 Native `1569ms / 159MiB`、Graph `2012ms / 189MiB`，Graph 启动和常驻内存均超过当前 10% 门槛；真实父协调器的离线 checkpoint 故障注入也确认会在任何专业调用前停止、收束 bridge 为失败并明确要求 Native 重试。最终准入已按资源门槛登记为拒绝，未注册 API/Qt/Router，Native 仍是唯一客户默认 Runtime。

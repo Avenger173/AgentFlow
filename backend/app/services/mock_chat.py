@@ -7,7 +7,8 @@ from app.services.commander_memory import (
     mark_commander_memory_context_used,
     retrieve_commander_memory_context,
 )
-from app.services.conversation_memory import PreparedConversation, build_conversation_plan_summary
+from app.services.conversation_context_envelope import build_context_envelope
+from app.services.conversation_memory import PreparedConversation
 from app.services.runtime_preferences_store import load_runtime_preferences
 from app.workflow.dry_run import run_workflow_dry_run
 
@@ -32,6 +33,13 @@ def create_mock_chat_response(
             preferences=runtime_preferences,
             project_scope=request.project_scope,
         )
+        context_envelope = build_context_envelope(
+            message=message,
+            context=conversation.context if conversation is not None else None,
+            long_term_memories=memory_context,
+            runtime=None,
+            reused_session_materials=conversation.reused_session_materials if conversation is not None else False,
+        )
         workflow_plan = create_commander_plan(
             message,
             available_agents=agents,
@@ -39,16 +47,12 @@ def create_mock_chat_response(
             materials=request.materials,
             agent_hints=request.agent_hints,
             memory_context=memory_context,
+            memory_context_summary_override=context_envelope.memory_context_summary,
             project_scope=request.project_scope,
             conversation_id=request.conversation_id or "",
-            conversation_context_summary=(build_conversation_plan_summary(conversation) if conversation else []),
-            has_conversation_context=bool(
-                conversation
-                and (
-                    conversation.context.recent_messages
-                    or conversation.context.session.summary.strip()
-                )
-            ),
+            conversation_context_summary=context_envelope.planning_context_summary,
+            context_envelope_audit=context_envelope.audit,
+            has_conversation_context=context_envelope.has_conversation_context,
         )
         workflow_run = run_workflow_dry_run(
             task_id=task_id,
@@ -89,11 +93,20 @@ def build_mock_workflow_plan(message: str) -> WorkflowPlan:
         user_goal=message,
         preferences=preferences,
     )
+    context_envelope = build_context_envelope(
+        message=message,
+        context=None,
+        long_term_memories=memory_context,
+        runtime=None,
+    )
     plan = create_commander_plan(
         message,
         available_agents=list_agents(),
         preferences=preferences,
         memory_context=memory_context,
+        memory_context_summary_override=context_envelope.memory_context_summary,
+        conversation_context_summary=context_envelope.planning_context_summary,
+        context_envelope_audit=context_envelope.audit,
     )
     mark_commander_memory_context_used(memory_context)
     return plan

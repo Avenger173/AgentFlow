@@ -312,6 +312,8 @@ def build_working_state_prompt_summary(state: ConversationWorkingState | None) -
     if state.active_task is not None:
         task = state.active_task
         task_text = f"当前任务：{task.task_id}（{task.status}）"
+        if task.plan_id:
+            task_text += f"，计划：{task.plan_id}"
         if task.current_step:
             task_text += f"，步骤：{task.current_step}"
         if task.next_action:
@@ -319,7 +321,22 @@ def build_working_state_prompt_summary(state: ConversationWorkingState | None) -
         lines.append(task_text)
     if state.latest_verified_result is not None:
         result = state.latest_verified_result
-        lines.append(f"已验证交付：{result.artifact_id or result.task_id}")
+        artifact_ids = "、".join(result.artifact_ids[:16])
+        result_text = result.artifact_id or artifact_ids or result.task_id
+        lines.append(f"已验证交付：{result_text}")
+    active_open_items = [
+        item
+        for item in state.open_items
+        if item.status in {"open", "pending_confirmation", "blocked", "failed"}
+    ]
+    if active_open_items:
+        lines.append(
+            "未完成事项："
+            + "；".join(
+                f"{item.item_id}={item.title}（{item.status}）"
+                for item in active_open_items
+            )
+        )
     return "\n".join(lines)
 
 

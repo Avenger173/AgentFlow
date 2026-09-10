@@ -16,7 +16,7 @@
 - `commander_conversation_messages` 保存脱敏且有长度上限的用户/助手消息；完整任务执行状态仍由 `workflow_runs`、事件和 checkpoint 表负责。
 - `commander_conversation_working_states` 保存有 revision 的会话级当前目标、有效约束、待确认字段、open item、活动任务和最小已验证结果。用户消息只通过白名单 Reducer 更新字段，Runtime checkpoint 成功落库后才投影任务事实。
 - `conversation_id + project_scope` 共同隔离会话；范围变化会创建新会话，不复用旧材料。
-- 模型上下文采用“结构化工作状态 + 早期结构化摘要 + token 预算内的最近原文 + 材料引用 + task/plan 指针”。客户可分页回看归档，模型不会读取全部历史；三条模型路径的统一动态预算仍待 MEM-3。
+- 模型上下文采用一次性 `ContextEnvelope`：结构化工作状态优先，其后是已确认长期记忆、早期确定性摘要/材料引用/task-plan 指针和 token 预算内的完整最近轮次。客户可分页回看归档，模型不会读取全部历史；Intent、Planner 审计和 Reply 不再各自截断或重选上下文。
 
 ### 1.2 长期记忆
 
@@ -33,8 +33,8 @@
 |---|---|---|---|
 | 最近对话、回复进入短期记忆 | `conversation_repository.py` 持久化 user/assistant，异步 Runtime 追加最终交付 | 达标 | 失败的模型回合不写入，避免伪造已完成对话 |
 | 保存工具结果和执行中间态 | 完整 Tool/Step 状态留在任务表；成功 checkpoint 投影 active task、步骤、下一动作和 open item 到会话状态 | 达标 | 原始日志不进入 Prompt；无会话关联的独立工具任务不伪造会话状态 |
-| 摘要 + 最近原文 | 本轮已改为约 18k token、最多 20 条原文，并维护结构化早期摘要 | 基本达标 | 使用多供应商保守估算，不等同于 Provider 精确 tokenizer |
-| 摘要保留目标、约束、TODO、标识符 | 摘要按 `[目标]/[约束]/[待办]/[结果]` 分类并保留 task_id；Prompt 另带最近 task/plan 指针 | 基本达标 | 当前为确定性抽取，不额外消耗 LLM；复杂语义更新仍可能漏判 |
+| 摘要 + 最近原文 | Repository 保留约 18k token、最多 20 条原文；模型注入改由 `ContextEnvelope` 按动态预算选择确定性摘要和完整 user/assistant 对 | 达标 | 已核验窗口按公式分配，未知 Runtime 使用 16,384-token 回退；均是本地估算，不等同于 Provider usage |
+| 摘要保留目标、约束、TODO、标识符 | 摘要按 `[目标]/[约束]/[待办]/[结果]` 分类；Working State 注入目标、有效约束、未完成事项、active task/plan 和已验证 artifact | 达标 | 当前为确定性抽取，不额外消耗 LLM；复杂语义更新仍可能漏判 |
 | 明确修改覆盖旧结构化状态 | 白名单 Reducer 覆盖预算、格式、材料范围、数量与时间范围；不明确变更进入待确认 | 达标 | 当前只支持已登记字段，不把自由文本误当成结构化事实 |
 | 会话/线程隔离与恢复 | 稳定 conversation_id、project_scope、SQLite 归档、Working State revision 和 Runtime checkpoint | 达标 | 重启 JSON 与重复 checkpoint 均由离线夹具验证；LangGraph 不是聊天主链路 |
 | 清理、归档和沉淀 | 消息可分页归档，长期记忆可删除；会话没有 TTL、归档状态或删除 API | 未达标 | 长期桌面使用会积累数据，隐私和体积策略不完整 |
@@ -60,15 +60,14 @@
 
 ## 4. 后续优先级
 
-1. **P1：统一上下文预算。** 让 Intent、Planner 和 Reply 复用同一 `ContextEnvelope` 与模型感知预算，始终优先保留 Working State，并记录无正文的裁剪事实。
-2. **P1：保留期和删除能力。** 增加会话删除、归档与可配置 TTL，默认不自动删除客户仍在使用的记录，并提供按 project_scope 清理和审计计数。
+1. **P1：保留期和删除能力。** 增加会话删除、归档与可配置 TTL，默认不自动删除客户仍在使用的记录，并提供按 project_scope 清理和审计计数。
+2. **P1：压缩前候选。** 在旧消息进入摘要前，只生成待确认长期记忆候选，不直接写长期表；候选应去重、可编辑、可拒绝并记录来源会话/任务。
 3. **P2：记忆检索评测。** 先建立中文偏好、同义表达、跨项目隔离和误召回数据集；当记忆规模或 Recall@3 证明词面方案不足时，再接 FTS5 BM25 + 现有向量索引做混排。
-4. **P2：压缩前候选。** 在旧消息进入摘要前，只生成待确认长期记忆候选，不直接写长期表；候选应去重、可编辑、可拒绝并记录来源会话/任务。
-5. **P2：模型窗口自适应。** 让近轮预算根据实际 Model Profile 的 context window 和输出预算动态计算；保守估算继续用于跨 Provider 兜底。
+4. **P2：LLM 摘要准入评估。** 只在信息保留率有量化提升、Provider 失败可回退且 usage/cost 可记录时，再与现有确定性摘要比较；否则保持确定性方案。
 
 ## 5. 简历可用表述
 
-- 设计并实现 Agent 分层记忆架构：基于 SQLite 的会话隔离与可恢复归档、token 预算滚动窗口、结构化摘要、可版本化的当前工作状态，以及 global/project 命名空间的用户确认式长期记忆。
+- 设计并实现 Agent 分层记忆架构：基于 SQLite 的会话隔离与可恢复归档、统一 ContextEnvelope 动态预算、结构化摘要、可版本化的当前工作状态，以及 global/project 命名空间的用户确认式长期记忆。
 - 将 Agent 记忆与 Workflow 状态解耦：会话层只注入受控摘要和最小工作状态，任务进度、Tool trace、checkpoint 和审计事件独立持久化；只有可信 checkpoint 可投影任务事实，避免原始日志和虚拟产物污染 Prompt。
 - 建立隐私优先的记忆治理：长期记忆默认关闭，支持候选复核、显式确认、敏感信息/绝对路径拦截、启停编辑删除和跨项目隔离。
 - 采用评测驱动的检索演进策略：小规模记忆先使用可解释本地词面排序，预留基于 FTS5 BM25 与向量索引的混合召回升级路径。
