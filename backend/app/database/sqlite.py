@@ -1147,6 +1147,28 @@ def _apply_commander_conversation_archive_v1(connection: sqlite3.Connection) -> 
     )
 
 
+def _apply_commander_conversation_working_state_v1(connection: sqlite3.Connection) -> None:
+    """为既有会话增加可回放的结构化工作状态。
+
+    这是纯前向迁移：老会话不会被重写，首次产生可信状态时再按会话范围惰性创建记录。
+    """
+
+    connection.executescript(
+        """
+        CREATE TABLE commander_conversation_working_states (
+            conversation_id TEXT PRIMARY KEY,
+            project_scope TEXT NOT NULL,
+            revision INTEGER NOT NULL DEFAULT 0,
+            state_json TEXT NOT NULL DEFAULT '{}',
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (conversation_id)
+                REFERENCES commander_conversations(conversation_id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX idx_commander_conversation_working_states_scope_updated
+        ON commander_conversation_working_states(project_scope, updated_at DESC, conversation_id DESC);
+        """
+    )
 def _apply_langgraph_runtime_bridges_v1(connection: sqlite3.Connection) -> None:
     """建立 LGM5 主任务与 LangGraph checkpoint 的脱敏关联表。"""
 
@@ -1341,5 +1363,13 @@ _SCHEMA_MIGRATIONS: tuple[_SchemaMigration, ...] = (
             "plan_digest_and_opaque_authorization_only;authorized_rejected_revoked;no_customer_content"
         ),
         apply=_apply_langgraph_composition_trial_authorizations_v1,
+    ),
+    _SchemaMigration(
+        migration_id="20260910_commander_conversation_working_state_v1",
+        signature=(
+            "commander_conversation_working_states:v1;scope_bound_revisioned_json;"
+            "forward_only_lazy_backfill"
+        ),
+        apply=_apply_commander_conversation_working_state_v1,
     ),
 )

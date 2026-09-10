@@ -13,6 +13,7 @@ from app.schemas.conversation import (
     ConversationSessionList,
     ConversationSessionRecord,
     ConversationTranscriptPage,
+    ConversationWorkingState,
 )
 
 
@@ -21,6 +22,10 @@ RECENT_MESSAGE_TOKEN_BUDGET = 18_000
 LEGACY_RECENT_MESSAGE_FALLBACK = 8
 CONVERSATION_SUMMARY_MAX_LENGTH = 1400
 CONVERSATION_TITLE_MAX_LENGTH = 42
+
+
+class ConversationWorkingStateConflict(RuntimeError):
+    """结构化会话状态在读取到写入之间发生了竞争更新。"""
 
 _SUMMARY_CLAUSE_SPLIT_PATTERN = re.compile(r"[。！？!?；;\n]+")
 _CONSTRAINT_SIGNAL_PATTERN = re.compile(
@@ -108,6 +113,13 @@ def get_conversation_context(conversation_id: str) -> ConversationContext:
             """,
             (conversation_id, row_limit),
         ).fetchall()
+        state_row = connection.execute(
+            """
+            SELECT * FROM commander_conversation_working_states
+            WHERE conversation_id = ? AND project_scope = ?
+            """,
+            (conversation_id, session_row["project_scope"]),
+        ).fetchone()
     recent_messages = _fit_recent_messages([_row_to_message(row) for row in rows])
     session = _row_to_session(session_row)
     estimated_memory_tokens = estimate_conversation_tokens(session.summary) + sum(
@@ -118,7 +130,93 @@ def get_conversation_context(conversation_id: str) -> ConversationContext:
         recent_messages=recent_messages,
         summarized_message_count=summarized_count,
         estimated_memory_tokens=estimated_memory_tokens,
+        working_state=_row_to_working_state(state_row, session=session),
     )
+
+
+def get_conversation_working_state(
+    *,
+    conversation_id: str,
+    project_scope: str,
+) -> ConversationWorkingState:
+    """按会话和项目范围读取状态；没有状态行的旧会话返回 revision=0 的空快照。"""
+
+    with get_connection() as connection:
+        session_row = connection.execute(
+            """
+            SELECT * FROM commander_conversations
+            WHERE conversation_id = ? AND project_scope = ?
+            """,
+            (conversation_id, project_scope),
+        ).fetchone()
+        if session_row is None:
+            raise LookupError("未找到指定会话。")
+        state_row = connection.execute(
+            """
+            SELECT * FROM commander_conversation_working_states
+            WHERE conversation_id = ? AND project_scope = ?
+            """,
+            (conversation_id, project_scope),
+        ).fetchone()
+    return _row_to_working_state(state_row, session=_row_to_session(session_row))
+
+
+def save_conversation_working_state(
+    *,
+    state: ConversationWorkingState,
+    expected_revision: int,
+) -> ConversationWorkingState:
+    """以 revision 做乐观并发控制保存状态，拒绝跨 project scope 写入。"""
+
+    if state.revision != expected_revision + 1:
+        raise ValueError("会话工作状态 revision 必须只前进一个版本。")
+    payload = state.model_dump_json()
+    with get_connection() as connection:
+        session_row = connection.execute(
+            """
+            SELECT conversation_id FROM commander_conversations
+            WHERE conversation_id = ? AND project_scope = ?
+            """,
+            (state.conversation_id, state.project_scope),
+        ).fetchone()
+        if session_row is None:
+            raise LookupError("未找到指定会话。")
+        if expected_revision == 0:
+            inserted = connection.execute(
+                """
+                INSERT OR IGNORE INTO commander_conversation_working_states (
+                    conversation_id, project_scope, revision, state_json, updated_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    state.conversation_id,
+                    state.project_scope,
+                    state.revision,
+                    payload,
+                    state.updated_at,
+                ),
+            ).rowcount
+            if inserted:
+                return state
+        else:
+            updated = connection.execute(
+                """
+                UPDATE commander_conversation_working_states
+                SET revision = ?, state_json = ?, updated_at = ?
+                WHERE conversation_id = ? AND project_scope = ? AND revision = ?
+                """,
+                (
+                    state.revision,
+                    payload,
+                    state.updated_at,
+                    state.conversation_id,
+                    state.project_scope,
+                    expected_revision,
+                ),
+            ).rowcount
+            if updated:
+                return state
+    raise ConversationWorkingStateConflict("会话工作状态已被另一请求更新，请重试。")
 
 
 def list_conversations(*, project_scope: str, limit: int = 40) -> ConversationSessionList:
@@ -410,6 +508,24 @@ def _row_to_session(row) -> ConversationSessionRecord:
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
     )
+
+
+def _row_to_working_state(row, *, session: ConversationSessionRecord) -> ConversationWorkingState:
+    if row is None:
+        return ConversationWorkingState(
+            conversation_id=session.conversation_id,
+            project_scope=session.project_scope,
+            updated_at=session.updated_at,
+        )
+    try:
+        payload = json.loads(str(row["state_json"] or "{}"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        payload = {}
+    payload["conversation_id"] = session.conversation_id
+    payload["project_scope"] = session.project_scope
+    payload["revision"] = int(row["revision"])
+    payload["updated_at"] = str(row["updated_at"] or payload.get("updated_at") or session.updated_at)
+    return ConversationWorkingState.model_validate(payload)
 
 
 def _row_to_message(row) -> ConversationMessageRecord:

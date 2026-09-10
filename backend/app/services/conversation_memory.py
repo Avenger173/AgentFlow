@@ -12,6 +12,10 @@ from app.database.conversation_repository import (
 )
 from app.schemas.chat import WorkflowMaterialBinding
 from app.schemas.conversation import ConversationContext
+from app.services.conversation_working_state import (
+    build_working_state_prompt_summary,
+    record_successful_user_message,
+)
 
 
 class ConversationSafetyError(ValueError):
@@ -84,12 +88,13 @@ def persist_successful_conversation_turn(
 ) -> ConversationContext:
     """把一轮成功问答写入自动会话层，统一执行脱敏与长度边界。"""
 
-    return save_conversation_turn(
+    sanitized_user_message = sanitize_conversation_text(
+        user_message,
+        maximum=CONVERSATION_ARCHIVE_MESSAGE_MAX_CHARS,
+    )
+    save_conversation_turn(
         conversation_id=prepared.context.session.conversation_id,
-        user_message=sanitize_conversation_text(
-            user_message,
-            maximum=CONVERSATION_ARCHIVE_MESSAGE_MAX_CHARS,
-        ),
+        user_message=sanitized_user_message,
         assistant_message=sanitize_conversation_text(
             assistant_message,
             maximum=CONVERSATION_ARCHIVE_MESSAGE_MAX_CHARS,
@@ -98,6 +103,15 @@ def persist_successful_conversation_turn(
         task_id=task_id,
         plan_id=plan_id,
     )
+    # 结构化状态只消费已成功归档且已脱敏的用户输入。助手回复不会被送进 Reducer，因此不能
+    # 仅凭“已完成”话术改变任务状态或制造虚假的交付记录。
+    record_successful_user_message(
+        conversation_id=prepared.context.session.conversation_id,
+        project_scope=prepared.context.session.project_scope,
+        message=sanitized_user_message,
+        task_id=task_id,
+    )
+    return get_conversation_context(prepared.context.session.conversation_id)
 
 
 def persist_async_assistant_delivery(
@@ -122,6 +136,9 @@ def build_conversation_prompt_context(context: ConversationContext) -> str:
     """生成给模型的短期会话上下文，严格限制长度并声明它不能放宽权限。"""
 
     lines = ["以下是同一调度会话的受控短期上下文（自动维护，不是跨会话长期记忆）："]
+    working_state_summary = build_working_state_prompt_summary(context.working_state)
+    if working_state_summary:
+        lines.append(working_state_summary)
     if context.session.summary:
         lines.append("早期结构化摘要：\n" + context.session.summary)
     if context.session.material_bindings:
@@ -152,7 +169,8 @@ def build_conversation_plan_summary(prepared: PreparedConversation) -> list[str]
     summary = f"本计划延续会话 {prepared.context.session.conversation_id} 的 {message_count} 条近轮上下文。"
     if prepared.reused_session_materials:
         summary += "本轮因客户指代复用了同一会话此前明确选择的材料范围。"
-    return [summary]
+    working_state_summary = build_working_state_prompt_summary(prepared.context.working_state)
+    return [summary, working_state_summary] if working_state_summary else [summary]
 
 
 def normalize_conversation_id(value: str | None) -> str:

@@ -107,7 +107,8 @@
       "category": "state_update",
       "quality_gate": "diagnostic",
       "operation": "working_state",
-      "messages": ["生成图表", "运行状态：completed，产物已回读"],
+      "messages": ["生成图表"],
+      "event": {"task_id": "task_eval_state_11", "status": "completed", "artifact_ids": ["artifact_eval_chart"], "event_id": "event_eval_verified_chart"},
       "expected": {"latest_verified_result": {"artifact_id": "artifact_eval_chart"}}
     },
     {
@@ -115,8 +116,9 @@
       "category": "state_update",
       "quality_gate": "diagnostic",
       "operation": "working_state",
-      "messages": ["开始分析", "任务 task_eval_state_12 正在执行第 2 步"],
-      "expected": {"active_task": {"task_id": "task_eval_state_12", "step": 2}}
+      "messages": ["开始分析"],
+      "event": {"task_id": "task_eval_state_12", "status": "running", "step": "analyze", "step_index": 2, "event_id": "event_eval_active_task"},
+      "expected": {"active_task": {"task_id": "task_eval_state_12", "step_index": 2}}
     },
     {
       "id": "runtime_queued_projection",

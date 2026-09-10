@@ -4,7 +4,7 @@
 > 审计日期：2026-09-10
 > 原则：以真实调用链和离线回归为准，不把框架名或规划项当作已实现能力。
 
-后续实施顺序、数据契约和量化出口统一以 `docs/AGENT_MEMORY_DEVELOPMENT_PLAN.md` 为准；修复前的 MEM-0 夹具、指标和失败证据见 `docs/AGENT_MEMORY_MEM0_BASELINE.md`，MEM-1 修复验收见 `docs/AGENT_MEMORY_MEM1_ACCEPTANCE.md`。
+后续实施顺序、数据契约和量化出口统一以 `docs/AGENT_MEMORY_DEVELOPMENT_PLAN.md` 为准；修复前的 MEM-0 夹具、指标和失败证据见 `docs/AGENT_MEMORY_MEM0_BASELINE.md`，MEM-1 与 MEM-2 验收见 `docs/AGENT_MEMORY_MEM1_ACCEPTANCE.md`、`docs/AGENT_MEMORY_MEM2_ACCEPTANCE.md`。
 
 ## 1. 当前真实架构
 
@@ -14,8 +14,9 @@
 
 - SQLite 的 `commander_conversations` 保存会话范围、摘要、材料引用、最近 task/plan 指针和摘要水位。
 - `commander_conversation_messages` 保存脱敏且有长度上限的用户/助手消息；完整任务执行状态仍由 `workflow_runs`、事件和 checkpoint 表负责。
+- `commander_conversation_working_states` 保存有 revision 的会话级当前目标、有效约束、待确认字段、open item、活动任务和最小已验证结果。用户消息只通过白名单 Reducer 更新字段，Runtime checkpoint 成功落库后才投影任务事实。
 - `conversation_id + project_scope` 共同隔离会话；范围变化会创建新会话，不复用旧材料。
-- 模型上下文采用“早期结构化摘要 + token 预算内的最近原文 + 材料引用 + task/plan 指针”。客户可分页回看归档，模型不会读取全部历史。
+- 模型上下文采用“结构化工作状态 + 早期结构化摘要 + token 预算内的最近原文 + 材料引用 + task/plan 指针”。客户可分页回看归档，模型不会读取全部历史；三条模型路径的统一动态预算仍待 MEM-3。
 
 ### 1.2 长期记忆
 
@@ -31,11 +32,11 @@
 | 文档要求 | 当前实现与证据 | 状态 | 结论 |
 |---|---|---|---|
 | 最近对话、回复进入短期记忆 | `conversation_repository.py` 持久化 user/assistant，异步 Runtime 追加最终交付 | 达标 | 失败的模型回合不写入，避免伪造已完成对话 |
-| 保存工具结果和执行中间态 | 最终客户交付会追加会话；完整 Tool/Step 状态在任务表和 checkpoint，不会统一注入下一轮 | 部分达标 | 所有权清楚，但缺少面向会话的最小任务状态投影 |
+| 保存工具结果和执行中间态 | 完整 Tool/Step 状态留在任务表；成功 checkpoint 投影 active task、步骤、下一动作和 open item 到会话状态 | 达标 | 原始日志不进入 Prompt；无会话关联的独立工具任务不伪造会话状态 |
 | 摘要 + 最近原文 | 本轮已改为约 18k token、最多 20 条原文，并维护结构化早期摘要 | 基本达标 | 使用多供应商保守估算，不等同于 Provider 精确 tokenizer |
 | 摘要保留目标、约束、TODO、标识符 | 摘要按 `[目标]/[约束]/[待办]/[结果]` 分类并保留 task_id；Prompt 另带最近 task/plan 指针 | 基本达标 | 当前为确定性抽取，不额外消耗 LLM；复杂语义更新仍可能漏判 |
-| 明确修改覆盖旧结构化状态 | 计划有版本修订，长期记忆可编辑；会话摘要仍以合并为主 | 部分达标 | 尚无 typed slot/state reducer，预算等字段不能通用地“新值覆盖旧值” |
-| 会话/线程隔离与恢复 | 稳定 conversation_id、project_scope 校验、SQLite 归档和 Runtime checkpoint | 达标 | 自研 SQLite 等价承担会话 checkpointer；LangGraph 不是聊天主链路 |
+| 明确修改覆盖旧结构化状态 | 白名单 Reducer 覆盖预算、格式、材料范围、数量与时间范围；不明确变更进入待确认 | 达标 | 当前只支持已登记字段，不把自由文本误当成结构化事实 |
+| 会话/线程隔离与恢复 | 稳定 conversation_id、project_scope、SQLite 归档、Working State revision 和 Runtime checkpoint | 达标 | 重启 JSON 与重复 checkpoint 均由离线夹具验证；LangGraph 不是聊天主链路 |
 | 清理、归档和沉淀 | 消息可分页归档，长期记忆可删除；会话没有 TTL、归档状态或删除 API | 未达标 | 长期桌面使用会积累数据，隐私和体积策略不完整 |
 | 长期记忆外部持久化 | SQLite 表、global/project 命名空间、跨会话按需读取 | 达标 | 不依赖上下文窗口存活 |
 | 语义/情景/程序性记忆 | 偏好/约束对应语义，experience + source_task_id 对应轻量情景，SKILL/Workflow 对应程序性 | 基本达标 | 情景记忆的文件变更、工具轨迹仍在任务历史，不在通用记忆检索中 |
@@ -55,10 +56,11 @@
 - 单条会话归档上限由用户 1800 / 助手 2200 字统一提高到 8000 字，减少长要求和长交付在下一轮消失。
 - 摘要改为目标、约束、待办、结果四类，并保留 task_id；上下文公开摘要水位与估算 token 数，便于回归和诊断。
 - 保留完整任务状态与 Tool trace 的独立存储，不把原始日志、隐藏推理或未校验 Tool 输出直接塞进聊天 Prompt。
+- 新增独立 Working State：已成功归档的用户输入以白名单覆盖/合并字段，含糊修改进入待确认；Runtime checkpoint 才更新任务进度，只有真实 Runtime 已登记 artifact 才可登记验证结果。
 
 ## 4. 后续优先级
 
-1. **P1：会话工作状态投影。** 增加 `ConversationWorkingState`，从已校验 WorkflowPlan/Run 投影当前目标、已确认约束、步骤状态和最后受控结果；字段更新采用 reducer/覆盖语义，而不是继续追加文字。
+1. **P1：统一上下文预算。** 让 Intent、Planner 和 Reply 复用同一 `ContextEnvelope` 与模型感知预算，始终优先保留 Working State，并记录无正文的裁剪事实。
 2. **P1：保留期和删除能力。** 增加会话删除、归档与可配置 TTL，默认不自动删除客户仍在使用的记录，并提供按 project_scope 清理和审计计数。
 3. **P2：记忆检索评测。** 先建立中文偏好、同义表达、跨项目隔离和误召回数据集；当记忆规模或 Recall@3 证明词面方案不足时，再接 FTS5 BM25 + 现有向量索引做混排。
 4. **P2：压缩前候选。** 在旧消息进入摘要前，只生成待确认长期记忆候选，不直接写长期表；候选应去重、可编辑、可拒绝并记录来源会话/任务。
@@ -66,8 +68,8 @@
 
 ## 5. 简历可用表述
 
-- 设计并实现 Agent 双层记忆架构：基于 SQLite 的会话隔离与可恢复归档、token 预算滚动窗口、结构化摘要，以及 global/project 命名空间的用户确认式长期记忆。
-- 将 Agent 记忆与 Workflow 状态解耦：会话层只注入受控摘要和最终交付，任务进度、Tool trace、checkpoint 和审计事件独立持久化，避免原始日志污染 Prompt。
+- 设计并实现 Agent 分层记忆架构：基于 SQLite 的会话隔离与可恢复归档、token 预算滚动窗口、结构化摘要、可版本化的当前工作状态，以及 global/project 命名空间的用户确认式长期记忆。
+- 将 Agent 记忆与 Workflow 状态解耦：会话层只注入受控摘要和最小工作状态，任务进度、Tool trace、checkpoint 和审计事件独立持久化；只有可信 checkpoint 可投影任务事实，避免原始日志和虚拟产物污染 Prompt。
 - 建立隐私优先的记忆治理：长期记忆默认关闭，支持候选复核、显式确认、敏感信息/绝对路径拦截、启停编辑删除和跨项目隔离。
 - 采用评测驱动的检索演进策略：小规模记忆先使用可解释本地词面排序，预留基于 FTS5 BM25 与向量索引的混合召回升级路径。
 
@@ -76,6 +78,8 @@
 - `python -m compileall -q backend/app backend/scripts`
 - `python backend/scripts/verify_commander_c6_conversation.py`
 - `python backend/scripts/verify_commander_memory.py`
+- `python backend/scripts/verify_conversation_working_state.py`
+- `python backend/scripts/verify_commander_memory_quality.py --mode gate --gate-profile mem2`
 - `python backend/scripts/verify_commander_memory_proposals.py`
 - `PYTHONUTF8=1 python .../skill-creator/scripts/quick_validate.py .`
 

@@ -44,6 +44,7 @@ from app.database.memory_repository import (  # noqa: E402
 )
 from app.database.sqlite import get_connection  # noqa: E402
 from app.schemas.chat import ChatRequest, WorkflowPlanPreferences  # noqa: E402
+from app.schemas.conversation import ConversationWorkingState  # noqa: E402
 from app.services.agent_catalog import get_agent  # noqa: E402
 from app.services.commander_memory import retrieve_commander_memory_context  # noqa: E402
 from app.services.commander_intent import resolve_commander_intent_candidate  # noqa: E402
@@ -51,6 +52,10 @@ from app.services.conversation_memory import (  # noqa: E402
     CONVERSATION_ARCHIVE_MESSAGE_MAX_CHARS,
     prepare_conversation,
     sanitize_conversation_text,
+)
+from app.services.conversation_working_state import (  # noqa: E402
+    project_workflow_event,
+    reduce_user_message,
 )
 from app.services.long_term_memory import LongTermMemorySafetyError, sanitize_memory_text  # noqa: E402
 from app.services.llm_chat import LlmChatError, create_llm_chat_response  # noqa: E402
@@ -71,6 +76,15 @@ GATE_PROFILE_CATEGORIES = {
     # 修复的能力与既有防回归项，不能把 MEM-2 的未实施状态模型误报成 MEM-1 实现失败。
     "all": None,
     "mem1": {"baseline_probe", "compaction", "long_term_retrieval", "scope_isolation", "privacy"},
+    "mem2": {
+        "baseline_probe",
+        "state_update",
+        "task_recovery",
+        "compaction",
+        "long_term_retrieval",
+        "scope_isolation",
+        "privacy",
+    },
 }
 SYNTHETIC_INPUTS = {
     "synthetic_secret": "模拟凭据 sk-fixtureonly00000000，不代表真实密钥。",
@@ -144,19 +158,9 @@ def _run_case(case: dict[str, Any]) -> EvaluationResult:
     try:
         operation = str(case["operation"])
         if operation == "working_state":
-            return _result(
-                case,
-                "not_supported",
-                started,
-                reason="当前数据库与 Pydantic 协议尚未定义 ConversationWorkingState。",
-            )
+            return _run_working_state_case(case, started)
         if operation == "workflow_projection":
-            return _result(
-                case,
-                "not_supported",
-                started,
-                reason="Runtime 状态尚未投影到会话级结构化工作状态。",
-            )
+            return _run_workflow_projection_case(case, started)
         if operation == "conversation_compaction":
             return _run_compaction_case(case, started)
         if operation == "memory_search":
@@ -191,6 +195,133 @@ def _run_probe(probe: dict[str, Any]) -> EvaluationResult:
         return _result(probe, "failed", started, reason=f"未知基线探针：{operation}")
     except Exception as exc:
         return _result(probe, "failed", started, reason=f"{type(exc).__name__}: {exc}")
+
+
+def _run_working_state_case(case: dict[str, Any], started: float) -> EvaluationResult:
+    state = _empty_working_state(case_id=str(case["id"]))
+    for index, message in enumerate(case.get("messages", []), start=1):
+        # 夹具明确标注“助手说”的文本用于验证安全边界：它不是用户事件，不得更新工作事实。
+        if str(message).startswith("助手说"):
+            continue
+        state = reduce_user_message(
+            state,
+            message=str(message),
+            source_id=f"task_eval_state_{index}",
+        )
+    event = case.get("event")
+    if isinstance(event, dict):
+        state = _project_fixture_event(state, event)
+    expected = case.get("expected")
+    if not isinstance(expected, dict):
+        raise ValueError("working_state 用例缺少 expected 对象。")
+    matches, mismatches = _working_state_matches(state, expected)
+    return _result(
+        case,
+        "passed" if matches else "failed",
+        started,
+        revision=state.revision,
+        state=state.model_dump(mode="json"),
+        mismatches=mismatches,
+    )
+
+
+def _run_workflow_projection_case(case: dict[str, Any], started: float) -> EvaluationResult:
+    event = case.get("event")
+    if not isinstance(event, dict):
+        raise ValueError("workflow_projection 用例缺少 event 对象。")
+    initial = _empty_working_state(case_id=str(case["id"]))
+    state = _project_fixture_event(initial, event)
+    expected = case.get("expected")
+    if not isinstance(expected, dict):
+        raise ValueError("workflow_projection 用例缺少 expected 对象。")
+    matches, mismatches = _working_state_matches(state, expected)
+
+    if "revision_delta" in expected:
+        duplicate = _project_fixture_event(state, event)
+        delta = duplicate.revision - initial.revision
+        if delta != int(expected["revision_delta"]):
+            matches = False
+            mismatches.append(f"revision_delta={delta!r}")
+        state = duplicate
+    if expected.get("restart_snapshot_equal") is True:
+        restored = ConversationWorkingState.model_validate_json(state.model_dump_json())
+        same = restored == state
+        if not same:
+            matches = False
+            mismatches.append("restart_snapshot_equal=false")
+    return _result(
+        case,
+        "passed" if matches else "failed",
+        started,
+        revision=state.revision,
+        state=state.model_dump(mode="json"),
+        mismatches=mismatches,
+    )
+
+
+def _empty_working_state(*, case_id: str) -> ConversationWorkingState:
+    return ConversationWorkingState(
+        conversation_id=f"conv_eval_{case_id}"[:64],
+        project_scope="project:eval_working_state",
+        updated_at="2026-09-10T00:00:00Z",
+    )
+
+
+def _project_fixture_event(state: ConversationWorkingState, event: dict[str, Any]) -> ConversationWorkingState:
+    return project_workflow_event(
+        state,
+        task_id=str(event["task_id"]),
+        status=str(event["status"]),
+        current_step=str(event.get("step") or ""),
+        step_index=int(event["step_index"]) if event.get("step_index") is not None else None,
+        task_title=str(event.get("task_title") or "评测任务"),
+        result_summary=str(event.get("summary") or "已通过合成回读验证。"),
+        artifact_ids=[str(value) for value in event.get("artifact_ids", [])],
+        resume_checkpoint=str(event.get("resumed_from") or ""),
+        event_id=str(event.get("event_id") or ""),
+    )
+
+
+def _working_state_matches(state: ConversationWorkingState, expected: dict[str, Any]) -> tuple[bool, list[str]]:
+    mismatches: list[str] = []
+    if "current_goal" in expected:
+        actual = state.current_goal.value if state.current_goal is not None else None
+        if actual != expected["current_goal"]:
+            mismatches.append(f"current_goal={actual!r}")
+    for section_name, values in (("constraints", state.constraints), ("decisions", state.decisions)):
+        section_expected = expected.get(section_name)
+        if not isinstance(section_expected, dict):
+            continue
+        for key, expected_value in section_expected.items():
+            actual_value = values.get(str(key))
+            actual = actual_value.value if actual_value is not None else None
+            if actual != expected_value:
+                mismatches.append(f"{section_name}.{key}={actual!r}")
+    if "pending_confirmation" in expected:
+        actual_pending = state.pending_confirmation
+        expected_pending = [str(value) for value in expected["pending_confirmation"]]
+        if actual_pending != expected_pending:
+            mismatches.append(f"pending_confirmation={actual_pending!r}")
+    if "open_items" in expected:
+        for partial in expected["open_items"]:
+            if not isinstance(partial, dict):
+                mismatches.append("open_items 包含非对象期望值")
+                continue
+            if not any(all(getattr(item, key, None) == value for key, value in partial.items()) for item in state.open_items):
+                mismatches.append(f"open_item_missing={partial!r}")
+    if "active_task" in expected:
+        actual_task = state.active_task
+        for key, value in expected["active_task"].items():
+            if actual_task is None or getattr(actual_task, key, None) != value:
+                actual = getattr(actual_task, key, None) if actual_task is not None else None
+                mismatches.append(f"active_task.{key}={actual!r}")
+    if "latest_verified_result" in expected:
+        actual_result = state.latest_verified_result
+        for key, value in expected["latest_verified_result"].items():
+            if actual_result is None or getattr(actual_result, key, None) != value:
+                actual = getattr(actual_result, key, None) if actual_result is not None else None
+                mismatches.append(f"latest_verified_result.{key}={actual!r}")
+    return not mismatches, mismatches
 
 
 def _run_intent_context_tail_probe(probe: dict[str, Any], started: float) -> EvaluationResult:

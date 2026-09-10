@@ -89,6 +89,15 @@ def main() -> None:
     assert disabled_plan.status_code == 200, disabled_plan.text
     assert disabled_plan.json()["workflow_plan"]["memory_context_summary"] == []
 
+    # MEM-2：规划保存后的 Runtime 快照必须进入同一会话的恢复接口。客户聊天中的“已完成”
+    # 文本不参与这里的任务终态判断；该接口只返回由 Workflow checkpoint 投影的结构化状态。
+    disabled_payload = disabled_plan.json()
+    recovered_context = client.get(f"/api/chat/conversations/{disabled_payload['conversation_id']}")
+    assert recovered_context.status_code == 200, recovered_context.text
+    working_state = recovered_context.json()["working_state"]
+    assert working_state["active_task"]["task_id"] == disabled_payload["task_id"], working_state
+    assert working_state["latest_verified_result"] is None, working_state
+
     saved_preferences = client.put(
         "/api/settings/runtime-preferences",
         json={

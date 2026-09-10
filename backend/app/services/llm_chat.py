@@ -100,6 +100,7 @@ async def create_llm_chat_response(
         and (
             conversation.context.recent_messages
             or conversation.context.session.summary.strip()
+            or (conversation.context.working_state and conversation.context.working_state.revision > 0)
         )
     )
     try:

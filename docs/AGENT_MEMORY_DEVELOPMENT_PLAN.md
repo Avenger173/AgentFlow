@@ -1,6 +1,6 @@
 # AgentFlow 记忆系统开发与验收计划
 
-> 状态：实施中（MEM-0、MEM-1 已完成，MEM-2 待执行）
+> 状态：实施中（MEM-0、MEM-1、MEM-2 已完成，MEM-3 待执行）
 >
 > 建立日期：2026-09-10
 >
@@ -175,6 +175,13 @@ flowchart LR
 - Runtime 完成、失败、暂停和恢复能更新对应 open item，终态准确率 100%。
 - 重启前后 Working State JSON 完全一致；重复事件不增加 revision 或重复结果。
 - 旧数据库升级后消息、摘要、task/plan 指针和长期记忆数量保持一致。
+
+**实施记录（2026-09-10）**
+
+- 新增独立 `commander_conversation_working_states` 前向迁移、`ConversationWorkingState v1` Pydantic 契约和带 `revision` 的乐观并发 Repository。旧会话在首次可信状态写入前返回 revision=0 空快照，不改写原消息或摘要。
+- `conversation_working_state.py` 以白名单 Reducer 更新目标、预算、交付格式、材料范围、页数、时间范围、语言、表格要求、方案选择与待确认字段；未识别或含糊变更不覆盖已有值。助手自然语言不进入 Reducer，不能凭“已完成”关闭事项。
+- Workflow 保存成功后才投影最小活动任务、步骤、下一动作和 open item；`latest_verified_result` 严格限于 `mode=runtime` 的已登记 artifact，dry-run 虚拟产物不能被写成真实交付。
+- Prompt、计划审计和恢复 API 经 `ConversationContext.working_state` 复用同一快照。`--mode gate --gate-profile mem2` 的 48 个夹具与 3 个既有探针共 51 项全部通过，状态字段准确率和任务恢复一致性均为 100%；详情见 `docs/AGENT_MEMORY_MEM2_ACCEPTANCE.md`。
 
 ### MEM-3：统一上下文预算与 Compaction
 

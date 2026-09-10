@@ -277,6 +277,7 @@ def _save_workflow_snapshot(
                         for request in permission_requests
                     ],
                 )
+
             else:
                 # 真实 Runtime 可能多次保存同一个任务；这里更新请求描述但保留用户决策，
                 # 避免 approved/denied 被新的运行快照重置成 pending。
@@ -302,6 +303,17 @@ def _save_workflow_snapshot(
                         for request in permission_requests
                     ],
                 )
+
+    # Runtime 的主事实已经提交后，才同步会话恢复快照。无会话关联的独立工具任务会被服务层
+    # 直接忽略；不在 SQLite 事务内做第二份状态写入，避免会话表竞争延长主任务的持锁时间。
+    if plan is not None:
+        from app.services.conversation_working_state import synchronize_workflow_run
+
+        synchronize_workflow_run(
+            run=run,
+            plan=plan,
+            artifacts=artifacts or [],
+        )
 
 
 def load_workflow_run(task_id: str) -> WorkflowRun | None:
