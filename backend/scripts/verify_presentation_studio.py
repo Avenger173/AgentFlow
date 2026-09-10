@@ -2153,9 +2153,15 @@ def main() -> None:
     generic_plan_snapshot = generic_plan_snapshot.model_copy(
         update={"data_plan": explicit_plan}
     )
+    # 无单位 AI 数据是合法草稿；PPTX 会在保存时移除单元格文本末尾空格，回读不能因此
+    # 把已经写入的数值误判为缺失。这个交付级回归覆盖表格、趋势表和后续原生图表。
+    unitless_table_chart = replace(
+        contract_charts[0],
+        points=tuple(replace(point, unit="") for point in contract_charts[0].points),
+    )
     multi_view_resolution = ResearchGatewayResolution(
-        chart=contract_charts[0],
-        charts=contract_charts,
+        chart=unitless_table_chart,
+        charts=(unitless_table_chart, *contract_charts[1:]),
         warnings=(),
     )
     original_plan_loader = delivery_module._load_plan
@@ -2211,7 +2217,7 @@ def main() -> None:
     assert any(getattr(shape, "has_table", False) for shape in generic_presentation.slides[4].shapes)
     assert any(getattr(shape, "has_chart", False) for shape in generic_presentation.slides[5].shapes)
     assert any(getattr(shape, "has_chart", False) for shape in generic_presentation.slides[6].shapes)
-    assert "101 项" in generic_chart_text and "111 项" in generic_chart_text
+    assert "101" in generic_chart_text and "111" in generic_chart_text
     assert contract_charts[1].title in all_slide_text[3]
     assert contract_charts[2].title in all_slide_text[4]
     assert contract_charts[3].title in all_slide_text[5]

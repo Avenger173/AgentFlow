@@ -1847,8 +1847,7 @@ def _verify_studio_presentation(
             # artifact 中有元数据还不够。表格逐项回读可见单元格；原生 Chart 则直接读取
             # 内嵌 workbook 系列值，避免长图表的数据标签被视觉截短后产生假失败。
             if chart.chart_type in {"comparison_table", "trend_table"}:
-                expected_values = [_format_chart_value(point, chart) for point in chart.points]
-                if not all(value in chart_text for value in expected_values):
+                if not _research_table_values_present(chart_slide, chart):
                     raise PresentationStudioPlanConflictError("PPT 数据表缺少已验证数值，已停止交付。")
             elif not _native_chart_values_match(chart_slide, chart):
                 raise PresentationStudioPlanConflictError("PPT 原生 Chart 的内嵌数据与验证结果不一致，已停止交付。")
@@ -1880,6 +1879,26 @@ def _research_source_marker_present(source_text: str, source: object) -> bool:
         and title_prefix in source_text
         and hostname
         and hostname in source_text
+    )
+
+
+def _research_table_values_present(slide: object, chart: ResearchGatewayChartData) -> bool:
+    """按可编辑表格单元格确认数据，忽略 PPTX 保存时规范化的首尾空白。"""
+
+    cell_values = [
+        cell.text.strip()
+        for shape in slide.shapes
+        if getattr(shape, "has_table", False)
+        for row in shape.table.rows
+        for cell in row.cells
+    ]
+    expected_values = [
+        _format_chart_value(point, chart).strip()
+        for point in chart.points
+    ]
+    return bool(cell_values) and all(
+        value and any(value in cell_value for cell_value in cell_values)
+        for value in expected_values
     )
 
 
