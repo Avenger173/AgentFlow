@@ -20,6 +20,7 @@ from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from statistics import mean
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
@@ -42,7 +43,8 @@ from app.database.memory_repository import (  # noqa: E402
     search_long_term_memories,
 )
 from app.database.sqlite import get_connection  # noqa: E402
-from app.schemas.chat import WorkflowPlanPreferences  # noqa: E402
+from app.schemas.chat import ChatRequest, WorkflowPlanPreferences  # noqa: E402
+from app.services.agent_catalog import get_agent  # noqa: E402
 from app.services.commander_memory import retrieve_commander_memory_context  # noqa: E402
 from app.services.commander_intent import resolve_commander_intent_candidate  # noqa: E402
 from app.services.conversation_memory import (  # noqa: E402
@@ -51,6 +53,9 @@ from app.services.conversation_memory import (  # noqa: E402
     sanitize_conversation_text,
 )
 from app.services.long_term_memory import LongTermMemorySafetyError, sanitize_memory_text  # noqa: E402
+from app.services.llm_chat import LlmChatError, create_llm_chat_response  # noqa: E402
+from app.services.model_gateway import ModelGatewayError  # noqa: E402
+from app.services.runtime_preferences_store import StoredRuntimePreferences  # noqa: E402
 
 
 EXPECTED_CATEGORY_COUNTS = {
@@ -60,6 +65,12 @@ EXPECTED_CATEGORY_COUNTS = {
     "long_term_retrieval": 8,
     "scope_isolation": 6,
     "privacy": 6,
+}
+GATE_PROFILE_CATEGORIES = {
+    # 全量门禁保留全部 required，用于 MEM-7 前的最终验收；阶段门禁只选择当前阶段已承诺
+    # 修复的能力与既有防回归项，不能把 MEM-2 的未实施状态模型误报成 MEM-1 实现失败。
+    "all": None,
+    "mem1": {"baseline_probe", "compaction", "long_term_retrieval", "scope_isolation", "privacy"},
 }
 SYNTHETIC_INPUTS = {
     "synthetic_secret": "模拟凭据 sk-fixtureonly00000000，不代表真实密钥。",
@@ -109,6 +120,7 @@ def _validate_probes(probes: list[dict[str, Any]]) -> None:
     expected_ids = {
         "probe_intent_uses_latest_conversation_tail",
         "probe_memory_usage_waits_for_success",
+        "probe_model_failure_does_not_mark_memory",
     }
     if set(probe_ids) != expected_ids or len(probe_ids) != len(expected_ids):
         raise ValueError("记忆评测的 MEM-1 确定性探针不完整。")
@@ -174,6 +186,8 @@ def _run_probe(probe: dict[str, Any]) -> EvaluationResult:
             return _run_intent_context_tail_probe(probe, started)
         if operation == "memory_usage_after_success":
             return _run_memory_usage_after_success_probe(probe, started)
+        if operation == "model_failure_usage":
+            return _run_model_failure_usage_probe(probe, started)
         return _result(probe, "failed", started, reason=f"未知基线探针：{operation}")
     except Exception as exc:
         return _result(probe, "failed", started, reason=f"{type(exc).__name__}: {exc}")
@@ -241,6 +255,65 @@ def _run_memory_usage_after_success_probe(probe: dict[str, Any], started: float)
         "passed" if unchanged else "failed",
         started,
         last_used_at_unchanged_before_success=unchanged,
+    )
+
+
+def _run_model_failure_usage_probe(probe: dict[str, Any], started: float) -> EvaluationResult:
+    with get_connection() as connection:
+        connection.execute("DELETE FROM long_term_memories")
+    record = create_long_term_memory(
+        kind="project_constraint",
+        scope="project:eval_failure",
+        title="合成失败路径约束",
+        summary="失败路径也不能提前更新使用时间。",
+        tags=["失败路径"],
+        source_task_id=None,
+        user_confirmed=True,
+    )
+    commander = get_agent("commander_agent")
+    if commander is None:
+        raise RuntimeError("离线评测未找到 Commander Agent。")
+
+    class FailingRuntime:
+        model = "synthetic-failure-model"
+
+        async def chat(self, *, system_prompt: str, user_message: str) -> str:
+            del system_prompt, user_message
+            raise ModelGatewayError("synthetic model failure")
+
+    failed_as_expected = False
+    with (
+        patch(
+            "app.services.llm_chat.load_runtime_preferences",
+            return_value=StoredRuntimePreferences(memory_enabled=True),
+        ),
+        patch(
+            "app.services.llm_chat.resolve_model_runtime_for_route",
+            return_value=SimpleNamespace(runtime=FailingRuntime()),
+        ),
+        patch("app.services.llm_chat.should_resolve_commander_intent", return_value=False),
+    ):
+        try:
+            asyncio.run(
+                create_llm_chat_response(
+                    request=ChatRequest(
+                        message="请按失败路径约束处理。",
+                        project_scope="project:eval_failure",
+                    ),
+                    agent=commander,
+                    message="请按失败路径约束处理。",
+                )
+            )
+        except LlmChatError:
+            failed_as_expected = True
+    unchanged = not get_long_term_memory(record.memory_id).last_used_at
+    passed = failed_as_expected and unchanged
+    return _result(
+        probe,
+        "passed" if passed else "failed",
+        started,
+        model_failure_observed=failed_as_expected,
+        last_used_at_unchanged_after_model_failure=unchanged,
     )
 
 
@@ -540,6 +613,7 @@ def _percentile(values: list[float], quantile: float) -> float | None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="运行 AgentFlow 记忆系统离线质量评测。")
     parser.add_argument("--mode", choices=("baseline", "gate"), default="baseline")
+    parser.add_argument("--gate-profile", choices=tuple(GATE_PROFILE_CATEGORIES), default="all")
     args = parser.parse_args()
 
     cases, probe_cases = _load_cases()
@@ -547,7 +621,14 @@ def main() -> int:
     probes = [_run_probe(probe) for probe in probe_cases]
     report = _build_report(results, probes)
     print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
-    required_unpassed = [item for item in [*results, *probes] if item.quality_gate == "required" and item.status != "passed"]
+    gate_categories = GATE_PROFILE_CATEGORIES[args.gate_profile]
+    required_unpassed = [
+        item
+        for item in [*results, *probes]
+        if item.quality_gate == "required"
+        and item.status != "passed"
+        and (gate_categories is None or item.category in gate_categories)
+    ]
     if args.mode == "gate" and required_unpassed:
         return 1
     return 0

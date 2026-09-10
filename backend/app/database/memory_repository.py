@@ -177,11 +177,22 @@ def search_long_term_memories(
     关键词和中文二字片段足以服务最小上下文注入，并且结果稳定、可解释、零网络开销。
     """
 
-    candidates = [
-        item
-        for item in list_long_term_memories(include_disabled=False)
-        if item.scope in scopes and item.user_confirmed
-    ]
+    normalized_scopes = sorted({scope.strip() for scope in scopes if scope and scope.strip()})
+    if not normalized_scopes:
+        return []
+    result_limit = max(1, min(limit, 3))
+    candidate_pool_limit = 200
+    scope_placeholders = ",".join("?" for _ in normalized_scopes)
+    with get_connection() as connection:
+        rows = connection.execute(
+            "SELECT * FROM long_term_memories "
+            f"WHERE scope IN ({scope_placeholders}) AND enabled = 1 AND user_confirmed = 1 "
+            "ORDER BY updated_at DESC, created_at DESC LIMIT ?",
+            [*normalized_scopes, candidate_pool_limit],
+        ).fetchall()
+    # 范围、开关和确认状态必须在 SQL 中先过滤再 LIMIT。若先从全库取最近 200 条，其他项目
+    # 的新记录会把当前项目的较早约束挤出候选池，表现为“没有泄漏但错误漏召回”。
+    candidates = [_row_to_record(row) for row in rows]
     terms = _search_terms(query)
     scored: list[tuple[int, LongTermMemoryRecord]] = []
     for item in candidates:
@@ -202,7 +213,7 @@ def search_long_term_memories(
         if score > 0:
             scored.append((score, item))
     scored.sort(key=lambda pair: (pair[0], pair[1].updated_at), reverse=True)
-    return [item for _, item in scored[: max(1, min(limit, 3))]]
+    return [item for _, item in scored[:result_limit]]
 
 
 def mark_long_term_memories_used(memory_ids: list[str]) -> None:

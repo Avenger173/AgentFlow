@@ -3,7 +3,10 @@ from uuid import uuid4
 from app.schemas.chat import ChatRequest, ChatResponse, WorkflowPlan
 from app.services.agent_catalog import list_agents
 from app.services.commander import COMMANDER_AGENT_ID, build_commander_reply, create_commander_plan
-from app.services.commander_memory import retrieve_commander_memory_context
+from app.services.commander_memory import (
+    mark_commander_memory_context_used,
+    retrieve_commander_memory_context,
+)
 from app.services.conversation_memory import PreparedConversation, build_conversation_plan_summary
 from app.services.runtime_preferences_store import load_runtime_preferences
 from app.workflow.dry_run import run_workflow_dry_run
@@ -53,6 +56,9 @@ def create_mock_chat_response(
             available_agents=agents,
         )
     reply = build_mock_reply(agent_id=agent_id, message=message, has_plan=workflow_plan is not None)
+    if workflow_plan is not None:
+        # 这里已完成稳定计划、dry-run 与客户回复构造；此前的候选检索不应改变 last_used_at。
+        mark_commander_memory_context_used(memory_context)
 
     return ChatResponse(
         task_id=task_id,
@@ -79,12 +85,15 @@ def build_mock_workflow_plan(message: str) -> WorkflowPlan:
     """
 
     preferences = load_runtime_preferences().to_workflow_preferences()
-    return create_commander_plan(
+    memory_context = retrieve_commander_memory_context(
+        user_goal=message,
+        preferences=preferences,
+    )
+    plan = create_commander_plan(
         message,
         available_agents=list_agents(),
         preferences=preferences,
-        memory_context=retrieve_commander_memory_context(
-            user_goal=message,
-            preferences=preferences,
-        ),
+        memory_context=memory_context,
     )
+    mark_commander_memory_context_used(memory_context)
+    return plan

@@ -13,6 +13,12 @@
       "quality_gate": "required",
       "operation": "memory_usage_after_success",
       "expected": {"last_used_at_unchanged_before_success": true}
+    },
+    {
+      "id": "probe_model_failure_does_not_mark_memory",
+      "quality_gate": "required",
+      "operation": "model_failure_usage",
+      "expected": {"last_used_at_unchanged_after_model_failure": true}
     }
   ],
   "cases": [

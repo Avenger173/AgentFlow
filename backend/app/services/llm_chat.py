@@ -13,7 +13,10 @@ from app.services.commander import (
     create_commander_plan,
     reply_conflicts_with_commander_plan,
 )
-from app.services.commander_memory import retrieve_commander_memory_context
+from app.services.commander_memory import (
+    mark_commander_memory_context_used,
+    retrieve_commander_memory_context,
+)
 from app.services.commander_intent import (
     CommanderIntentResolutionError,
     resolve_commander_intent_candidate,
@@ -186,6 +189,8 @@ async def create_llm_chat_response(
             available_agents=agents,
             model_routes=model_routes,
         )
+        # 记忆已经进入经校验计划和成功回复；仅在这个终点更新使用时间，模型异常不会污染审计。
+        mark_commander_memory_context_used(memory_context)
 
     return ChatResponse(
         task_id=task_id,

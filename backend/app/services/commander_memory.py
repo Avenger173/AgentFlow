@@ -26,7 +26,10 @@ def retrieve_commander_memory_context(
     scopes = {"global"}
     if project_scope:
         scopes.add(project_scope)
-    records = search_long_term_memories(query=user_goal, scopes=scopes, limit=3)
-    # 只在实际创建计划的路径标记“已使用”，避免设置页浏览、健康检查等操作污染使用时间。
+    return search_long_term_memories(query=user_goal, scopes=scopes, limit=3)
+
+
+def mark_commander_memory_context_used(records: list[LongTermMemoryRecord]) -> None:
+    """在记忆已进入成功计划或回复后记录使用时间，不把一次候选读取当作成功使用。"""
+
     mark_long_term_memories_used([item.memory_id for item in records])
-    return records

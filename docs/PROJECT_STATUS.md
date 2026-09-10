@@ -35,7 +35,7 @@
 
 > **2026-09-10 Agent 记忆管理对照与短期记忆修正：**已按持续技术基线复核会话、长期记忆、Runtime 状态和程序性规则的真实调用链。短期记忆从固定 8 条升级为最多 20 条、约 18k token 的受控近轮窗口，Prompt 不再把原文二次截成 6 条、每条 420 字；归档单条上限增至 8000 字，旧消息压缩为带 task_id 的目标/约束/待办/结果摘要，并暴露摘要水位与估算 token 供诊断。长期记忆仍保持用户确认、默认关闭和 global/project 隔离，不照搬静默永久写入；向量 + BM25、typed session state 和会话 TTL 仍是有验收门槛的后续项。完整结论见 `docs/AGENT_MEMORY_IMPLEMENTATION_AUDIT.md`。
 
-> **2026-09-10 Agent 记忆系统实施门禁：**已建立 `docs/AGENT_MEMORY_DEVELOPMENT_PLAN.md`，把后续开发拆为 MEM-0 至 MEM-7：先固定 48 例离线评测并修复 Intent 尾部截断、长期记忆 scope-before-limit 等确定性遗漏，再建设 Current Working State、统一 ContextEnvelope、候选生命周期和清理入口，最后以 Recall@3/MRR、范围泄漏、预算、恢复与延迟指标决定 BM25/Hybrid 准入并进行真实模型/Qt 验收。MEM-0 已完成：48 个分类夹具和 2 个确定性探针连续三次离线 baseline 得到相同 required 结果，当前 26 通过、4 个确定性失败（Intent 尾部截断、scope-before-limit 两例、成功前更新 `last_used_at`）、20 个结构化状态/任务投影未支持；详见 `docs/AGENT_MEMORY_MEM0_BASELINE.md`。本轮未修改生产记忆逻辑，不把待实施能力计入项目完成度或简历。
+> **2026-09-10 Agent 记忆系统实施门禁：**已建立 `docs/AGENT_MEMORY_DEVELOPMENT_PLAN.md`，把后续开发拆为 MEM-0 至 MEM-7：先固定 48 例离线评测并修复 Intent 尾部截断、长期记忆 scope-before-limit 等确定性遗漏，再建设 Current Working State、统一 ContextEnvelope、候选生命周期和清理入口，最后以 Recall@3/MRR、范围泄漏、预算、恢复与延迟指标决定 BM25/Hybrid 准入并进行真实模型/Qt 验收。MEM-0、MEM-1 已完成：48 个分类夹具加 3 个实现探针当前 31 项通过、20 项仅属 MEM-2 的结构化状态/任务投影未支持；MEM-1 使最新 Intent 要求可保留、500 条跨项目噪声下 Recall@3 达 100%、模型失败不再更新 `last_used_at`。本轮未把未实施能力计入项目完成度或简历；修复前证据与 MEM-1 验收分别见 `docs/AGENT_MEMORY_MEM0_BASELINE.md`、`docs/AGENT_MEMORY_MEM1_ACCEPTANCE.md`。
 
 > **2026-09-08 LGM5.7 CLI 自验证：**`verify_lgm57_trial_cli.py` 会在独立临时 SQLite 中真实执行候选目录与成对准备 CLI，覆盖候选列出、缺少 `--confirm-prepare` 时拒绝写入、确认后创建 Native/Graph Runtime 对及输出脱敏。内部开发验证不再要求用户手动运行该命令；真实任务库没有 C6.4 候选只代表没有经批准的真实组合计划，不能通过伪造任务绕过试点授权。
 

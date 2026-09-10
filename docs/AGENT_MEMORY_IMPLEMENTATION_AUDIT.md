@@ -4,7 +4,7 @@
 > 审计日期：2026-09-10
 > 原则：以真实调用链和离线回归为准，不把框架名或规划项当作已实现能力。
 
-后续实施顺序、数据契约和量化出口统一以 `docs/AGENT_MEMORY_DEVELOPMENT_PLAN.md` 为准；当前 MEM-0 夹具、指标和失败证据见 `docs/AGENT_MEMORY_MEM0_BASELINE.md`。
+后续实施顺序、数据契约和量化出口统一以 `docs/AGENT_MEMORY_DEVELOPMENT_PLAN.md` 为准；修复前的 MEM-0 夹具、指标和失败证据见 `docs/AGENT_MEMORY_MEM0_BASELINE.md`，MEM-1 修复验收见 `docs/AGENT_MEMORY_MEM1_ACCEPTANCE.md`。
 
 ## 1. 当前真实架构
 

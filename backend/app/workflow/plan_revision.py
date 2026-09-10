@@ -18,7 +18,10 @@ from app.schemas.plan_revisions import WorkflowPlanRevisionRequest
 from app.schemas.workflow import WorkflowRun
 from app.services.agent_catalog import list_agents
 from app.services.commander import create_commander_plan
-from app.services.commander_memory import retrieve_commander_memory_context
+from app.services.commander_memory import (
+    mark_commander_memory_context_used,
+    retrieve_commander_memory_context,
+)
 from app.workflow.dry_run import run_workflow_dry_run
 
 
@@ -82,4 +85,6 @@ def revise_workflow_plan(
             f"变更说明：{request.change_summary.strip()}"
         ),
     )
+    # 修订版 dry-run 与审计事件均已成功写入；现在才把注入该计划的长期记忆记作已使用。
+    mark_commander_memory_context_used(memory_context)
     return revised_plan, revised_run

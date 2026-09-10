@@ -1,6 +1,6 @@
 # AgentFlow 记忆系统 MEM-0 基线报告
 
-> 状态：MEM-0 出口已满足；MEM-1 待执行
+> 状态：初始 MEM-0 快照；MEM-1 已完成，后续结果见 `docs/AGENT_MEMORY_MEM1_ACCEPTANCE.md`
 >
 > 评测日期：2026-09-10
 >
@@ -72,4 +72,4 @@ cd D:\project\AgentFlow\AgentFlow\backend
 
 ## 6. MEM-0 结论
 
-MEM-0 的目标是建立脱敏夹具、真实失败快照和稳定门禁，而不是让旧实现通过未来能力测试。该目标已完成。下一阶段进入 MEM-1，只处理最新上下文截断、长期记忆 scope-before-limit 和 `last_used_at` 成功语义，并保持本报告的 expected 结果不变。
+MEM-0 的目标是建立脱敏夹具、真实失败快照和稳定门禁，而不是让旧实现通过未来能力测试。该目标已完成。MEM-1 已按本报告的 expected 结果修复最新上下文截断、长期记忆 scope-before-limit 和 `last_used_at` 成功语义；本报告保留为修复前的证据快照，不改写失败结果。
