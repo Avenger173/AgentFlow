@@ -21,6 +21,7 @@
 - `docs/AGENT_ENGINEERING_GUIDE.md`：记录 Agent / Harness / 检索 / 评估方法论。
 - `docs/Agent开发技术要点（持续更新）.md`：用户持续补充的技术学习基线；按本次主题读取，不直接当作项目已实现事实。
 - `docs/AGENT_MEMORY_IMPLEMENTATION_AUDIT.md`：记忆管理要求与真实实现、证据、差距、改进优先级和简历表述的当前对照。
+- `docs/AGENT_MEMORY_DEVELOPMENT_PLAN.md`：记忆系统 MEM-0 至 MEM-7 的目标架构、数据契约、量化验收和回退门禁。
 - `docs/AGENT_SPECIFICATIONS.md`：记录每个内置 Agent 的方案确认表；正式实现 Agent 前必须先讨论并确认。
 - `docs/KNOWLEDGE_BASE_PRODUCT_SPEC.md`：记录已批准的本地知识库产品边界、Retrieval 架构、K0-K5 门槛和验收；知识库开发前必须阅读。
 - `docs/KNOWLEDGE_BASE_K0_ADR.md`：记录 K0 的固定夹具、Windows 技术试验、依赖取舍和未决风险；进入 K1 前必须阅读。
@@ -33,6 +34,8 @@
 > 当前阶段以本节为准：阶段 5 内置 Agent MVP；知识库已完成 K4.1-K4.15、K5.1 本地检索短缓存、K5.2 Provider usage 基础可观测、K5.3 K4 任务指标聚合、K5.4 索引性能事实、K5.5 无变化索引快路径、K5.6 受控增量向量复用与 K5.7 上下文路由/预算边界，Commander 已完成 C5.1 的全库深度总结受控委派、C5.2 的父子状态镜像、C5.3 的关联工作台入口和 R5.4A/B/R5.4C 首版数据交付。文档助手与数据工作台是可用的基础闭环，仍保留后续扩展空间；资料对照仍仅在知识库工作台启动。
 
 > **2026-09-10 Agent 记忆管理对照与短期记忆修正：**已按持续技术基线复核会话、长期记忆、Runtime 状态和程序性规则的真实调用链。短期记忆从固定 8 条升级为最多 20 条、约 18k token 的受控近轮窗口，Prompt 不再把原文二次截成 6 条、每条 420 字；归档单条上限增至 8000 字，旧消息压缩为带 task_id 的目标/约束/待办/结果摘要，并暴露摘要水位与估算 token 供诊断。长期记忆仍保持用户确认、默认关闭和 global/project 隔离，不照搬静默永久写入；向量 + BM25、typed session state 和会话 TTL 仍是有验收门槛的后续项。完整结论见 `docs/AGENT_MEMORY_IMPLEMENTATION_AUDIT.md`。
+
+> **2026-09-10 Agent 记忆系统实施门禁：**已建立 `docs/AGENT_MEMORY_DEVELOPMENT_PLAN.md`，把后续开发拆为 MEM-0 至 MEM-7：先固定 48 例离线评测并修复 Intent 尾部截断、长期记忆 scope-before-limit 等确定性遗漏，再建设 Current Working State、统一 ContextEnvelope、候选生命周期和清理入口，最后以 Recall@3/MRR、范围泄漏、预算、恢复与延迟指标决定 BM25/Hybrid 准入并进行真实模型/Qt 验收。当前仅完成计划，不把待实施能力计入项目完成度或简历。
 
 > **2026-09-08 LGM5.7 CLI 自验证：**`verify_lgm57_trial_cli.py` 会在独立临时 SQLite 中真实执行候选目录与成对准备 CLI，覆盖候选列出、缺少 `--confirm-prepare` 时拒绝写入、确认后创建 Native/Graph Runtime 对及输出脱敏。内部开发验证不再要求用户手动运行该命令；真实任务库没有 C6.4 候选只代表没有经批准的真实组合计划，不能通过伪造任务绕过试点授权。
 

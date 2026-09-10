@@ -14,6 +14,7 @@ description: 开发 AgentFlow 项目时使用：本仓库是 C++ Qt 桌面端 + 
 - `docs/DEVELOPMENT_ROADMAP.md`：MVP、Beta、长期版的阶段门槛和当前下一步。
 - `docs/AGENT_ENGINEERING_GUIDE.md`：Agent 执行模式、评估、上下文、工具调用、失败恢复和成本控制准则。
 - `docs/Agent开发技术要点（持续更新）.md`：外部学习资料形成的持续技术基线。只有在用户要求技术对照、架构复审、简历提炼或该文档新增章节时才读取；每次必须重新读取当前内容，不能依赖上次摘要。
+- `docs/AGENT_MEMORY_DEVELOPMENT_PLAN.md`：涉及会话状态、Compaction、长期记忆、检索或记忆管理入口时的实施门禁；按 MEM-0 至 MEM-7 顺序推进，不跳过 required 验收。
 - `AgentFlow_初版规划.md`：涉及架构、Agent、工作流、插件、安全、打包时必须参考。
 - 涉及 Qt 页面结构、视觉、交互、动效或无障碍时：`docs/前端设计可借鉴文档.md`。新页面或较大信息架构改动要阅读全文；小型 UI 修复至少核对 `docs/DEVELOPMENT_ROADMAP.md` 的“前端体验验收基线”。
 
