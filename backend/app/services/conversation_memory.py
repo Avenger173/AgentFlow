@@ -12,6 +12,10 @@ from app.database.conversation_repository import (
 )
 from app.schemas.chat import WorkflowMaterialBinding
 from app.schemas.conversation import ConversationContext
+from app.services.commander_memory_proposals import (
+    persist_memory_proposal_drafts,
+    prepare_pre_compaction_memory_proposals,
+)
 from app.services.conversation_working_state import (
     build_working_state_prompt_summary,
     record_successful_user_message,
@@ -92,6 +96,14 @@ def persist_successful_conversation_turn(
         user_message,
         maximum=CONVERSATION_ARCHIVE_MESSAGE_MAX_CHARS,
     )
+    # 候选提取必须发生在 save_conversation_turn 的 Compaction 之前，才能覆盖刚好被压缩的显式
+    # 长期表达；真正落库仍等成功归档与状态 Reducer 完成后，失败请求不会留下孤立候选。
+    proposal_drafts = prepare_pre_compaction_memory_proposals(
+        task_id=task_id,
+        project_scope=prepared.context.session.project_scope,
+        conversation_id=prepared.context.session.conversation_id,
+        user_message=sanitized_user_message,
+    )
     save_conversation_turn(
         conversation_id=prepared.context.session.conversation_id,
         user_message=sanitized_user_message,
@@ -111,6 +123,7 @@ def persist_successful_conversation_turn(
         message=sanitized_user_message,
         task_id=task_id,
     )
+    persist_memory_proposal_drafts(proposal_drafts)
     return get_conversation_context(prepared.context.session.conversation_id)
 
 

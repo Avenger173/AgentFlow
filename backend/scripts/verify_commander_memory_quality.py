@@ -96,6 +96,16 @@ GATE_PROFILE_CATEGORIES = {
         "scope_isolation",
         "privacy",
     },
+    # MEM-4 has a dedicated lifecycle verifier and keeps MEM-3's full fixture regression floor.
+    "mem4": {
+        "baseline_probe",
+        "state_update",
+        "task_recovery",
+        "compaction",
+        "long_term_retrieval",
+        "scope_isolation",
+        "privacy",
+    },
 }
 SYNTHETIC_INPUTS = {
     "synthetic_secret": "模拟凭据 sk-fixtureonly00000000，不代表真实密钥。",

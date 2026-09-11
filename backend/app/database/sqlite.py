@@ -1169,6 +1169,64 @@ def _apply_commander_conversation_working_state_v1(connection: sqlite3.Connectio
         ON commander_conversation_working_states(project_scope, updated_at DESC, conversation_id DESC);
         """
     )
+
+
+def _apply_long_term_memory_candidate_lifecycle_v1(connection: sqlite3.Connection) -> None:
+    """为确认式长期记忆增加候选账本与同键替代关系。
+
+    候选层只保存已脱敏的短事实和来源标识，绝不复制聊天原文、任务日志或交付正文。它与正式
+    记忆分表，使未确认、已拒绝和已替代记录不可能被检索路径误当作已生效偏好。
+    """
+
+    connection.executescript(
+        """
+        ALTER TABLE long_term_memories ADD COLUMN memory_key TEXT NOT NULL DEFAULT '';
+        ALTER TABLE long_term_memories ADD COLUMN replaced_by_memory_id TEXT NOT NULL DEFAULT '';
+
+        CREATE INDEX idx_long_term_memories_active_key
+        ON long_term_memories(scope, kind, memory_key, enabled, updated_at DESC);
+
+        CREATE TABLE long_term_memory_proposals (
+            proposal_id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK (kind IN ('user_preference', 'project_constraint', 'experience')),
+            suggested_scope TEXT NOT NULL,
+            title TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            tags_json TEXT NOT NULL DEFAULT '[]',
+            reason TEXT NOT NULL DEFAULT '',
+            source_type TEXT NOT NULL CHECK (
+                source_type IN ('explicit_user', 'verified_project_constraint', 'successful_task_experience')
+            ),
+            source_id TEXT NOT NULL,
+            source_conversation_id TEXT NOT NULL DEFAULT '',
+            conflict_key TEXT NOT NULL,
+            fingerprint TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL CHECK (
+                status IN ('pending', 'confirmed', 'rejected', 'expired', 'superseded')
+            ) DEFAULT 'pending',
+            replaces_proposal_id TEXT NOT NULL DEFAULT '',
+            replaced_by_proposal_id TEXT NOT NULL DEFAULT '',
+            replaces_memory_id TEXT NOT NULL DEFAULT '',
+            confirmed_memory_id TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            confirmed_at TEXT NOT NULL DEFAULT '',
+            rejected_at TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE INDEX idx_long_term_memory_proposals_task_status
+        ON long_term_memory_proposals(task_id, status, updated_at DESC, created_at DESC);
+
+        CREATE INDEX idx_long_term_memory_proposals_scope_status
+        ON long_term_memory_proposals(suggested_scope, status, updated_at DESC, created_at DESC);
+
+        CREATE INDEX idx_long_term_memory_proposals_conflict
+        ON long_term_memory_proposals(suggested_scope, kind, conflict_key, status, updated_at DESC);
+        """
+    )
+
+
 def _apply_langgraph_runtime_bridges_v1(connection: sqlite3.Connection) -> None:
     """建立 LGM5 主任务与 LangGraph checkpoint 的脱敏关联表。"""
 
@@ -1371,5 +1429,14 @@ _SCHEMA_MIGRATIONS: tuple[_SchemaMigration, ...] = (
             "forward_only_lazy_backfill"
         ),
         apply=_apply_commander_conversation_working_state_v1,
+    ),
+    _SchemaMigration(
+        migration_id="20260910_long_term_memory_candidate_lifecycle_v1",
+        signature=(
+            "long_term_memories:v2;memory_key_and_replaced_by_memory_id;"
+            "long_term_memory_proposals:v1;confirmed_rejected_expired_superseded;"
+            "sanitized_candidate_fact_and_source_id_only"
+        ),
+        apply=_apply_long_term_memory_candidate_lifecycle_v1,
     ),
 )

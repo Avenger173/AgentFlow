@@ -8,6 +8,12 @@ from pydantic import BaseModel, Field
 # 会话状态已经由任务、计划和事件表保存；本模块只处理跨任务仍有价值、且用户明确确认过的
 # 长期事实。把二者分开可以避免把完整聊天记录误当成“记忆”无限累积。
 LongTermMemoryKind = Literal["user_preference", "project_constraint", "experience"]
+LongTermMemoryProposalStatus = Literal["pending", "confirmed", "rejected", "expired", "superseded"]
+LongTermMemoryProposalSourceType = Literal[
+    "explicit_user",
+    "verified_project_constraint",
+    "successful_task_experience",
+]
 
 
 class LongTermMemoryCreateRequest(BaseModel):
@@ -66,10 +72,10 @@ class LongTermMemoryClearResponse(BaseModel):
 
 
 class LongTermMemoryProposal(BaseModel):
-    """任务结束后供客户复核的长期记忆候选。
+    """供客户复核的持久化长期记忆候选。
 
-    候选不是记忆记录，也不意味着系统已经保存任何内容。它只保留可编辑的短事实与来源任务，
-    最终仍要由客户明确确认后才能写入长期表。
+    候选不是记忆记录，也不意味着系统已经保存任何内容。它只保留经脱敏压缩的短事实、来源
+    标识和状态关系；最终仍要由客户明确确认后才能写入长期表。
     """
 
     proposal_id: str
@@ -81,11 +87,22 @@ class LongTermMemoryProposal(BaseModel):
     suggested_scope: str = Field(default="global", min_length=1, max_length=80)
     reason: str = Field(default="", max_length=500)
     requires_user_confirmation: bool = True
+    status: LongTermMemoryProposalStatus = "pending"
+    source_type: LongTermMemoryProposalSourceType = "explicit_user"
+    source_id: str = Field(default="", max_length=180)
+    source_conversation_id: str | None = Field(default=None, max_length=64)
+    replaces_proposal_id: str | None = Field(default=None, max_length=120)
+    replaced_by_proposal_id: str | None = Field(default=None, max_length=120)
+    replaces_memory_id: str | None = Field(default=None, max_length=120)
+    confirmed_memory_id: str | None = Field(default=None, max_length=120)
+    created_at: str = ""
+    updated_at: str = ""
 
 
 class LongTermMemoryProposalListResponse(BaseModel):
-    task_id: str
-    items: list[LongTermMemoryProposal] = Field(default_factory=list, max_length=3)
+    task_id: str | None = None
+    scope: str | None = None
+    items: list[LongTermMemoryProposal] = Field(default_factory=list, max_length=200)
     note: str = Field(default="", max_length=500)
 
 
@@ -99,3 +116,9 @@ class LongTermMemoryProposalConfirmRequest(BaseModel):
     summary: str = Field(min_length=2, max_length=1000)
     tags: list[str] = Field(default_factory=list, max_length=8)
     user_confirmed: bool = False
+
+
+class LongTermMemoryProposalRejectRequest(BaseModel):
+    """拒绝待确认候选需要显式确认；拒绝操作可安全重试。"""
+
+    user_rejected: bool = False

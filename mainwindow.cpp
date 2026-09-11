@@ -1265,6 +1265,8 @@ void MainWindow::setupBackendIntegration()
     connect(backendClient, &BackendClient::taskMemoryProposalsFailed, this, &MainWindow::handleTaskMemoryProposalsFailed);
     connect(backendClient, &BackendClient::taskMemoryProposalConfirmed, this, &MainWindow::handleTaskMemoryProposalConfirmed);
     connect(backendClient, &BackendClient::taskMemoryProposalConfirmFailed, this, &MainWindow::handleTaskMemoryProposalConfirmFailed);
+    connect(backendClient, &BackendClient::taskMemoryProposalRejected, this, &MainWindow::handleTaskMemoryProposalRejected);
+    connect(backendClient, &BackendClient::taskMemoryProposalRejectFailed, this, &MainWindow::handleTaskMemoryProposalRejectFailed);
     connect(backendClient, &BackendClient::taskPlanVersionsReceived, this, &MainWindow::handleDispatchPlanVersionsReceived);
     connect(backendClient, &BackendClient::taskPlanVersionsFailed, this, &MainWindow::handleDispatchPlanVersionsFailed);
     connect(backendClient, &BackendClient::taskPlanVersionReceived, this, &MainWindow::handleDispatchPlanVersionReceived);
@@ -1291,6 +1293,12 @@ void MainWindow::setupBackendIntegration()
     connect(backendClient, &BackendClient::runtimePreferencesSaveFailed, this, &MainWindow::handleRuntimePreferencesSaveFailed);
     connect(backendClient, &BackendClient::longTermMemoriesReceived, this, &MainWindow::handleLongTermMemoriesReceived);
     connect(backendClient, &BackendClient::longTermMemoriesFailed, this, &MainWindow::handleLongTermMemoriesFailed);
+    connect(backendClient, &BackendClient::longTermMemoryProposalsReceived, this, &MainWindow::handleLongTermMemoryProposalsReceived);
+    connect(backendClient, &BackendClient::longTermMemoryProposalsFailed, this, &MainWindow::handleLongTermMemoryProposalsFailed);
+    connect(backendClient, &BackendClient::longTermMemoryProposalConfirmed, this, &MainWindow::handleLongTermMemoryProposalConfirmed);
+    connect(backendClient, &BackendClient::longTermMemoryProposalConfirmFailed, this, &MainWindow::handleLongTermMemoryProposalConfirmFailed);
+    connect(backendClient, &BackendClient::longTermMemoryProposalRejected, this, &MainWindow::handleLongTermMemoryProposalRejected);
+    connect(backendClient, &BackendClient::longTermMemoryProposalRejectFailed, this, &MainWindow::handleLongTermMemoryProposalRejectFailed);
     connect(backendClient, &BackendClient::longTermMemoryMutationCompleted, this, &MainWindow::handleLongTermMemoryMutationCompleted);
     connect(backendClient, &BackendClient::longTermMemoryMutationFailed, this, &MainWindow::handleLongTermMemoryMutationFailed);
     connect(backendClient, &BackendClient::taskArtifactsReceived, this, &MainWindow::handleTaskArtifactsReceived);
@@ -12469,6 +12477,10 @@ void MainWindow::openLongTermMemoryManager()
     auto *buttonLayout = new QHBoxLayout();
     auto *newButton = new QPushButton(QStringLiteral("新建"), editorFrame);
     newButton->setObjectName(QStringLiteral("ghostButton"));
+    auto *proposalsButton = new QPushButton(QStringLiteral("待确认候选"), editorFrame);
+    proposalsButton->setObjectName(QStringLiteral("ghostButton"));
+    proposalsButton->setIcon(style()->standardIcon(QStyle::SP_FileDialogDetailedView));
+    proposalsButton->setToolTip(QStringLiteral("查看尚未保存为长期记忆的候选。"));
     auto *deleteButton = new QPushButton(QStringLiteral("删除"), editorFrame);
     deleteButton->setObjectName(QStringLiteral("ghostButton"));
     auto *clearButton = new QPushButton(QStringLiteral("清空全部"), editorFrame);
@@ -12476,6 +12488,7 @@ void MainWindow::openLongTermMemoryManager()
     auto *saveButton = new QPushButton(QStringLiteral("保存记忆"), editorFrame);
     saveButton->setObjectName(QStringLiteral("primaryButton"));
     buttonLayout->addWidget(newButton);
+    buttonLayout->addWidget(proposalsButton);
     buttonLayout->addWidget(deleteButton);
     buttonLayout->addWidget(clearButton);
     buttonLayout->addStretch(1);
@@ -12498,6 +12511,7 @@ void MainWindow::openLongTermMemoryManager()
     longTermMemoryStatusLabel = statusLabel;
     longTermMemorySaveButton = saveButton;
     longTermMemoryDeleteButton = deleteButton;
+    longTermMemoryProposalsButton = proposalsButton;
 
     connect(table, &QTableWidget::itemSelectionChanged, this, [this]() {
         if (!longTermMemoryTable) {
@@ -12515,6 +12529,18 @@ void MainWindow::openLongTermMemoryManager()
             longTermMemoryTable->clearSelection();
         }
         populateLongTermMemoryEditor(nullptr);
+    });
+    connect(proposalsButton, &QPushButton::clicked, this, [this]() {
+        if (!backendClient) {
+            return;
+        }
+        if (longTermMemoryProposalsButton) {
+            longTermMemoryProposalsButton->setEnabled(false);
+        }
+        if (longTermMemoryStatusLabel) {
+            longTermMemoryStatusLabel->setText(QStringLiteral("正在读取待确认候选"));
+        }
+        backendClient->requestLongTermMemoryProposals();
     });
     connect(saveButton, &QPushButton::clicked, this, [this]() {
         if (!backendClient || !longTermMemoryKindCombo || !longTermMemoryTitleInput
@@ -12591,6 +12617,7 @@ void MainWindow::openLongTermMemoryManager()
         currentLongTermMemoryId.clear();
         currentLongTermMemories.clear();
         longTermMemoryLoading = false;
+        longTermMemoryProposalsButton = nullptr;
     });
 
     populateLongTermMemoryEditor(nullptr);
@@ -12684,6 +12711,225 @@ void MainWindow::handleLongTermMemoryMutationFailed(const QString &message)
     }
 }
 
+void MainWindow::handleLongTermMemoryProposalsReceived(const LongTermMemoryProposalListResult &result)
+{
+    if (longTermMemoryProposalsButton) {
+        longTermMemoryProposalsButton->setEnabled(true);
+    }
+    if (result.items.isEmpty()) {
+        if (longTermMemoryStatusLabel) {
+            longTermMemoryStatusLabel->setText(
+                result.note.isEmpty() ? QStringLiteral("当前没有待确认候选") : result.note);
+        }
+        return;
+    }
+    openLongTermMemoryProposalReview(result);
+}
+
+void MainWindow::handleLongTermMemoryProposalsFailed(const QString &message)
+{
+    if (longTermMemoryProposalsButton) {
+        longTermMemoryProposalsButton->setEnabled(true);
+    }
+    if (longTermMemoryStatusLabel) {
+        longTermMemoryStatusLabel->setText(QStringLiteral("候选加载失败"));
+        longTermMemoryStatusLabel->setToolTip(message);
+    }
+}
+
+void MainWindow::openLongTermMemoryProposalReview(const LongTermMemoryProposalListResult &result)
+{
+    if (result.items.isEmpty()) {
+        return;
+    }
+    if (longTermMemoryProposalDialog) {
+        longTermMemoryProposalDialog->close();
+    }
+
+    auto *dialog = new QDialog(this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowTitle(QStringLiteral("待确认长期记忆"));
+    dialog->setMinimumSize(620, 470);
+    dialog->resize(720, 560);
+    longTermMemoryProposalDialog = dialog;
+
+    const QList<TaskMemoryProposalInfo> proposals = result.items;
+    auto *layout = new QVBoxLayout(dialog);
+    layout->setContentsMargins(22, 18, 22, 18);
+    layout->setSpacing(12);
+    auto *selector = new QComboBox(dialog);
+    for (const TaskMemoryProposalInfo &proposal : proposals) {
+        selector->addItem(
+            QStringLiteral("%1 - %2").arg(longTermMemoryKindText(proposal.kind), proposal.title),
+            proposal.proposalId);
+    }
+    layout->addWidget(selector);
+
+    auto *form = new QFormLayout();
+    form->setHorizontalSpacing(12);
+    form->setVerticalSpacing(10);
+    auto *kindLabel = new QLabel(dialog);
+    auto *scopeInput = new QLineEdit(dialog);
+    scopeInput->setPlaceholderText(QStringLiteral("global 或 project:项目标识"));
+    auto *titleInput = new QLineEdit(dialog);
+    auto *summaryInput = new QPlainTextEdit(dialog);
+    summaryInput->setMinimumHeight(120);
+    auto *tagsInput = new QLineEdit(dialog);
+    tagsInput->setPlaceholderText(QStringLiteral("可选标签，用逗号分隔"));
+    form->addRow(QStringLiteral("类型"), kindLabel);
+    form->addRow(QStringLiteral("保存范围"), scopeInput);
+    form->addRow(QStringLiteral("标题"), titleInput);
+    form->addRow(QStringLiteral("摘要"), summaryInput);
+    form->addRow(QStringLiteral("标签"), tagsInput);
+    layout->addLayout(form, 1);
+
+    auto *reasonLabel = new QLabel(dialog);
+    reasonLabel->setObjectName(QStringLiteral("tinyText"));
+    reasonLabel->setWordWrap(true);
+    layout->addWidget(reasonLabel);
+    auto *statusLabel = new QLabel(dialog);
+    statusLabel->setObjectName(QStringLiteral("tinyText"));
+    layout->addWidget(statusLabel);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog);
+    auto *rejectButton = buttons->addButton(QStringLiteral("拒绝候选"), QDialogButtonBox::DestructiveRole);
+    auto *confirmButton = buttons->addButton(QStringLiteral("确认保存"), QDialogButtonBox::AcceptRole);
+    layout->addWidget(buttons);
+
+    auto populate = [this, proposals, kindLabel, scopeInput, titleInput, summaryInput, tagsInput, reasonLabel](int index) {
+        if (index < 0 || index >= proposals.size()) {
+            return;
+        }
+        activeLongTermMemoryProposal = proposals.at(index);
+        kindLabel->setText(longTermMemoryKindText(activeLongTermMemoryProposal.kind));
+        scopeInput->setText(activeLongTermMemoryProposal.suggestedScope);
+        titleInput->setText(activeLongTermMemoryProposal.title);
+        summaryInput->setPlainText(activeLongTermMemoryProposal.summary);
+        tagsInput->setText(activeLongTermMemoryProposal.tags.join(QStringLiteral(", ")));
+        reasonLabel->setText(activeLongTermMemoryProposal.reason);
+    };
+    populate(0);
+    connect(selector, qOverload<int>(&QComboBox::currentIndexChanged), dialog, populate);
+    connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::close);
+    connect(confirmButton, &QPushButton::clicked, dialog, [this, scopeInput, titleInput, summaryInput, tagsInput]() {
+        if (!backendClient || !longTermMemoryProposalDialog) {
+            return;
+        }
+        const QString scope = scopeInput->text().trimmed().toLower();
+        const QString title = titleInput->text().trimmed();
+        const QString summary = summaryInput->toPlainText().trimmed();
+        static const QRegularExpression scopePattern(
+            QStringLiteral("^(global|project:[a-z0-9][a-z0-9_-]{0,63})$"));
+        if (title.size() < 2 || summary.size() < 2) {
+            if (longTermMemoryProposalStatusLabel) {
+                longTermMemoryProposalStatusLabel->setText(QStringLiteral("标题和摘要至少需要 2 个字符。"));
+            }
+            return;
+        }
+        if (!scopePattern.match(scope).hasMatch()) {
+            if (longTermMemoryProposalStatusLabel) {
+                longTermMemoryProposalStatusLabel->setText(QStringLiteral("范围只能是 global 或 project:项目标识。"));
+            }
+            return;
+        }
+        const QStringList tags = tagsInput->text().split(
+            QRegularExpression(QStringLiteral("[,，]")), Qt::SkipEmptyParts);
+        if (longTermMemoryProposalConfirmButton) {
+            longTermMemoryProposalConfirmButton->setEnabled(false);
+        }
+        if (longTermMemoryProposalRejectButton) {
+            longTermMemoryProposalRejectButton->setEnabled(false);
+        }
+        if (longTermMemoryProposalStatusLabel) {
+            longTermMemoryProposalStatusLabel->setText(QStringLiteral("正在保存已确认的长期记忆……"));
+        }
+        backendClient->confirmLongTermMemoryProposal(
+            activeLongTermMemoryProposal, scope, title, summary, tags);
+    });
+    connect(rejectButton, &QPushButton::clicked, dialog, [this, dialog]() {
+        if (!backendClient || activeLongTermMemoryProposal.proposalId.isEmpty()) {
+            return;
+        }
+        const auto answer = QMessageBox::warning(
+            dialog,
+            QStringLiteral("拒绝长期记忆候选"),
+            QStringLiteral("拒绝后不会保存这条候选。确定继续吗？"),
+            QMessageBox::Yes | QMessageBox::Cancel,
+            QMessageBox::Cancel);
+        if (answer != QMessageBox::Yes) {
+            return;
+        }
+        if (longTermMemoryProposalConfirmButton) {
+            longTermMemoryProposalConfirmButton->setEnabled(false);
+        }
+        if (longTermMemoryProposalRejectButton) {
+            longTermMemoryProposalRejectButton->setEnabled(false);
+        }
+        if (longTermMemoryProposalStatusLabel) {
+            longTermMemoryProposalStatusLabel->setText(QStringLiteral("正在拒绝候选……"));
+        }
+        backendClient->rejectLongTermMemoryProposal(activeLongTermMemoryProposal.proposalId);
+    });
+
+    longTermMemoryProposalStatusLabel = statusLabel;
+    longTermMemoryProposalConfirmButton = confirmButton;
+    longTermMemoryProposalRejectButton = rejectButton;
+    connect(dialog, &QObject::destroyed, this, [this]() {
+        longTermMemoryProposalDialog = nullptr;
+        longTermMemoryProposalStatusLabel = nullptr;
+        longTermMemoryProposalConfirmButton = nullptr;
+        longTermMemoryProposalRejectButton = nullptr;
+        activeLongTermMemoryProposal = TaskMemoryProposalInfo{};
+    });
+    dialog->open();
+}
+
+void MainWindow::handleLongTermMemoryProposalConfirmed(const QString &message)
+{
+    if (longTermMemoryProposalDialog) {
+        longTermMemoryProposalDialog->close();
+    }
+    if (longTermMemoryStatusLabel) {
+        longTermMemoryStatusLabel->setText(message);
+    }
+    refreshLongTermMemoryManager();
+}
+
+void MainWindow::handleLongTermMemoryProposalConfirmFailed(const QString &message)
+{
+    if (longTermMemoryProposalConfirmButton) {
+        longTermMemoryProposalConfirmButton->setEnabled(true);
+    }
+    if (longTermMemoryProposalRejectButton) {
+        longTermMemoryProposalRejectButton->setEnabled(true);
+    }
+    if (longTermMemoryProposalStatusLabel) {
+        longTermMemoryProposalStatusLabel->setText(QStringLiteral("保存失败：%1").arg(message));
+    }
+}
+
+void MainWindow::handleLongTermMemoryProposalRejected(const QString &message)
+{
+    if (longTermMemoryProposalDialog) {
+        longTermMemoryProposalDialog->close();
+    }
+    if (longTermMemoryStatusLabel) {
+        longTermMemoryStatusLabel->setText(message);
+    }
+}
+
+void MainWindow::handleLongTermMemoryProposalRejectFailed(const QString &message)
+{
+    if (longTermMemoryProposalConfirmButton) {
+        longTermMemoryProposalConfirmButton->setEnabled(true);
+    }
+    if (longTermMemoryProposalRejectButton) {
+        longTermMemoryProposalRejectButton->setEnabled(true);
+    }
+    if (longTermMemoryProposalStatusLabel) {
+        longTermMemoryProposalStatusLabel->setText(QStringLiteral("拒绝失败：%1").arg(message));
+    }
+}
+
 void MainWindow::populateLongTermMemoryEditor(const LongTermMemoryInfo *item)
 {
     if (!longTermMemoryKindCombo || !longTermMemoryTitleInput || !longTermMemorySummaryInput
@@ -12766,7 +13012,7 @@ void MainWindow::handleTaskMemoryProposalsReceived(const TaskMemoryProposalListR
         return;
     }
 
-    // 当前服务端最多返回一条保守候选。独立对话框让客户能完整检查、编辑并确认，不挤占历史详情。
+    // 任务结果最多展示少量待确认候选。独立对话框让客户能完整检查、编辑并确认，不挤占历史详情。
     activeHistoryMemoryProposal = result.items.first();
     auto *dialog = new QDialog(this);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
@@ -12783,6 +13029,17 @@ void MainWindow::handleTaskMemoryProposalsReceived(const TaskMemoryProposalListR
     intro->setObjectName(QStringLiteral("mutedText"));
     layout->addWidget(intro);
 
+    QComboBox *proposalSelector = nullptr;
+    if (result.items.size() > 1) {
+        proposalSelector = new QComboBox(dialog);
+        for (const TaskMemoryProposalInfo &proposal : result.items) {
+            proposalSelector->addItem(
+                QStringLiteral("%1 - %2").arg(longTermMemoryKindText(proposal.kind), proposal.title),
+                proposal.proposalId);
+        }
+        layout->addWidget(proposalSelector);
+    }
+
     auto *form = new QFormLayout();
     auto *kindCombo = new QComboBox(dialog);
     kindCombo->addItem(QStringLiteral("用户偏好"), QStringLiteral("user_preference"));
@@ -12790,6 +13047,8 @@ void MainWindow::handleTaskMemoryProposalsReceived(const TaskMemoryProposalListR
     kindCombo->addItem(QStringLiteral("已验证经验"), QStringLiteral("experience"));
     const int kindIndex = kindCombo->findData(activeHistoryMemoryProposal.kind);
     kindCombo->setCurrentIndex(kindIndex >= 0 ? kindIndex : 0);
+    kindCombo->setEnabled(false);
+    kindCombo->setToolTip(QStringLiteral("候选类型由受控来源确定；确认时可编辑范围、标题、摘要和标签。"));
     auto *scopeInput = new QLineEdit(activeHistoryMemoryProposal.suggestedScope, dialog);
     scopeInput->setPlaceholderText(QStringLiteral("global 或 project:项目标识"));
     auto *titleInput = new QLineEdit(activeHistoryMemoryProposal.title, dialog);
@@ -12808,10 +13067,30 @@ void MainWindow::handleTaskMemoryProposalsReceived(const TaskMemoryProposalListR
     reasonLabel->setWordWrap(true);
     reasonLabel->setObjectName(QStringLiteral("tinyText"));
     layout->addWidget(reasonLabel);
+    const QList<TaskMemoryProposalInfo> historyProposals = result.items;
+    auto populate = [this, historyProposals, kindCombo, scopeInput, titleInput, summaryInput, tagsInput, reasonLabel](int index) {
+        if (index < 0 || index >= historyProposals.size()) {
+            return;
+        }
+        activeHistoryMemoryProposal = historyProposals.at(index);
+        const int selectedKindIndex = kindCombo->findData(activeHistoryMemoryProposal.kind);
+        if (selectedKindIndex >= 0) {
+            kindCombo->setCurrentIndex(selectedKindIndex);
+        }
+        scopeInput->setText(activeHistoryMemoryProposal.suggestedScope);
+        titleInput->setText(activeHistoryMemoryProposal.title);
+        summaryInput->setPlainText(activeHistoryMemoryProposal.summary);
+        tagsInput->setText(activeHistoryMemoryProposal.tags.join(QStringLiteral(", ")));
+        reasonLabel->setText(activeHistoryMemoryProposal.reason);
+    };
+    if (proposalSelector) {
+        connect(proposalSelector, qOverload<int>(&QComboBox::currentIndexChanged), dialog, populate);
+    }
     auto *statusLabel = new QLabel(dialog);
     statusLabel->setObjectName(QStringLiteral("tinyText"));
     layout->addWidget(statusLabel);
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, dialog);
+    auto *rejectButton = buttons->addButton(QStringLiteral("拒绝候选"), QDialogButtonBox::DestructiveRole);
     auto *confirmButton = buttons->addButton(QStringLiteral("确认保存"), QDialogButtonBox::AcceptRole);
     layout->addWidget(buttons);
     connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::close);
@@ -12853,6 +13132,32 @@ void MainWindow::handleTaskMemoryProposalsReceived(const TaskMemoryProposalListR
             summary,
             tags);
     });
+    connect(rejectButton, &QPushButton::clicked, dialog, [this, dialog]() {
+        if (!backendClient || activeHistoryMemoryProposal.proposalId.isEmpty()) {
+            return;
+        }
+        const auto answer = QMessageBox::warning(
+            dialog,
+            QStringLiteral("拒绝长期记忆候选"),
+            QStringLiteral("拒绝后不会保存这条候选。确定继续吗？"),
+            QMessageBox::Yes | QMessageBox::Cancel,
+            QMessageBox::Cancel);
+        if (answer != QMessageBox::Yes) {
+            return;
+        }
+        if (historyMemoryProposalConfirmButton) {
+            historyMemoryProposalConfirmButton->setEnabled(false);
+        }
+        if (historyMemoryProposalRejectButton) {
+            historyMemoryProposalRejectButton->setEnabled(false);
+        }
+        if (historyMemoryProposalStatusLabel) {
+            historyMemoryProposalStatusLabel->setText(QStringLiteral("正在拒绝候选……"));
+        }
+        backendClient->rejectTaskMemoryProposal(
+            activeHistoryMemoryProposal.taskId,
+            activeHistoryMemoryProposal.proposalId);
+    });
     historyMemoryProposalKindCombo = kindCombo;
     historyMemoryProposalScopeInput = scopeInput;
     historyMemoryProposalTitleInput = titleInput;
@@ -12860,6 +13165,7 @@ void MainWindow::handleTaskMemoryProposalsReceived(const TaskMemoryProposalListR
     historyMemoryProposalTagsInput = tagsInput;
     historyMemoryProposalStatusLabel = statusLabel;
     historyMemoryProposalConfirmButton = confirmButton;
+    historyMemoryProposalRejectButton = rejectButton;
     connect(dialog, &QObject::destroyed, this, [this]() {
         historyMemoryProposalDialog = nullptr;
         historyMemoryProposalKindCombo = nullptr;
@@ -12869,6 +13175,7 @@ void MainWindow::handleTaskMemoryProposalsReceived(const TaskMemoryProposalListR
         historyMemoryProposalTagsInput = nullptr;
         historyMemoryProposalStatusLabel = nullptr;
         historyMemoryProposalConfirmButton = nullptr;
+        historyMemoryProposalRejectButton = nullptr;
         activeHistoryMemoryProposal = TaskMemoryProposalInfo{};
     });
     dialog->open();
@@ -12915,8 +13222,45 @@ void MainWindow::handleTaskMemoryProposalConfirmFailed(const QString &taskId, co
     if (historyMemoryProposalConfirmButton) {
         historyMemoryProposalConfirmButton->setEnabled(true);
     }
+    if (historyMemoryProposalRejectButton) {
+        historyMemoryProposalRejectButton->setEnabled(true);
+    }
     if (historyMemoryProposalStatusLabel) {
         historyMemoryProposalStatusLabel->setText(QStringLiteral("保存失败：%1").arg(message));
+    }
+}
+
+void MainWindow::handleTaskMemoryProposalRejected(const QString &taskId, const QString &message)
+{
+    if (taskId != currentHistoryTaskId) {
+        return;
+    }
+    if (historyMemoryProposalDialog) {
+        historyMemoryProposalDialog->close();
+    }
+    if (historyMemoryButton) {
+        historyMemoryButton->setEnabled(true);
+    }
+    if (historyDetailText) {
+        historyDetailText->setHtml(
+            QStringLiteral("<p><b>已拒绝本次候选</b></p><p style=\"color:#64748B;\">%1</p>")
+                .arg(message.toHtmlEscaped()));
+    }
+}
+
+void MainWindow::handleTaskMemoryProposalRejectFailed(const QString &taskId, const QString &message)
+{
+    if (taskId != currentHistoryTaskId) {
+        return;
+    }
+    if (historyMemoryProposalConfirmButton) {
+        historyMemoryProposalConfirmButton->setEnabled(true);
+    }
+    if (historyMemoryProposalRejectButton) {
+        historyMemoryProposalRejectButton->setEnabled(true);
+    }
+    if (historyMemoryProposalStatusLabel) {
+        historyMemoryProposalStatusLabel->setText(QStringLiteral("拒绝失败：%1").arg(message));
     }
 }
 

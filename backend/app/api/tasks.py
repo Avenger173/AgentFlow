@@ -15,7 +15,14 @@ from app.database.task_repository import (
     list_workflow_runs,
     record_runtime_permission_decision,
 )
-from app.database.memory_repository import create_long_term_memory, list_long_term_memories
+from app.database.memory_repository import (
+    LongTermMemoryProposalNotFoundError,
+    LongTermMemoryProposalStateError,
+    confirm_long_term_memory_proposal,
+    get_long_term_memory_proposal,
+    list_long_term_memory_proposals,
+    reject_long_term_memory_proposal,
+)
 from app.schemas.chat import WorkflowPlan
 from app.schemas.events import TaskLogListResponse
 from app.schemas.plan_revisions import (
@@ -27,6 +34,8 @@ from app.schemas.plan_revisions import (
 from app.schemas.memory import (
     LongTermMemoryProposalConfirmRequest,
     LongTermMemoryProposalListResponse,
+    LongTermMemoryProposalRejectRequest,
+    LongTermMemoryProposal,
     LongTermMemoryRecord,
 )
 from app.schemas.workflow import (
@@ -66,10 +75,7 @@ from app.services.data_transformation_delivery import (
     cancel_data_transformation_task,
     get_data_transformation_task_result,
 )
-from app.services.commander_memory_proposals import (
-    build_commander_memory_proposals,
-    is_current_memory_proposal,
-)
+from app.services.commander_memory_proposals import ensure_completed_task_memory_proposals
 from app.services.long_term_memory import (
     LongTermMemorySafetyError,
     normalize_memory_scope,
@@ -408,11 +414,15 @@ async def get_task_plan(task_id: str) -> WorkflowPlanDetailResponse:
 
 @router.get("/{task_id}/memory-proposals", response_model=LongTermMemoryProposalListResponse)
 async def get_task_memory_proposals(task_id: str) -> LongTermMemoryProposalListResponse:
-    """返回任务结束后的可编辑候选，不会自动创建长期记忆。"""
+    """返回已完成任务的持久化待确认候选，不会自动创建长期记忆。"""
 
-    _, plan = _load_completed_runtime_plan_for_memory(task_id)
-    items, note = build_commander_memory_proposals(task_id=task_id, plan=plan)
-    return LongTermMemoryProposalListResponse(task_id=task_id, items=items, note=note)
+    run, plan = _load_completed_runtime_plan_for_memory(task_id)
+    # 兼容 MEM-4 前已完成的历史 Runtime：首次打开时只补建可重新证明的候选；后续读取直接
+    # 从候选账本取得状态，不再临时重算后让确认接口猜测来源。
+    ensure_completed_task_memory_proposals(task_id=task_id, plan=plan, run=run)
+    items = list_long_term_memory_proposals(task_id=task_id, statuses={"pending"}, limit=3)
+    note = "当前没有待确认的长期记忆候选。" if not items else "候选尚未保存为长期记忆，可编辑后确认或拒绝。"
+    return LongTermMemoryProposalListResponse(task_id=task_id, scope=plan.project_scope, items=items, note=note)
 
 
 @router.post("/{task_id}/memory-proposals/confirm", response_model=LongTermMemoryRecord)
@@ -420,44 +430,79 @@ async def confirm_task_memory_proposal(
     task_id: str,
     request: LongTermMemoryProposalConfirmRequest,
 ) -> LongTermMemoryRecord:
-    """把客户确认的候选写入长期记忆，并将来源稳定绑定到完成任务。"""
+    """确认已完成任务的候选；同一请求重试复用同一正式记忆。"""
 
     if not request.user_confirmed:
         raise HTTPException(status_code=400, detail="保存长期记忆需要用户明确确认。")
-    _, plan = _load_completed_runtime_plan_for_memory(task_id)
-    if not is_current_memory_proposal(proposal_id=request.proposal_id, task_id=task_id, plan=plan):
-        raise HTTPException(status_code=409, detail="记忆候选已失效或不属于当前任务，请重新查看候选。")
+    _load_completed_runtime_plan_for_memory(task_id)
 
     try:
+        proposal = get_long_term_memory_proposal(request.proposal_id)
+        if proposal.task_id != task_id:
+            raise HTTPException(status_code=409, detail="记忆候选不属于当前任务，请重新查看候选。")
         scope = normalize_memory_scope(request.scope)
         title = sanitize_memory_text(request.title, field_name="记忆标题", maximum=120)
         summary = sanitize_memory_text(request.summary, field_name="记忆摘要", maximum=1000)
         tags = normalize_memory_tags(request.tags)
-        source_task_id = normalize_memory_source_task_id(task_id)
+        normalize_memory_source_task_id(task_id)
     except LongTermMemorySafetyError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except LongTermMemoryProposalNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    # 重复点击确认时复用同一条已保存记录，避免桌面端网络重试制造多份完全相同的记忆。
-    for item in list_long_term_memories(scope=scope, include_disabled=True):
-        if item.source_task_id == task_id and item.title == title and item.summary == summary:
-            return item
-
-    record = create_long_term_memory(
-        kind=request.kind,
-        scope=scope,
-        title=title,
-        summary=summary,
-        tags=tags,
-        source_task_id=source_task_id,
-        user_confirmed=True,
-    )
-    append_workflow_event(
-        task_id=task_id,
-        event_name="memory_proposal_confirmed",
-        agent_id="commander_agent",
-        message=f"用户确认保存长期记忆：{record.title}（范围：{record.scope}）。",
-    )
+    try:
+        previous_status = proposal.status
+        _, record = confirm_long_term_memory_proposal(
+            proposal_id=request.proposal_id,
+            kind=request.kind,
+            scope=scope,
+            title=title,
+            summary=summary,
+            tags=tags,
+        )
+    except LongTermMemoryProposalStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if previous_status == "pending":
+        append_workflow_event(
+            task_id=task_id,
+            event_name="memory_proposal_confirmed",
+            agent_id="commander_agent",
+            message=f"用户确认保存长期记忆：{record.title}（范围：{record.scope}）。",
+        )
     return record
+
+
+@router.post(
+    "/{task_id}/memory-proposals/{proposal_id}/reject",
+    response_model=LongTermMemoryProposal,
+)
+async def reject_task_memory_proposal(
+    task_id: str,
+    proposal_id: str,
+    request: LongTermMemoryProposalRejectRequest,
+) -> LongTermMemoryProposal:
+    """显式拒绝已完成任务的候选；拒绝不会影响任务历史或其它长期记忆。"""
+
+    if not request.user_rejected:
+        raise HTTPException(status_code=400, detail="拒绝长期记忆候选需要 user_rejected=true 明确确认。")
+    _load_completed_runtime_plan_for_memory(task_id)
+    try:
+        proposal = get_long_term_memory_proposal(proposal_id)
+        if proposal.task_id != task_id:
+            raise HTTPException(status_code=409, detail="记忆候选不属于当前任务，请重新查看候选。")
+        rejected = reject_long_term_memory_proposal(proposal_id)
+    except LongTermMemoryProposalNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except LongTermMemoryProposalStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if proposal.status == "pending":
+        append_workflow_event(
+            task_id=task_id,
+            event_name="memory_proposal_rejected",
+            agent_id="commander_agent",
+            message="用户拒绝保存一条长期记忆候选。",
+        )
+    return rejected
 
 
 @router.get("/{task_id}/plan-versions", response_model=WorkflowPlanVersionListResponse)

@@ -6,11 +6,20 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from app.database.sqlite import get_connection
-from app.schemas.memory import LongTermMemoryRecord
+from app.schemas.memory import LongTermMemoryProposal, LongTermMemoryRecord
+from app.services.long_term_memory import build_memory_conflict_key
 
 
 class LongTermMemoryNotFoundError(LookupError):
     """请求的长期记忆不存在或已被删除。"""
+
+
+class LongTermMemoryProposalNotFoundError(LookupError):
+    """请求的长期记忆候选不存在。"""
+
+
+class LongTermMemoryProposalStateError(ValueError):
+    """候选当前状态不允许执行所请求的生命周期转换。"""
 
 
 def create_long_term_memory(
@@ -22,6 +31,7 @@ def create_long_term_memory(
     tags: list[str],
     source_task_id: str | None,
     user_confirmed: bool,
+    memory_key: str | None = None,
 ) -> LongTermMemoryRecord:
     """插入一条显式确认的长期记忆。
 
@@ -29,6 +39,11 @@ def create_long_term_memory(
     """
 
     now = _utc_now()
+    normalized_memory_key = memory_key or build_memory_conflict_key(
+        kind=kind,
+        scope=scope,
+        title=title,
+    )
     record = LongTermMemoryRecord(
         memory_id=f"memory_{uuid4().hex[:12]}",
         kind=kind,
@@ -43,27 +58,10 @@ def create_long_term_memory(
         updated_at=now,
     )
     with get_connection() as connection:
-        connection.execute(
-            """
-            INSERT INTO long_term_memories (
-                memory_id, kind, scope, title, summary, tags_json, source_task_id,
-                user_confirmed, enabled, created_at, updated_at, last_used_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                record.memory_id,
-                record.kind,
-                record.scope,
-                record.title,
-                record.summary,
-                json.dumps(record.tags, ensure_ascii=False),
-                record.source_task_id or "",
-                int(record.user_confirmed),
-                int(record.enabled),
-                record.created_at,
-                record.updated_at,
-                record.last_used_at,
-            ),
+        _insert_long_term_memory(
+            connection=connection,
+            record=record,
+            memory_key=normalized_memory_key,
         )
     return record
 
@@ -133,7 +131,7 @@ def update_long_term_memory(
         connection.execute(
             """
             UPDATE long_term_memories
-            SET title = ?, summary = ?, tags_json = ?, enabled = ?, updated_at = ?
+            SET title = ?, summary = ?, tags_json = ?, enabled = ?, memory_key = ?, updated_at = ?
             WHERE memory_id = ?
             """,
             (
@@ -141,6 +139,11 @@ def update_long_term_memory(
                 updated.summary,
                 json.dumps(updated.tags, ensure_ascii=False),
                 int(updated.enabled),
+                build_memory_conflict_key(
+                    kind=updated.kind,
+                    scope=updated.scope,
+                    title=updated.title,
+                ),
                 updated.updated_at,
                 memory_id,
             ),
@@ -230,6 +233,330 @@ def mark_long_term_memories_used(memory_ids: list[str]) -> None:
         )
 
 
+def create_or_reuse_long_term_memory_proposal(
+    *,
+    proposal_id: str,
+    task_id: str,
+    kind: str,
+    suggested_scope: str,
+    title: str,
+    summary: str,
+    tags: list[str],
+    reason: str,
+    source_type: str,
+    source_id: str,
+    source_conversation_id: str | None,
+    conflict_key: str,
+    fingerprint: str,
+) -> LongTermMemoryProposal:
+    """以内容指纹持久化候选，并把同键旧待确认项标为已替代。
+
+    ``fingerprint`` 不含任务或会话 ID：同一条稳定事实即使在压缩、任务恢复或网络重试中再次
+    被观察到，也只能对应同一候选。候选尚未确认时不会写入正式长期记忆表。
+    """
+
+    now = _utc_now()
+    with get_connection() as connection:
+        existing = connection.execute(
+            "SELECT * FROM long_term_memory_proposals WHERE fingerprint = ?",
+            (fingerprint,),
+        ).fetchone()
+        if existing is not None:
+            return _row_to_proposal(existing)
+
+        pending_rows = connection.execute(
+            """
+            SELECT * FROM long_term_memory_proposals
+            WHERE suggested_scope = ? AND kind = ? AND conflict_key = ? AND status = 'pending'
+            ORDER BY updated_at DESC, created_at DESC
+            """,
+            (suggested_scope, kind, conflict_key),
+        ).fetchall()
+        replaces_proposal_id = str(pending_rows[0]["proposal_id"]) if pending_rows else ""
+        if pending_rows:
+            connection.execute(
+                """
+                UPDATE long_term_memory_proposals
+                SET status = 'superseded', replaced_by_proposal_id = ?, updated_at = ?
+                WHERE suggested_scope = ? AND kind = ? AND conflict_key = ? AND status = 'pending'
+                """,
+                (proposal_id, now, suggested_scope, kind, conflict_key),
+            )
+
+        active_memory = _find_active_memory_by_key(
+            connection=connection,
+            kind=kind,
+            scope=suggested_scope,
+            memory_key=conflict_key,
+        )
+        replaces_memory_id = active_memory.memory_id if active_memory is not None else ""
+        connection.execute(
+            """
+            INSERT INTO long_term_memory_proposals (
+                proposal_id, task_id, kind, suggested_scope, title, summary, tags_json, reason,
+                source_type, source_id, source_conversation_id, conflict_key, fingerprint, status,
+                replaces_proposal_id, replaced_by_proposal_id, replaces_memory_id, confirmed_memory_id,
+                created_at, updated_at, confirmed_at, rejected_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, '', ?, '', ?, ?, '', '')
+            """,
+            (
+                proposal_id,
+                task_id,
+                kind,
+                suggested_scope,
+                title,
+                summary,
+                json.dumps(tags, ensure_ascii=False),
+                reason,
+                source_type,
+                source_id,
+                source_conversation_id or "",
+                conflict_key,
+                fingerprint,
+                replaces_proposal_id,
+                replaces_memory_id,
+                now,
+                now,
+            ),
+        )
+        row = connection.execute(
+            "SELECT * FROM long_term_memory_proposals WHERE proposal_id = ?",
+            (proposal_id,),
+        ).fetchone()
+    if row is None:
+        raise RuntimeError("长期记忆候选写入后无法回读。")
+    return _row_to_proposal(row)
+
+
+def get_long_term_memory_proposal(proposal_id: str) -> LongTermMemoryProposal:
+    with get_connection() as connection:
+        row = connection.execute(
+            "SELECT * FROM long_term_memory_proposals WHERE proposal_id = ?",
+            (proposal_id,),
+        ).fetchone()
+    if row is None:
+        raise LongTermMemoryProposalNotFoundError("未找到指定的长期记忆候选。")
+    return _row_to_proposal(row)
+
+
+def list_long_term_memory_proposals(
+    *,
+    task_id: str | None = None,
+    scope: str | None = None,
+    statuses: set[str] | None = None,
+    limit: int = 200,
+) -> list[LongTermMemoryProposal]:
+    """列出受控范围内的候选；默认只返回待确认项。"""
+
+    clauses: list[str] = []
+    params: list[object] = []
+    if task_id:
+        clauses.append("task_id = ?")
+        params.append(task_id)
+    if scope:
+        clauses.append("suggested_scope = ?")
+        params.append(scope)
+    normalized_statuses = sorted(statuses or {"pending"})
+    placeholders = ",".join("?" for _ in normalized_statuses)
+    clauses.append(f"status IN ({placeholders})")
+    params.extend(normalized_statuses)
+    where = " WHERE " + " AND ".join(clauses)
+    params.append(max(1, min(limit, 200)))
+    with get_connection() as connection:
+        rows = connection.execute(
+            "SELECT * FROM long_term_memory_proposals"
+            f"{where} ORDER BY updated_at DESC, created_at DESC LIMIT ?",
+            params,
+        ).fetchall()
+    return [_row_to_proposal(row) for row in rows]
+
+
+def reject_long_term_memory_proposal(proposal_id: str) -> LongTermMemoryProposal:
+    """显式拒绝候选；同一拒绝请求可安全重试。"""
+
+    now = _utc_now()
+    with get_connection() as connection:
+        row = connection.execute(
+            "SELECT * FROM long_term_memory_proposals WHERE proposal_id = ?",
+            (proposal_id,),
+        ).fetchone()
+        if row is None:
+            raise LongTermMemoryProposalNotFoundError("未找到指定的长期记忆候选。")
+        current = _row_to_proposal(row)
+        if current.status == "rejected":
+            return current
+        if current.status != "pending":
+            raise LongTermMemoryProposalStateError("当前候选已确认、过期或被替代，不能再拒绝。")
+        connection.execute(
+            """
+            UPDATE long_term_memory_proposals
+            SET status = 'rejected', rejected_at = ?, updated_at = ?
+            WHERE proposal_id = ?
+            """,
+            (now, now, proposal_id),
+        )
+        updated = connection.execute(
+            "SELECT * FROM long_term_memory_proposals WHERE proposal_id = ?",
+            (proposal_id,),
+        ).fetchone()
+    if updated is None:
+        raise RuntimeError("长期记忆候选拒绝后无法回读。")
+    return _row_to_proposal(updated)
+
+
+def confirm_long_term_memory_proposal(
+    *,
+    proposal_id: str,
+    kind: str,
+    scope: str,
+    title: str,
+    summary: str,
+    tags: list[str],
+) -> tuple[LongTermMemoryProposal, LongTermMemoryRecord]:
+    """确认候选并原子处理同键去重或替代。"""
+
+    now = _utc_now()
+    memory_key = build_memory_conflict_key(kind=kind, scope=scope, title=title)
+    with get_connection() as connection:
+        row = connection.execute(
+            "SELECT * FROM long_term_memory_proposals WHERE proposal_id = ?",
+            (proposal_id,),
+        ).fetchone()
+        if row is None:
+            raise LongTermMemoryProposalNotFoundError("未找到指定的长期记忆候选。")
+        proposal = _row_to_proposal(row)
+        if proposal.kind != kind:
+            raise LongTermMemoryProposalStateError("候选类型不能在确认时修改。")
+        if proposal.status == "confirmed":
+            if not proposal.confirmed_memory_id:
+                raise LongTermMemoryProposalStateError("已确认候选缺少正式记忆关联，已拒绝继续写入。")
+            memory_row = connection.execute(
+                "SELECT * FROM long_term_memories WHERE memory_id = ?",
+                (proposal.confirmed_memory_id,),
+            ).fetchone()
+            if memory_row is None:
+                raise LongTermMemoryProposalStateError("已确认候选的正式记忆已不存在，请重新创建候选。")
+            return proposal, _row_to_record(memory_row)
+        if proposal.status != "pending":
+            raise LongTermMemoryProposalStateError("当前候选已被拒绝、过期或替代，请重新查看待确认列表。")
+
+        existing = _find_active_memory_by_key(
+            connection=connection,
+            kind=kind,
+            scope=scope,
+            memory_key=memory_key,
+        )
+        if existing is not None and (
+            existing.title == title
+            and existing.summary == summary
+            and existing.tags == tags
+        ):
+            record = existing
+            replaces_memory_id = ""
+        else:
+            record = LongTermMemoryRecord(
+                memory_id=f"memory_{uuid4().hex[:12]}",
+                kind=kind,
+                scope=scope,
+                title=title,
+                summary=summary,
+                tags=tags,
+                source_task_id=proposal.task_id or None,
+                user_confirmed=True,
+                enabled=True,
+                created_at=now,
+                updated_at=now,
+            )
+            _insert_long_term_memory(connection=connection, record=record, memory_key=memory_key)
+            replaces_memory_id = existing.memory_id if existing is not None else ""
+            if existing is not None:
+                connection.execute(
+                    """
+                    UPDATE long_term_memories
+                    SET enabled = 0, replaced_by_memory_id = ?, updated_at = ?
+                    WHERE memory_id = ?
+                    """,
+                    (record.memory_id, now, existing.memory_id),
+                )
+
+        connection.execute(
+            """
+            UPDATE long_term_memory_proposals
+            SET suggested_scope = ?, title = ?, summary = ?, tags_json = ?, conflict_key = ?,
+                status = 'confirmed', replaces_memory_id = ?, confirmed_memory_id = ?,
+                confirmed_at = ?, updated_at = ?
+            WHERE proposal_id = ?
+            """,
+            (
+                scope,
+                title,
+                summary,
+                json.dumps(tags, ensure_ascii=False),
+                memory_key,
+                replaces_memory_id,
+                record.memory_id,
+                now,
+                now,
+                proposal_id,
+            ),
+        )
+        updated = connection.execute(
+            "SELECT * FROM long_term_memory_proposals WHERE proposal_id = ?",
+            (proposal_id,),
+        ).fetchone()
+    if updated is None:
+        raise RuntimeError("长期记忆候选确认后无法回读。")
+    return _row_to_proposal(updated), record
+
+
+def _insert_long_term_memory(*, connection, record: LongTermMemoryRecord, memory_key: str) -> None:
+    connection.execute(
+        """
+        INSERT INTO long_term_memories (
+            memory_id, kind, scope, title, summary, tags_json, source_task_id,
+            user_confirmed, enabled, memory_key, replaced_by_memory_id,
+            created_at, updated_at, last_used_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)
+        """,
+        (
+            record.memory_id,
+            record.kind,
+            record.scope,
+            record.title,
+            record.summary,
+            json.dumps(record.tags, ensure_ascii=False),
+            record.source_task_id or "",
+            int(record.user_confirmed),
+            int(record.enabled),
+            memory_key,
+            record.created_at,
+            record.updated_at,
+            record.last_used_at,
+        ),
+    )
+
+
+def _find_active_memory_by_key(*, connection, kind: str, scope: str, memory_key: str) -> LongTermMemoryRecord | None:
+    rows = connection.execute(
+        """
+        SELECT * FROM long_term_memories
+        WHERE kind = ? AND scope = ? AND enabled = 1 AND user_confirmed = 1
+        ORDER BY updated_at DESC, created_at DESC
+        """,
+        (kind, scope),
+    ).fetchall()
+    for row in rows:
+        stored_key = str(row["memory_key"] or "")
+        legacy_key = build_memory_conflict_key(
+            kind=str(row["kind"]),
+            scope=str(row["scope"]),
+            title=str(row["title"]),
+        )
+        if (stored_key or legacy_key) == memory_key:
+            return _row_to_record(row)
+    return None
+
+
 def _row_to_record(row) -> LongTermMemoryRecord:
     try:
         tags = json.loads(row["tags_json"] or "[]")
@@ -250,6 +577,35 @@ def _row_to_record(row) -> LongTermMemoryRecord:
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
         last_used_at=str(row["last_used_at"] or ""),
+    )
+
+
+def _row_to_proposal(row) -> LongTermMemoryProposal:
+    try:
+        tags = json.loads(row["tags_json"] or "[]")
+    except json.JSONDecodeError:
+        tags = []
+    if not isinstance(tags, list):
+        tags = []
+    return LongTermMemoryProposal(
+        proposal_id=str(row["proposal_id"]),
+        task_id=str(row["task_id"]),
+        kind=str(row["kind"]),
+        title=str(row["title"]),
+        summary=str(row["summary"]),
+        tags=[str(item) for item in tags if isinstance(item, str)],
+        suggested_scope=str(row["suggested_scope"]),
+        reason=str(row["reason"] or ""),
+        status=str(row["status"]),
+        source_type=str(row["source_type"]),
+        source_id=str(row["source_id"] or ""),
+        source_conversation_id=str(row["source_conversation_id"] or "") or None,
+        replaces_proposal_id=str(row["replaces_proposal_id"] or "") or None,
+        replaced_by_proposal_id=str(row["replaced_by_proposal_id"] or "") or None,
+        replaces_memory_id=str(row["replaces_memory_id"] or "") or None,
+        confirmed_memory_id=str(row["confirmed_memory_id"] or "") or None,
+        created_at=str(row["created_at"]),
+        updated_at=str(row["updated_at"]),
     )
 
 

@@ -79,6 +79,18 @@ def normalize_memory_tags(values: Iterable[str]) -> list[str]:
     return tags
 
 
+def build_memory_conflict_key(*, kind: str, scope: str, title: str) -> str:
+    """生成用于同范围同类型替代判断的稳定键。
+
+    它不使用摘要正文，避免“默认 Markdown”改成“默认 PDF”因值不同而被误判为两份可以同时
+    生效的偏好。范围、类型和经规范化的短标题共同决定键；调用点已在写入前执行范围与内容
+    安全校验，因此这里不保存或扩展任何客户内容。
+    """
+
+    normalized_title = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", title.lower())[:96]
+    return f"{kind}:{scope}:{normalized_title or 'default'}"
+
+
 def build_memory_context_summary(records: Iterable[LongTermMemoryRecord]) -> list[str]:
     """生成给计划审计与模型提示的最小上下文，不回传整段历史或源文件。"""
 

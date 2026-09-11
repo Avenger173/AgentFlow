@@ -291,6 +291,13 @@ cd D:\project\AgentFlow\AgentFlow\backend
 python scripts\verify_commander_memory_proposals.py
 ```
 
+总指挥长期记忆候选生命周期专项回归：
+
+```powershell
+cd D:\project\AgentFlow\AgentFlow\backend
+python scripts\verify_commander_memory_lifecycle.py
+```
+
 总指挥重启后 Runtime 安全停驻专项回归：
 
 ```powershell

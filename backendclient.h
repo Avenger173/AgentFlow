@@ -860,11 +860,24 @@ struct TaskMemoryProposalInfo
     QString suggestedScope = QStringLiteral("global");
     QString reason;
     bool requiresUserConfirmation = true;
+    QString status = QStringLiteral("pending");
+    QString sourceType;
+    QString sourceId;
+    QString sourceConversationId;
+    QString replacesMemoryId;
+    QString createdAt;
 };
 
 struct TaskMemoryProposalListResult
 {
     QString taskId;
+    QList<TaskMemoryProposalInfo> items;
+    QString note;
+};
+
+struct LongTermMemoryProposalListResult
+{
+    QString scope;
     QList<TaskMemoryProposalInfo> items;
     QString note;
 };
@@ -1339,6 +1352,7 @@ public:
         const QString &title,
         const QString &summary,
         const QStringList &tags);
+    void rejectTaskMemoryProposal(const QString &taskId, const QString &proposalId);
     // 计划版本只用于调度台的“执行前修改”。后端会拒绝真实执行后的任何修订请求。
     void requestTaskPlanVersions(const QString &taskId);
     void requestTaskPlanVersion(const QString &taskId, int planVersion);
@@ -1370,6 +1384,14 @@ public:
         bool memoryEnabled);
     // 长期记忆管理始终走本地后端 API。创建和编辑只提交短事实，清空需要后端的二次确认。
     void requestLongTermMemories(const QString &scope = QStringLiteral("global"));
+    void requestLongTermMemoryProposals();
+    void confirmLongTermMemoryProposal(
+        const TaskMemoryProposalInfo &proposal,
+        const QString &scope,
+        const QString &title,
+        const QString &summary,
+        const QStringList &tags);
+    void rejectLongTermMemoryProposal(const QString &proposalId);
     void createLongTermMemory(
         const QString &kind,
         const QString &scope,
@@ -1441,6 +1463,8 @@ signals:
     void taskMemoryProposalsFailed(const QString &taskId, const QString &message);
     void taskMemoryProposalConfirmed(const QString &taskId, const QString &message);
     void taskMemoryProposalConfirmFailed(const QString &taskId, const QString &message);
+    void taskMemoryProposalRejected(const QString &taskId, const QString &message);
+    void taskMemoryProposalRejectFailed(const QString &taskId, const QString &message);
     void taskPlanVersionsReceived(const WorkflowPlanVersionListResult &result);
     void taskPlanVersionsFailed(const QString &message);
     void taskPlanVersionReceived(const WorkflowPlanDetailResult &result);
@@ -1467,6 +1491,12 @@ signals:
     void runtimePreferencesSaveFailed(const QString &message);
     void longTermMemoriesReceived(const QList<LongTermMemoryInfo> &items);
     void longTermMemoriesFailed(const QString &message);
+    void longTermMemoryProposalsReceived(const LongTermMemoryProposalListResult &result);
+    void longTermMemoryProposalsFailed(const QString &message);
+    void longTermMemoryProposalConfirmed(const QString &message);
+    void longTermMemoryProposalConfirmFailed(const QString &message);
+    void longTermMemoryProposalRejected(const QString &message);
+    void longTermMemoryProposalRejectFailed(const QString &message);
     void longTermMemoryMutationCompleted(const QString &message);
     void longTermMemoryMutationFailed(const QString &message);
     void taskArtifactsReceived(const WorkflowArtifactListResult &result);
@@ -1681,6 +1711,7 @@ private:
     QUrl buildTaskPlanUrl(const QString &taskId) const;
     QUrl buildTaskMemoryProposalsUrl(const QString &taskId) const;
     QUrl buildTaskMemoryProposalConfirmUrl(const QString &taskId) const;
+    QUrl buildTaskMemoryProposalRejectUrl(const QString &taskId, const QString &proposalId) const;
     QUrl buildTaskPlanVersionsUrl(const QString &taskId) const;
     QUrl buildTaskPlanVersionUrl(const QString &taskId, int planVersion) const;
     QUrl buildTaskPlanRevisionUrl(const QString &taskId) const;
@@ -1696,6 +1727,9 @@ private:
     QUrl buildMcpConnectionsUrl() const;
     QUrl buildPublicReferenceMcpActionUrl(const QString &action) const;
     QUrl buildLongTermMemoriesUrl(const QString &scope = QString(), bool confirm = false) const;
+    QUrl buildLongTermMemoryProposalsUrl() const;
+    QUrl buildLongTermMemoryProposalConfirmUrl(const QString &proposalId) const;
+    QUrl buildLongTermMemoryProposalRejectUrl(const QString &proposalId) const;
     QUrl buildTaskArtifactsUrl(const QString &taskId) const;
     QUrl buildTaskArtifactPreviewUrl(const QString &taskId, const QString &artifactId, int maxBytes) const;
     QUrl buildTaskArtifactOpenUrl(const QString &taskId, const QString &artifactId) const;

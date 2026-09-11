@@ -1,10 +1,10 @@
 # AgentFlow 记忆管理实现对照与改进
 
 > 对照基线：`docs/Agent开发技术要点（持续更新）.md` 当前第 5 章
-> 审计日期：2026-09-10
+> 审计日期：2026-09-11
 > 原则：以真实调用链和离线回归为准，不把框架名或规划项当作已实现能力。
 
-后续实施顺序、数据契约和量化出口统一以 `docs/AGENT_MEMORY_DEVELOPMENT_PLAN.md` 为准；修复前的 MEM-0 夹具、指标和失败证据见 `docs/AGENT_MEMORY_MEM0_BASELINE.md`，MEM-1 与 MEM-2 验收见 `docs/AGENT_MEMORY_MEM1_ACCEPTANCE.md`、`docs/AGENT_MEMORY_MEM2_ACCEPTANCE.md`。
+后续实施顺序、数据契约和量化出口统一以 `docs/AGENT_MEMORY_DEVELOPMENT_PLAN.md` 为准；修复前的 MEM-0 夹具、指标和失败证据见 `docs/AGENT_MEMORY_MEM0_BASELINE.md`，阶段验收见 `docs/AGENT_MEMORY_MEM1_ACCEPTANCE.md` 至 `docs/AGENT_MEMORY_MEM4_ACCEPTANCE.md`。
 
 ## 1. 当前真实架构
 
@@ -23,7 +23,8 @@
 调用链为运行偏好 `memory_enabled` -> `retrieve_commander_memory_context()` -> `search_long_term_memories()` -> 最多 3 条短摘要注入计划和模型上下文。
 
 - `long_term_memories` 保存用户偏好、项目约束和经验，支持 global/project 命名空间、启停、编辑、删除、来源任务和最近使用时间。
-- 写入必须由用户明确确认；任务结束后只生成可编辑候选，不会把聊天内容静默升级成永久画像。
+- `long_term_memory_proposals` 持久化待确认短事实及来源、指纹、生命周期和替代关系；任务完成与会话 Compaction 前均可生成候选，但候选不会参与检索或静默升级为正式记忆。
+- 写入必须由用户明确确认；任务结果与设置 API 都允许编辑候选后确认或拒绝，Qt 任务历史和长期记忆管理页调用同一复核链路，确认同键新值会停用旧有效值。
 - 当前检索为标签、标题、摘要的可解释词面打分，并为 global 用户偏好提供很小的基础分；不是向量 + BM25 混合检索。
 - 程序性记忆不放在该表中，而由根 `SKILL.md`、Agent 定义和 Workflow/Node Contract 承担。
 
@@ -42,8 +43,8 @@
 | 语义/情景/程序性记忆 | 偏好/约束对应语义，experience + source_task_id 对应轻量情景，SKILL/Workflow 对应程序性 | 基本达标 | 情景记忆的文件变更、工具轨迹仍在任务历史，不在通用记忆检索中 |
 | RAG 式按需检索 | 开关开启后按 query 取 Top 3，不全量注入 | 达标 | 数据规模小时方案合理 |
 | 向量 + BM25 混合排序 | 记忆表当前只有词面启发式打分 | 未达标 | 先建立召回评测和规模阈值，再复用现有知识库 FTS/向量能力 |
-| 压缩前自动沉淀长期记忆 | 任务后可推导候选，保存前必须确认；未在 compaction 前触发 | 部分达标 | 不采用静默永久写入是正确的隐私取舍，可在压缩前自动生成“待确认候选” |
-| 记忆总开关和用户控制 | 默认关闭；关闭时不读取记忆表；支持启停、编辑、单删和按范围清空 | 达标 | 隐私边界优于无提示自动记忆 |
+| 压缩前自动沉淀长期记忆 | 强长期表达在消息归档 Compaction 前提取，并在成功归档后持久化为待确认候选；任务完成也可补建可重放候选 | 达标 | 不自动写正式记忆；指纹、来源、拒绝与替代关系均可回读 |
+| 记忆总开关和用户控制 | 默认关闭；关闭时不读取记忆表；支持启停、编辑、单删、按范围清空，以及 Qt 任务历史/长期记忆管理页的候选确认与拒绝 | 达标 | 隐私边界优于无提示自动记忆 |
 
 ## 3. 本轮修复
 
@@ -61,15 +62,15 @@
 ## 4. 后续优先级
 
 1. **P1：保留期和删除能力。** 增加会话删除、归档与可配置 TTL，默认不自动删除客户仍在使用的记录，并提供按 project_scope 清理和审计计数。
-2. **P1：压缩前候选。** 在旧消息进入摘要前，只生成待确认长期记忆候选，不直接写长期表；候选应去重、可编辑、可拒绝并记录来源会话/任务。
-3. **P2：记忆检索评测。** 先建立中文偏好、同义表达、跨项目隔离和误召回数据集；当记忆规模或 Recall@3 证明词面方案不足时，再接 FTS5 BM25 + 现有向量索引做混排。
+2. **P1：记忆检索评测。** 先建立中文偏好、同义表达、跨项目隔离和误召回数据集；当记忆规模或 Recall@3 证明词面方案不足时，再接 FTS5 BM25 + 现有向量索引做混排。
+3. **P1：会话清理与保留期。** 增加单会话删除、按项目清理、候选级联与默认关闭的可配置 TTL；不能把 `expired` 状态枚举误写成已有自动清理。
 4. **P2：LLM 摘要准入评估。** 只在信息保留率有量化提升、Provider 失败可回退且 usage/cost 可记录时，再与现有确定性摘要比较；否则保持确定性方案。
 
 ## 5. 简历可用表述
 
 - 设计并实现 Agent 分层记忆架构：基于 SQLite 的会话隔离与可恢复归档、统一 ContextEnvelope 动态预算、结构化摘要、可版本化的当前工作状态，以及 global/project 命名空间的用户确认式长期记忆。
 - 将 Agent 记忆与 Workflow 状态解耦：会话层只注入受控摘要和最小工作状态，任务进度、Tool trace、checkpoint 和审计事件独立持久化；只有可信 checkpoint 可投影任务事实，避免原始日志和虚拟产物污染 Prompt。
-- 建立隐私优先的记忆治理：长期记忆默认关闭，支持候选复核、显式确认、敏感信息/绝对路径拦截、启停编辑删除和跨项目隔离。
+- 建立隐私优先的记忆治理：长期记忆默认关闭，支持持久候选复核、确认/拒绝、冲突替代、敏感信息/绝对路径/长原文拦截、启停编辑删除和跨项目隔离。
 - 采用评测驱动的检索演进策略：小规模记忆先使用可解释本地词面排序，预留基于 FTS5 BM25 与向量索引的混合召回升级路径。
 
 ## 6. 验证基线
@@ -78,8 +79,9 @@
 - `python backend/scripts/verify_commander_c6_conversation.py`
 - `python backend/scripts/verify_commander_memory.py`
 - `python backend/scripts/verify_conversation_working_state.py`
-- `python backend/scripts/verify_commander_memory_quality.py --mode gate --gate-profile mem2`
+- `python backend/scripts/verify_commander_memory_quality.py --mode gate --gate-profile mem4`
 - `python backend/scripts/verify_commander_memory_proposals.py`
+- `python backend/scripts/verify_commander_memory_lifecycle.py`
 - `PYTHONUTF8=1 python .../skill-creator/scripts/quick_validate.py .`
 
 以上均使用临时 SQLite 或静态文件检查，不调用真实模型、不联网、不读取客户材料，也不修改现有客户会话数据。

@@ -403,6 +403,13 @@ private:
     void handleLongTermMemoryMutationCompleted(const QString &message);
     void handleLongTermMemoryMutationFailed(const QString &message);
     void populateLongTermMemoryEditor(const LongTermMemoryInfo *item);
+    void openLongTermMemoryProposalReview(const LongTermMemoryProposalListResult &result);
+    void handleLongTermMemoryProposalsReceived(const LongTermMemoryProposalListResult &result);
+    void handleLongTermMemoryProposalsFailed(const QString &message);
+    void handleLongTermMemoryProposalConfirmed(const QString &message);
+    void handleLongTermMemoryProposalConfirmFailed(const QString &message);
+    void handleLongTermMemoryProposalRejected(const QString &message);
+    void handleLongTermMemoryProposalRejectFailed(const QString &message);
     QString longTermMemoryKindText(const QString &kind) const;
     void setupHistoryPage();
     void refreshTaskHistory();
@@ -415,6 +422,8 @@ private:
     void handleTaskMemoryProposalsFailed(const QString &taskId, const QString &message);
     void handleTaskMemoryProposalConfirmed(const QString &taskId, const QString &message);
     void handleTaskMemoryProposalConfirmFailed(const QString &taskId, const QString &message);
+    void handleTaskMemoryProposalRejected(const QString &taskId, const QString &message);
+    void handleTaskMemoryProposalRejectFailed(const QString &taskId, const QString &message);
     void handleTaskStepsReceived(const TaskStepListResult &result);
     void handleTaskStepsFailed(const QString &message);
     void handleTaskRuntimeStateReceived(const WorkflowRuntimeStateInfo &result);
@@ -639,9 +648,15 @@ private:
     QPointer<QLabel> longTermMemoryStatusLabel;
     QPointer<QPushButton> longTermMemorySaveButton;
     QPointer<QPushButton> longTermMemoryDeleteButton;
+    QPointer<QPushButton> longTermMemoryProposalsButton;
     QString currentLongTermMemoryId;
     QList<LongTermMemoryInfo> currentLongTermMemories;
     bool longTermMemoryLoading = false;
+    QPointer<QDialog> longTermMemoryProposalDialog;
+    QPointer<QLabel> longTermMemoryProposalStatusLabel;
+    QPointer<QPushButton> longTermMemoryProposalConfirmButton;
+    QPointer<QPushButton> longTermMemoryProposalRejectButton;
+    TaskMemoryProposalInfo activeLongTermMemoryProposal;
     // 任务后记忆候选在独立小窗中确认，避免将一次性审计表单塞进历史详情或设置页。
     QPointer<QDialog> historyMemoryProposalDialog;
     QPointer<QComboBox> historyMemoryProposalKindCombo;
@@ -651,6 +666,7 @@ private:
     QPointer<QLineEdit> historyMemoryProposalTagsInput;
     QPointer<QLabel> historyMemoryProposalStatusLabel;
     QPointer<QPushButton> historyMemoryProposalConfirmButton;
+    QPointer<QPushButton> historyMemoryProposalRejectButton;
     TaskMemoryProposalInfo activeHistoryMemoryProposal;
     QString activeDocumentAgentTaskId;
     // PDF 整理使用独立、可关闭的工作区，避免把文件操作、长结果和来源审计挤进同一页面。

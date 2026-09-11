@@ -314,6 +314,17 @@ def _save_workflow_snapshot(
             plan=plan,
             artifacts=artifacts or [],
         )
+    # 完成态 Runtime 可以提供“已验证项目约束/成功经验”这一候选来源，但候选仍与正式长期
+    # 记忆分表保存。该服务按内容指纹幂等，因此恢复同一 checkpoint 不会制造重复候选。
+    if plan is not None and run.mode == "runtime" and run.status == "completed":
+        from app.services.commander_memory_proposals import ensure_completed_task_memory_proposals
+
+        ensure_completed_task_memory_proposals(
+            task_id=run.task_id,
+            plan=plan,
+            run=run,
+            artifacts=artifacts or [],
+        )
 
 
 def load_workflow_run(task_id: str) -> WorkflowRun | None:

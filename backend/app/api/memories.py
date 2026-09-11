@@ -2,17 +2,27 @@ from __future__ import annotations
 
 from app.database.memory_repository import (
     LongTermMemoryNotFoundError,
+    LongTermMemoryProposalNotFoundError,
+    LongTermMemoryProposalStateError,
     clear_long_term_memories,
+    confirm_long_term_memory_proposal,
     create_long_term_memory,
     delete_long_term_memory,
     get_long_term_memory,
+    get_long_term_memory_proposal,
     list_long_term_memories,
+    list_long_term_memory_proposals,
+    reject_long_term_memory_proposal,
     update_long_term_memory,
 )
 from app.schemas.memory import (
     LongTermMemoryClearResponse,
     LongTermMemoryCreateRequest,
     LongTermMemoryListResponse,
+    LongTermMemoryProposal,
+    LongTermMemoryProposalConfirmRequest,
+    LongTermMemoryProposalListResponse,
+    LongTermMemoryProposalRejectRequest,
     LongTermMemoryRecord,
     LongTermMemoryUpdateRequest,
 )
@@ -42,6 +52,71 @@ def list_memories(
     except LongTermMemorySafetyError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return LongTermMemoryListResponse(items=items, total=len(items))
+
+
+@router.get("/proposals", response_model=LongTermMemoryProposalListResponse)
+def list_memory_proposals(
+    scope: str | None = Query(default=None, max_length=80),
+) -> LongTermMemoryProposalListResponse:
+    """列出当前设置范围的待确认候选；它们尚未参与跨会话检索。"""
+
+    try:
+        normalized_scope = normalize_memory_scope(scope) if scope else None
+        items = list_long_term_memory_proposals(scope=normalized_scope, statuses={"pending"})
+    except LongTermMemorySafetyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return LongTermMemoryProposalListResponse(
+        scope=normalized_scope,
+        items=items,
+        note="当前没有待确认的长期记忆候选。" if not items else "候选尚未写入长期记忆，可编辑后确认或拒绝。",
+    )
+
+
+@router.post("/proposals/{proposal_id}/confirm", response_model=LongTermMemoryRecord)
+def confirm_memory_proposal(
+    proposal_id: str,
+    request: LongTermMemoryProposalConfirmRequest,
+) -> LongTermMemoryRecord:
+    """从设置页确认候选，不要求其来源任务仍处于客户可见的完成态。"""
+
+    if proposal_id != request.proposal_id:
+        raise HTTPException(status_code=400, detail="URL 与请求体中的候选 ID 不一致。")
+    if not request.user_confirmed:
+        raise HTTPException(status_code=400, detail="保存长期记忆需要用户明确确认。")
+    try:
+        get_long_term_memory_proposal(proposal_id)
+        _, record = confirm_long_term_memory_proposal(
+            proposal_id=proposal_id,
+            kind=request.kind,
+            scope=normalize_memory_scope(request.scope),
+            title=sanitize_memory_text(request.title, field_name="记忆标题", maximum=120),
+            summary=sanitize_memory_text(request.summary, field_name="记忆摘要", maximum=1000),
+            tags=normalize_memory_tags(request.tags),
+        )
+        return record
+    except LongTermMemoryProposalNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except LongTermMemoryProposalStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except LongTermMemorySafetyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/proposals/{proposal_id}/reject", response_model=LongTermMemoryProposal)
+def reject_memory_proposal(
+    proposal_id: str,
+    request: LongTermMemoryProposalRejectRequest,
+) -> LongTermMemoryProposal:
+    """从设置页显式拒绝候选；同一请求重试只返回原拒绝记录。"""
+
+    if not request.user_rejected:
+        raise HTTPException(status_code=400, detail="拒绝长期记忆候选需要 user_rejected=true 明确确认。")
+    try:
+        return reject_long_term_memory_proposal(proposal_id)
+    except LongTermMemoryProposalNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except LongTermMemoryProposalStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("", response_model=LongTermMemoryRecord, status_code=status.HTTP_201_CREATED)

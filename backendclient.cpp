@@ -1025,6 +1025,12 @@ TaskMemoryProposalInfo readTaskMemoryProposalInfo(const QJsonObject &payload)
     result.reason = payload.value(QStringLiteral("reason")).toString();
     result.requiresUserConfirmation = payload.value(QStringLiteral("requires_user_confirmation"))
                                           .toBool(true);
+    result.status = payload.value(QStringLiteral("status")).toString(result.status);
+    result.sourceType = payload.value(QStringLiteral("source_type")).toString();
+    result.sourceId = payload.value(QStringLiteral("source_id")).toString();
+    result.sourceConversationId = payload.value(QStringLiteral("source_conversation_id")).toString();
+    result.replacesMemoryId = payload.value(QStringLiteral("replaces_memory_id")).toString();
+    result.createdAt = payload.value(QStringLiteral("created_at")).toString();
     return result;
 }
 
@@ -3119,6 +3125,27 @@ void BackendClient::confirmTaskMemoryProposal(
     });
 }
 
+void BackendClient::rejectTaskMemoryProposal(const QString &taskId, const QString &proposalId)
+{
+    if (taskId.trimmed().isEmpty() || proposalId.trimmed().isEmpty()) {
+        emit taskMemoryProposalRejectFailed(taskId, QStringLiteral("记忆候选身份不完整，请重新打开。"));
+        return;
+    }
+    QJsonObject payload;
+    payload.insert(QStringLiteral("user_rejected"), true);
+    QNetworkReply *reply = networkManager_.post(
+        createRequest(buildTaskMemoryProposalRejectUrl(taskId.trimmed(), proposalId.trimmed()), 10000),
+        QJsonDocument(payload).toJson(QJsonDocument::Compact));
+    connect(reply, &QNetworkReply::finished, this, [this, reply, taskId]() {
+        reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError) {
+            emit taskMemoryProposalRejectFailed(taskId, replyErrorMessage(reply));
+            return;
+        }
+        emit taskMemoryProposalRejected(taskId, QStringLiteral("已拒绝这条长期记忆候选。"));
+    });
+}
+
 void BackendClient::requestTaskPlanVersions(const QString &taskId)
 {
     if (taskId.trimmed().isEmpty()) {
@@ -3326,6 +3353,96 @@ void BackendClient::requestLongTermMemories(const QString &scope)
     QNetworkReply *reply = networkManager_.get(createRequest(buildLongTermMemoriesUrl(scope)));
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         handleLongTermMemoriesReply(reply);
+    });
+}
+
+void BackendClient::requestLongTermMemoryProposals()
+{
+    QNetworkReply *reply = networkManager_.get(createRequest(buildLongTermMemoryProposalsUrl(), 10000));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError) {
+            emit longTermMemoryProposalsFailed(replyErrorMessage(reply));
+            return;
+        }
+        const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+        if (!document.isObject()) {
+            emit longTermMemoryProposalsFailed(QStringLiteral("长期记忆候选响应格式无效。"));
+            return;
+        }
+        const QJsonObject payload = document.object();
+        LongTermMemoryProposalListResult result;
+        result.scope = payload.value(QStringLiteral("scope")).toString();
+        result.note = payload.value(QStringLiteral("note")).toString();
+        for (const QJsonValue &value : payload.value(QStringLiteral("items")).toArray()) {
+            if (!value.isObject()) {
+                continue;
+            }
+            const TaskMemoryProposalInfo proposal = readTaskMemoryProposalInfo(value.toObject());
+            if (!proposal.proposalId.isEmpty()) {
+                result.items.append(proposal);
+            }
+        }
+        emit longTermMemoryProposalsReceived(result);
+    });
+}
+
+void BackendClient::confirmLongTermMemoryProposal(
+    const TaskMemoryProposalInfo &proposal,
+    const QString &scope,
+    const QString &title,
+    const QString &summary,
+    const QStringList &tags)
+{
+    if (proposal.proposalId.trimmed().isEmpty() || proposal.kind.trimmed().isEmpty()) {
+        emit longTermMemoryProposalConfirmFailed(QStringLiteral("记忆候选身份不完整，请重新打开。"));
+        return;
+    }
+    QJsonArray tagValues;
+    for (const QString &tag : tags) {
+        if (!tag.trimmed().isEmpty()) {
+            tagValues.append(tag.trimmed());
+        }
+    }
+    QJsonObject payload;
+    payload.insert(QStringLiteral("proposal_id"), proposal.proposalId);
+    payload.insert(QStringLiteral("kind"), proposal.kind);
+    payload.insert(QStringLiteral("scope"), scope.trimmed());
+    payload.insert(QStringLiteral("title"), title.trimmed());
+    payload.insert(QStringLiteral("summary"), summary.trimmed());
+    payload.insert(QStringLiteral("tags"), tagValues);
+    payload.insert(QStringLiteral("user_confirmed"), true);
+    QNetworkReply *reply = networkManager_.post(
+        createRequest(buildLongTermMemoryProposalConfirmUrl(proposal.proposalId), 10000),
+        QJsonDocument(payload).toJson(QJsonDocument::Compact));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError) {
+            emit longTermMemoryProposalConfirmFailed(replyErrorMessage(reply));
+            return;
+        }
+        emit longTermMemoryProposalConfirmed(QStringLiteral("已保存为长期记忆。"));
+    });
+}
+
+void BackendClient::rejectLongTermMemoryProposal(const QString &proposalId)
+{
+    if (proposalId.trimmed().isEmpty()) {
+        emit longTermMemoryProposalRejectFailed(QStringLiteral("记忆候选身份不完整，请重新打开。"));
+        return;
+    }
+    QJsonObject payload;
+    payload.insert(QStringLiteral("user_rejected"), true);
+    QNetworkReply *reply = networkManager_.post(
+        createRequest(buildLongTermMemoryProposalRejectUrl(proposalId), 10000),
+        QJsonDocument(payload).toJson(QJsonDocument::Compact));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError) {
+            emit longTermMemoryProposalRejectFailed(replyErrorMessage(reply));
+            return;
+        }
+        emit longTermMemoryProposalRejected(QStringLiteral("已拒绝这条长期记忆候选。"));
     });
 }
 
@@ -4247,6 +4364,17 @@ QUrl BackendClient::buildTaskMemoryProposalConfirmUrl(const QString &taskId) con
     return url;
 }
 
+QUrl BackendClient::buildTaskMemoryProposalRejectUrl(
+    const QString &taskId,
+    const QString &proposalId) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/tasks/%1/memory-proposals/%2/reject")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(taskId)))
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(proposalId))));
+    return url;
+}
+
 QUrl BackendClient::buildTaskPlanVersionsUrl(const QString &taskId) const
 {
     QUrl url(baseUrl_);
@@ -4361,6 +4489,29 @@ QUrl BackendClient::buildLongTermMemoriesUrl(const QString &scope, bool confirm)
         query.addQueryItem(QStringLiteral("confirm"), QStringLiteral("true"));
     }
     url.setQuery(query);
+    return url;
+}
+
+QUrl BackendClient::buildLongTermMemoryProposalsUrl() const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/memories/proposals"));
+    return url;
+}
+
+QUrl BackendClient::buildLongTermMemoryProposalConfirmUrl(const QString &proposalId) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/memories/proposals/%1/confirm")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(proposalId))));
+    return url;
+}
+
+QUrl BackendClient::buildLongTermMemoryProposalRejectUrl(const QString &proposalId) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/memories/proposals/%1/reject")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(proposalId))));
     return url;
 }
 

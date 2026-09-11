@@ -1,6 +1,6 @@
 # AgentFlow 项目状态
 
-最后更新：2026-09-10
+最后更新：2026-09-11
 
 ## 当前仓库状态
 
@@ -40,6 +40,8 @@
 > **2026-09-10 Agent 记忆 MEM-2 当前工作状态出口：**已新增 scope-bound、revisioned 的 `ConversationWorkingState` 与 SQLite 前向 migration，用户成功消息通过白名单 Reducer 覆盖或合并目标、预算、格式、材料范围、数量、时间范围等字段，含糊修改保持旧值并进入待确认。Workflow checkpoint 成功落库后才投影 active task、步骤、下一动作和 open item；`latest_verified_result` 严格限定真实 Runtime 已登记 artifact，dry-run 虚拟产物不会再伪装成交付。Prompt、计划审计和恢复 API 使用同一快照。MEM-2 门禁的 48 个夹具与 3 个既有探针共 51 项全部通过，状态字段准确率、任务恢复一致性为 100%，跨范围泄漏为 0；旧库升级、真实 Runtime checkpoint、重复事件和 FastAPI 恢复接口均有临时 SQLite/mock 回归。未改 Qt、未调用真实模型或网络；下一步固定为 MEM-3 的统一 `ContextEnvelope` 与模型感知预算。详情见 `docs/AGENT_MEMORY_MEM2_ACCEPTANCE.md`。
 
 > **2026-09-10 Agent 记忆 MEM-3 统一上下文出口：**已新增 `ContextEnvelope`，让 Intent JSON、Commander 计划审计和最终回复消费同一份选材结果，移除 Intent 独有的 2200 字符截断。预算按已核验模型窗口或 16,384-token 保守回退，扣除输出、系统/工具、当前输入和安全余量后计算，记忆输入封顶 20k；工作状态优先于长期记忆、确定性摘要和最近完整 user/assistant 轮次。工作状态摘要已补全 active task/plan、未完成事项和最小 artifact 标识；空间不足会在模型调用前失败，不静默丢状态。计划仅记录无正文估算和选择计数，明确不是 Provider usage。专项夹具及既有 C6、MEM-2 回归均已通过；未调用真实模型、网络或客户材料，未改 Qt。下一步固定为 MEM-4 的长期记忆候选生命周期、冲突治理与 compaction 前待确认候选，详情见 `docs/AGENT_MEMORY_MEM3_ACCEPTANCE.md`。
+
+> **2026-09-11 Agent 记忆 MEM-4 候选生命周期出口：**已新增 SQLite 持久候选账本与前向 migration；候选保存经脱敏的短事实、来源、指纹、冲突键、状态及替代关系，但不会进入长期检索或自动创建正式记忆。已完成 Commander Runtime 可沉淀已验证项目约束，客户明确要求且有真实 artifact 的完成任务可沉淀成功经验；普通会话在 Compaction 前提取强长期表达，归档和 Working State 成功后才落账。任务结果与设置 API 均支持查看、编辑后确认和拒绝；Qt 任务历史和长期记忆管理页接入同一复核链路，确认幂等，同键新值会停用旧有效记忆。专项回归验证一次性请求、三种来源、设置入口、重试/恢复去重、替代检索、敏感信息/路径/长原文拦截与旧库 migration；Qt Debug 构建与 CTest 也已通过。未调用真实模型、网络或客户材料。自动保留期、候选清理和自动过期仍是 MEM-6；下一步固定为 MEM-5 的检索评测与 BM25/Hybrid 准入，详情见 `docs/AGENT_MEMORY_MEM4_ACCEPTANCE.md`。
 
 > **2026-09-08 LGM5.7 CLI 自验证：**`verify_lgm57_trial_cli.py` 会在独立临时 SQLite 中真实执行候选目录与成对准备 CLI，覆盖候选列出、缺少 `--confirm-prepare` 时拒绝写入、确认后创建 Native/Graph Runtime 对及输出脱敏。内部开发验证不再要求用户手动运行该命令；真实任务库没有 C6.4 候选只代表没有经批准的真实组合计划，不能通过伪造任务绕过试点授权。
 
