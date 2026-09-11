@@ -105,6 +105,8 @@ class ConversationSessionRecord(BaseModel):
     last_plan_id: str = Field(default="", max_length=160)
     # 这是客户可回看的脱敏消息总数，不代表会被模型完整读取。
     archived_message_count: int = Field(default=0, ge=0)
+    # 归档仍保留在会话列表并可以恢复；只有明确删除或已开启的保留期才会清理数据。
+    archived_at: str = ""
     created_at: str
     updated_at: str
 
@@ -150,3 +152,25 @@ class ConversationTranscriptPage(BaseModel):
     limit: int = Field(ge=1, le=100)
     total: int = Field(ge=0)
     messages: list[ConversationMessageRecord] = Field(default_factory=list, max_length=100)
+
+
+class ConversationArchiveResponse(BaseModel):
+    conversation_id: str = Field(min_length=8, max_length=64)
+    project_scope: str = Field(min_length=1, max_length=80)
+    archived_at: str
+
+
+class ConversationDeleteResponse(BaseModel):
+    conversation_id: str = Field(min_length=8, max_length=64)
+    project_scope: str = Field(min_length=1, max_length=80)
+    deleted_message_count: int = Field(default=0, ge=0)
+    deleted_working_state_count: int = Field(default=0, ge=0)
+    deleted_proposal_count: int = Field(default=0, ge=0)
+
+
+class ConversationScopeClearResponse(BaseModel):
+    project_scope: str = Field(min_length=1, max_length=80)
+    deleted_conversation_count: int = Field(default=0, ge=0)
+    deleted_message_count: int = Field(default=0, ge=0)
+    deleted_working_state_count: int = Field(default=0, ge=0)
+    deleted_proposal_count: int = Field(default=0, ge=0)

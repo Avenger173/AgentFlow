@@ -29,6 +29,7 @@ from app.services.conversation_context_envelope import (
     ContextEnvelopeBudgetError,
     build_context_envelope,
 )
+from app.database.memory_observability_repository import record_memory_observation_safely
 from app.services.model_gateway import (
     ModelGatewayError,
     any_model_api_key_configured,
@@ -108,6 +109,13 @@ async def create_llm_chat_response(
         )
     except ContextEnvelopeBudgetError as exc:
         raise LlmChatError(str(exc)) from exc
+    record_memory_observation_safely(
+        event_type="context",
+        context_budget_tokens=context_envelope.audit.memory_token_budget,
+        context_estimated_tokens=context_envelope.audit.estimated_memory_tokens,
+        compaction_count=int(context_envelope.audit.compaction_summary_included),
+        summary_message_count=(conversation.context.summarized_message_count if conversation is not None else 0),
+    )
     has_conversation_context = context_envelope.has_conversation_context
 
     semantic_intent = None

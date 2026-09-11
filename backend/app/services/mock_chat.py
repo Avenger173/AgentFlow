@@ -9,6 +9,7 @@ from app.services.commander_memory import (
 )
 from app.services.conversation_context_envelope import build_context_envelope
 from app.services.conversation_memory import PreparedConversation
+from app.database.memory_observability_repository import record_memory_observation_safely
 from app.services.runtime_preferences_store import load_runtime_preferences
 from app.workflow.dry_run import run_workflow_dry_run
 
@@ -39,6 +40,13 @@ def create_mock_chat_response(
             long_term_memories=memory_context,
             runtime=None,
             reused_session_materials=conversation.reused_session_materials if conversation is not None else False,
+        )
+        record_memory_observation_safely(
+            event_type="context",
+            context_budget_tokens=context_envelope.audit.memory_token_budget,
+            context_estimated_tokens=context_envelope.audit.estimated_memory_tokens,
+            compaction_count=int(context_envelope.audit.compaction_summary_included),
+            summary_message_count=(conversation.context.summarized_message_count if conversation is not None else 0),
         )
         workflow_plan = create_commander_plan(
             message,
@@ -98,6 +106,12 @@ def build_mock_workflow_plan(message: str) -> WorkflowPlan:
         context=None,
         long_term_memories=memory_context,
         runtime=None,
+    )
+    record_memory_observation_safely(
+        event_type="context",
+        context_budget_tokens=context_envelope.audit.memory_token_budget,
+        context_estimated_tokens=context_envelope.audit.estimated_memory_tokens,
+        compaction_count=int(context_envelope.audit.compaction_summary_included),
     )
     plan = create_commander_plan(
         message,

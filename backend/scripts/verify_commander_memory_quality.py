@@ -688,7 +688,12 @@ def _run_memory_sanitize_case(case: dict[str, Any], started: float) -> Evaluatio
 
 def _run_memory_disabled_case(case: dict[str, Any], started: float) -> EvaluationResult:
     preferences = WorkflowPlanPreferences(memory_enabled=False)
-    with patch("app.services.commander_memory.search_long_term_memories", side_effect=AssertionError("不应读取长期记忆")):
+    # Patch the concrete dependency used by the runtime path. This keeps the
+    # privacy gate meaningful when retrieval implementation details evolve.
+    with patch(
+        "app.services.commander_memory.search_long_term_memory_retrieval",
+        side_effect=AssertionError("不应读取长期记忆"),
+    ):
         records = retrieve_commander_memory_context(
             user_goal="合成评测请求",
             preferences=preferences,

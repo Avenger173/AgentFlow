@@ -39,6 +39,8 @@ class RuntimePreferencesUpdateRequest(BaseModel):
     personality: AgentPersonality = "professional"
     # 默认关闭。开启后总指挥只读取用户确认、已启用且与当前目标相关的短记忆。
     memory_enabled: bool = False
+    # 0 表示关闭自动保留期。启用后按会话最后活动时间清理完整归档及其候选软关联。
+    conversation_retention_days: int = Field(default=0, ge=0, le=3650)
 
 
 class RuntimePreferencesResponse(RuntimePreferencesUpdateRequest):

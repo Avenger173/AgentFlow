@@ -89,11 +89,36 @@ def main() -> None:
                 "knowledge_child_chunks_fts",
                 "commander_conversations",
                 "commander_conversation_messages",
+                "commander_conversation_working_states",
+                "long_term_memories",
+                "long_term_memory_proposals",
+                "memory_observations",
                 "langgraph_runtime_bridges",
                 "langgraph_composition_trial_admissions",
                 "langgraph_composition_trial_authorizations",
             }
             assert required_tables <= table_names
+            conversation_columns = {
+                str(row["name"])
+                for row in first_connection.execute(
+                    "PRAGMA table_info(commander_conversations)"
+                ).fetchall()
+            }
+            assert {"summary_message_count", "last_task_id", "archived_at"} <= conversation_columns
+            observation_columns = {
+                str(row["name"])
+                for row in first_connection.execute(
+                    "PRAGMA table_info(memory_observations)"
+                ).fetchall()
+            }
+            assert {
+                "event_type",
+                "context_budget_tokens",
+                "retrieval_mode",
+                "recalled_memory_ids_json",
+                "lifecycle_action",
+            } <= observation_columns
+            assert not first_connection.execute("PRAGMA foreign_key_check").fetchall()
         finally:
             _close_connection(first_connection)
 
@@ -122,6 +147,10 @@ def main() -> None:
                 "20260907_langgraph_runtime_bridges_v1",
                 "20260907_langgraph_composition_trial_admissions_v1",
                 "20260908_langgraph_composition_trial_authorizations_v1",
+                "20260910_commander_conversation_working_state_v1",
+                "20260910_long_term_memory_candidate_lifecycle_v1",
+                "20260911_long_term_memory_bm25_v1",
+                "20260911_memory_lifecycle_observability_v1",
             }
         finally:
             _close_connection(second_connection)

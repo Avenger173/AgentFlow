@@ -15,10 +15,12 @@ from app.database.memory_repository import (
     reject_long_term_memory_proposal,
     update_long_term_memory,
 )
+from app.database.memory_observability_repository import list_memory_observations
 from app.schemas.memory import (
     LongTermMemoryClearResponse,
     LongTermMemoryCreateRequest,
     LongTermMemoryListResponse,
+    MemoryObservationListResponse,
     LongTermMemoryProposal,
     LongTermMemoryProposalConfirmRequest,
     LongTermMemoryProposalListResponse,
@@ -52,6 +54,13 @@ def list_memories(
     except LongTermMemorySafetyError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return LongTermMemoryListResponse(items=items, total=len(items))
+
+
+@router.get("/observations", response_model=MemoryObservationListResponse)
+def list_observations(limit: int = Query(default=100, ge=1, le=200)) -> MemoryObservationListResponse:
+    """返回最近无正文记忆观测，帮助本地诊断且不暴露客户内容。"""
+
+    return MemoryObservationListResponse(items=list_memory_observations(limit=limit))
 
 
 @router.get("/proposals", response_model=LongTermMemoryProposalListResponse)

@@ -140,6 +140,7 @@ struct ConversationContextInfo
     QString projectScope;
     QString title;
     QString summary;
+    QString archivedAt;
     QList<ConversationTranscriptMessage> recentMessages;
 };
 
@@ -152,6 +153,7 @@ struct ConversationSessionInfo
     QString title;
     QString summary;
     int archivedMessageCount = 0;
+    QString archivedAt;
     QString updatedAt;
 };
 
@@ -825,6 +827,7 @@ struct RuntimePreferencesResult
     QString permissionPolicy = QStringLiteral("smart_confirm");
     QString personality = QStringLiteral("professional");
     bool memoryEnabled = false;
+    int conversationRetentionDays = 0;
     QString updatedAt;
     QString notes;
 };
@@ -1133,7 +1136,7 @@ public:
                          const QString &conversationId = QString(),
                          const QJsonArray &agentHints = QJsonArray());
     // 重启后按不透明会话 ID 取回已脱敏的有限聊天记录。不存在的 ID 不会隐式创建会话。
-    void requestConversationContext(const QString &conversationId);
+    void requestConversationContext(const QString &conversationId, const QString &projectScope = QStringLiteral("global"));
     // 最近会话切换入口只取元数据；客户点选后才读取该会话的受控摘要和近轮内容。
     void requestConversationSessions(const QString &projectScope, int limit = 40);
     // 阅读完整历史时按页取回已脱敏正文，避免会话很长时阻塞调度台或无界占用内存。
@@ -1142,6 +1145,10 @@ public:
         const QString &projectScope,
         int offset = 0,
         int limit = 100);
+    // 会话生命周期操作始终带 project scope；删除与清空由 MainWindow 提供明确确认交互。
+    void archiveConversation(const QString &conversationId, const QString &projectScope);
+    void deleteConversation(const QString &conversationId, const QString &projectScope);
+    void clearConversations(const QString &projectScope);
     // 拉取历史任务摘要列表，用于历史页表格展示。
     void requestTaskHistory(const TaskHistoryQuery &query = TaskHistoryQuery{});
     // 拉取模型供应商清单和当前运行时状态，用于模型页只读概览。
@@ -1381,7 +1388,8 @@ public:
     void saveRuntimePreferences(
         const QString &permissionPolicy,
         const QString &personality,
-        bool memoryEnabled);
+        bool memoryEnabled,
+        int conversationRetentionDays = 0);
     // 长期记忆管理始终走本地后端 API。创建和编辑只提交短事实，清空需要后端的二次确认。
     void requestLongTermMemories(const QString &scope = QStringLiteral("global"));
     void requestLongTermMemoryProposals();
@@ -1452,6 +1460,8 @@ signals:
     void conversationSessionsFailed(const QString &message);
     void conversationTranscriptReceived(const ConversationTranscriptPageResult &result);
     void conversationTranscriptFailed(const QString &conversationId, const QString &message);
+    void conversationLifecycleCompleted(const QString &action, const QString &conversationId, int affectedCount);
+    void conversationLifecycleFailed(const QString &action, const QString &message);
     void taskLogReceived(const TaskLogEvent &event);
     void taskLogFinished(const QString &taskId);
     void taskLogFailed(const QString &message);

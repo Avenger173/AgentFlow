@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from app.database.memory_repository import (
     mark_long_term_memories_used,
-    search_long_term_memories,
+    search_long_term_memory_retrieval,
 )
+from app.database.memory_observability_repository import record_memory_observation_safely
 from app.schemas.chat import WorkflowPlanPreferences
 from app.schemas.memory import LongTermMemoryRecord
+from time import perf_counter
 
 
 def retrieve_commander_memory_context(
@@ -26,7 +28,21 @@ def retrieve_commander_memory_context(
     scopes = {"global"}
     if project_scope:
         scopes.add(project_scope)
-    return search_long_term_memories(query=user_goal, scopes=scopes, limit=3)
+    started = perf_counter()
+    result = search_long_term_memory_retrieval(query=user_goal, scopes=scopes, limit=3)
+    diagnostics = result.diagnostics
+    record_memory_observation_safely(
+        event_type="retrieval",
+        retrieval_mode=diagnostics.mode,
+        candidate_count=max(
+            diagnostics.bm25_candidate_count,
+            diagnostics.structured_candidate_count,
+        ) + diagnostics.global_preference_candidate_count,
+        recalled_memory_ids=[item.memory_id for item in result.records],
+        retrieval_latency_ms=round((perf_counter() - started) * 1000),
+        fallback_reason=diagnostics.fallback_reason,
+    )
+    return result.records
 
 
 def mark_commander_memory_context_used(records: list[LongTermMemoryRecord]) -> None:

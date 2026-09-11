@@ -45,6 +45,8 @@
 
 > **2026-09-11 Agent 记忆 MEM-5 检索准入出口：**已新增 `20260911_long_term_memory_bm25_v1`，为用户确认的长期短事实建立可重建 SQLite FTS5/BM25 派生索引和中文二元词影子字段；检索在 SQL 联表中先校验范围、启用和确认状态，再组合项目精确约束、BM25 与全局偏好。旧库回填、写入/编辑同步、冲突旧值排除、范围隔离、FTS 故障词面回退和 Dense 故障 BM25 回退均有临时 SQLite 回归。10,000 条合成记录的 BM25 P95 为 6.044 ms，required Recall@3 为 100%、MRR 为 1.000。RRF、7:3 对照和复用知识库 FastEmbed 的可选 Dense Provider 已具备，但本机未安装 `fastembed`/`chromadb`，真实语义收益与 Hybrid P95 未形成证据，Hybrid 没有进入默认路径。未调用真实模型、网络或客户材料；下一步固定为 MEM-6 生命周期清理与无正文可观测性，详情见 `docs/AGENT_MEMORY_MEM5_ACCEPTANCE.md`。
 
+> **2026-09-11 Agent 记忆 MEM-6 生命周期与观测出口：**已新增会话归档、单会话删除、项目范围清理和默认关闭的会话保留期；删除先校验 `project_scope`，清理候选软关联并由外键级联消息与 Working State，任务历史和已确认长期记忆保持独立。会话恢复 API 也补齐范围校验。设置页可保存保留天数，长期记忆管理显示范围、状态、来源和最近使用时间，候选复核显示来源；会话历史菜单提供归档、删除和项目清理的确认入口。`memory_observations` 只保存预算、计数、模式、受控 memory ID、耗时和固定降级码，拒绝正文、标题、文件名、路径、凭据和 embedding。临时 SQLite/mock 专项回归、Python 编译、依赖检查、Qt Debug 构建与 CTest 均通过；未调用真实模型、网络或客户材料。下一步为 MEM-7 的有限真实模型和客户路径验收，详情见 `docs/AGENT_MEMORY_MEM6_ACCEPTANCE.md`。
+
 > **2026-09-08 LGM5.7 CLI 自验证：**`verify_lgm57_trial_cli.py` 会在独立临时 SQLite 中真实执行候选目录与成对准备 CLI，覆盖候选列出、缺少 `--confirm-prepare` 时拒绝写入、确认后创建 Native/Graph Runtime 对及输出脱敏。内部开发验证不再要求用户手动运行该命令；真实任务库没有 C6.4 候选只代表没有经批准的真实组合计划，不能通过伪造任务绕过试点授权。
 
 > **2026-09-08 LGM5.7 真实开发者试点与最终闸门：**在用户授权的固定只读组合计划、已选本地材料和当前模型路由下，Native 基线与 LangGraph 候选都完成了专业步骤、Tool、artifact 与客户交付投影对照；Graph 初次仅一条专业分支失败，恢复时只重放该分支，已完成分支没有重复调用。实测修复了专业问题拆分、同 Provider 组合槽位、稳定 delegation key 与 synthesis 终态事件投影四个接缝。后续独立进程资源探针测得 Native `1569ms / 159MiB`、Graph `2012ms / 189MiB`，Graph 启动和常驻内存均超过当前 10% 门槛；真实父协调器的离线 checkpoint 故障注入也确认会在任何专业调用前停止、收束 bridge 为失败并明确要求 Native 重试。最终准入已按资源门槛登记为拒绝，未注册 API/Qt/Router，Native 仍是唯一客户默认 Runtime。

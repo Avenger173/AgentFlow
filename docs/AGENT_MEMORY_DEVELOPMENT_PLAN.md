@@ -1,6 +1,6 @@
 # AgentFlow 记忆系统开发与验收计划
 
-> 状态：实施中（MEM-0、MEM-1、MEM-2、MEM-3、MEM-4、MEM-5 已完成；BM25 已准入，Hybrid 暂不准入；MEM-6 待执行）
+> 状态：实施中（MEM-0 至 MEM-6 已完成；BM25 已准入，Hybrid 暂不准入；下一步为 MEM-7 的有限真实模型与客户路径验收）
 >
 > 建立日期：2026-09-10
 >
@@ -280,6 +280,13 @@ Hybrid 只有在语义改写用例上优于 BM25，并且 required 指标、延�
 - 自动保留期关闭时数据不会被后台删除；开启后的边界时间夹具结果稳定。
 - UI 的开关、确认、拒绝、删除、清空和会话恢复均与后端真实状态一致。
 - 可观测记录不包含客户正文、标题内容、文件名、路径、凭据或 embedding。
+
+**实施记录（2026-09-11）**
+
+- 新增前向 migration `20260911_memory_lifecycle_observability_v1`：会话拥有可恢复的 `archived_at` 标记；`memory_observations` 只保存上下文预算/估算、压缩和摘要计数、检索模式/候选数/受控 memory ID、耗时、固定降级码及清理计数。
+- `POST /api/chat/conversations/{id}/archive`、`DELETE /api/chat/conversations/{id}` 与带 `confirm=true` 的项目范围清理均先校验 `project_scope`。删除事务先清理候选软关联，再由外键级联消息和 Working State；任务历史与已确认长期记忆不受影响。会话恢复 API 同步补上 scope 校验。
+- 运行偏好新增 `conversation_retention_days`，`0` 为默认关闭；只有用户保存大于零的天数，服务启动、会话列表、会话恢复或新聊天时才按严格小于 cutoff 的边界清理。设置页、长期记忆管理表、候选复核窗与会话历史菜单均已接入实际后端状态及危险操作确认。
+- `verify_memory_lifecycle_observability.py` 在临时 SQLite/mock 环境通过范围拒绝、归档恢复、级联删除、项目隔离、关闭/开启保留期、边界时刻、无正文观测和 `foreign_key_check`。Qt Debug 构建与 CTest 同步通过；详见 `docs/AGENT_MEMORY_MEM6_ACCEPTANCE.md`。
 
 ### MEM-7：真实模型与客户路径验收
 

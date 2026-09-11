@@ -1323,6 +1323,41 @@ def _apply_long_term_memory_bm25_v1(connection: sqlite3.Connection) -> None:
     )
 
 
+def _apply_memory_lifecycle_observability_v1(connection: sqlite3.Connection) -> None:
+    """补齐会话归档生命周期与严格无正文的记忆观测账本。"""
+
+    connection.execute(
+        "ALTER TABLE commander_conversations ADD COLUMN archived_at TEXT NOT NULL DEFAULT ''"
+    )
+    connection.executescript(
+        """
+        CREATE INDEX idx_commander_conversations_scope_archive_updated
+        ON commander_conversations(project_scope, archived_at, updated_at DESC, conversation_id DESC);
+
+        CREATE TABLE memory_observations (
+            observation_id TEXT PRIMARY KEY,
+            event_type TEXT NOT NULL CHECK (event_type IN ('context', 'retrieval', 'lifecycle')),
+            observed_at TEXT NOT NULL,
+            context_budget_tokens INTEGER NOT NULL DEFAULT 0,
+            context_estimated_tokens INTEGER NOT NULL DEFAULT 0,
+            compaction_count INTEGER NOT NULL DEFAULT 0,
+            summary_message_count INTEGER NOT NULL DEFAULT 0,
+            retrieval_mode TEXT NOT NULL DEFAULT '',
+            candidate_count INTEGER NOT NULL DEFAULT 0,
+            recalled_memory_ids_json TEXT NOT NULL DEFAULT '[]',
+            retrieval_latency_ms INTEGER NOT NULL DEFAULT 0,
+            fallback_reason TEXT NOT NULL DEFAULT '',
+            lifecycle_action TEXT NOT NULL DEFAULT '',
+            affected_conversation_count INTEGER NOT NULL DEFAULT 0,
+            affected_proposal_count INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE INDEX idx_memory_observations_event_time
+        ON memory_observations(event_type, observed_at DESC, observation_id DESC);
+        """
+    )
+
+
 def _apply_langgraph_runtime_bridges_v1(connection: sqlite3.Connection) -> None:
     """建立 LGM5 主任务与 LangGraph checkpoint 的脱敏关联表。"""
 
@@ -1543,5 +1578,14 @@ _SCHEMA_MIGRATIONS: tuple[_SchemaMigration, ...] = (
             "retrieval_field_only_sync_trigger"
         ),
         apply=_apply_long_term_memory_bm25_v1,
+    ),
+    _SchemaMigration(
+        migration_id="20260911_memory_lifecycle_observability_v1",
+        signature=(
+            "commander_conversations:v3;archived_at;scope_archive_updated_index;"
+            "memory_observations:v1;context_retrieval_lifecycle_metrics;"
+            "no_customer_body_title_filename_path_credential_or_embedding"
+        ),
+        apply=_apply_memory_lifecycle_observability_v1,
     ),
 )

@@ -40,6 +40,7 @@ class StoredRuntimePreferences:
     permission_policy: str = "smart_confirm"
     personality: str = "professional"
     memory_enabled: bool = False
+    conversation_retention_days: int = 0
     updated_at: str = ""
 
     @classmethod
@@ -50,19 +51,26 @@ class StoredRuntimePreferences:
             permission_policy = "smart_confirm"
         if personality not in VALID_PERSONALITIES:
             personality = "professional"
+        try:
+            conversation_retention_days = int(data.get("conversation_retention_days", 0))
+        except (TypeError, ValueError):
+            conversation_retention_days = 0
+        conversation_retention_days = max(0, min(conversation_retention_days, 3650))
         return cls(
             permission_policy=permission_policy,
             personality=personality,
             memory_enabled=bool(data.get("memory_enabled", False)),
+            conversation_retention_days=conversation_retention_days,
             updated_at=str(data.get("updated_at") or "").strip(),
         )
 
     def to_json(self) -> dict[str, Any]:
         return {
-            "version": 2,
+            "version": 3,
             "permission_policy": self.permission_policy,
             "personality": self.personality,
             "memory_enabled": self.memory_enabled,
+            "conversation_retention_days": self.conversation_retention_days,
             "updated_at": self.updated_at,
         }
 
@@ -125,6 +133,7 @@ class RuntimePreferencesRepository:
         permission_policy: str,
         personality: str,
         memory_enabled: bool,
+        conversation_retention_days: int = 0,
     ) -> StoredRuntimePreferences:
         normalized_policy = permission_policy.strip().lower()
         normalized_personality = personality.strip().lower()
@@ -132,11 +141,14 @@ class RuntimePreferencesRepository:
             raise RuntimePreferencesStoreError(f"未知权限策略：{permission_policy}")
         if normalized_personality not in VALID_PERSONALITIES:
             raise RuntimePreferencesStoreError(f"未知 Agent 风格：{personality}")
+        if not 0 <= int(conversation_retention_days) <= 3650:
+            raise RuntimePreferencesStoreError("会话保留期必须在 0 到 3650 天之间。")
 
         preferences = StoredRuntimePreferences(
             permission_policy=normalized_policy,
             personality=normalized_personality,
             memory_enabled=bool(memory_enabled),
+            conversation_retention_days=int(conversation_retention_days),
             updated_at=_utc_now(),
         )
         self._write_atomic(preferences)
@@ -175,11 +187,13 @@ def save_runtime_preferences(
     permission_policy: str,
     personality: str,
     memory_enabled: bool,
+    conversation_retention_days: int = 0,
 ) -> StoredRuntimePreferences:
     return _DEFAULT_REPOSITORY.save(
         permission_policy=permission_policy,
         personality=personality,
         memory_enabled=memory_enabled,
+        conversation_retention_days=conversation_retention_days,
     )
 
 

@@ -3527,6 +3527,15 @@ border-radius: 22px;</string></property>
 <property name="text"><string>允许总指挥在规划时读取已确认的相关记忆</string></property>
 <property name="toolTip"><string>默认关闭。开启后仅检索你确认保存的偏好、项目约束和已验证经验；不会保存 API Key、原文件内容或完整对话。</string></property>
 </widget></item>
+<item row="3" column="0"><widget class="QLabel" name="settingsConversationRetentionLabel">
+<property name="text"><string>会话保留期</string></property>
+</widget></item><item row="3" column="1"><widget class="QSpinBox" name="settingsConversationRetentionSpin">
+<property name="minimumSize"><size><width>0</width><height>40</height></size></property>
+<property name="toolTip"><string>0 表示关闭自动清理。启用后，会按最后活动时间删除超期会话归档及其候选关联；任务历史和已确认长期记忆不受影响。</string></property>
+<property name="specialValueText"><string>关闭（不自动删除）</string></property>
+<property name="suffix"><string> 天</string></property>
+<property name="maximum"><number>3650</number></property>
+</widget></item>
 </layout></item><item><widget class="QTextEdit" name="settingsRuntimeNotesText">
 <property name="minimumSize"><size><width>0</width><height>120</height></size></property>
 <property name="maximumSize"><size><width>16777215</width><height>150</height></size></property>

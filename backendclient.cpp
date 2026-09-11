@@ -87,6 +87,7 @@ ConversationContextInfo readConversationContextInfo(const QJsonObject &payload)
     result.projectScope = session.value(QStringLiteral("project_scope")).toString();
     result.title = session.value(QStringLiteral("title")).toString();
     result.summary = session.value(QStringLiteral("summary")).toString();
+    result.archivedAt = session.value(QStringLiteral("archived_at")).toString();
 
     const QJsonArray messages = payload.value(QStringLiteral("recent_messages")).toArray();
     result.recentMessages.reserve(messages.size());
@@ -119,6 +120,7 @@ ConversationSessionListResult readConversationSessionListResult(const QJsonObjec
         session.title = item.value(QStringLiteral("title")).toString();
         session.summary = item.value(QStringLiteral("summary")).toString();
         session.archivedMessageCount = item.value(QStringLiteral("archived_message_count")).toInt();
+        session.archivedAt = item.value(QStringLiteral("archived_at")).toString();
         session.updatedAt = item.value(QStringLiteral("updated_at")).toString();
         if (!session.conversationId.isEmpty()) {
             result.conversations.append(session);
@@ -136,6 +138,7 @@ ConversationTranscriptPageResult readConversationTranscriptPageResult(const QJso
     result.session.title = session.value(QStringLiteral("title")).toString();
     result.session.summary = session.value(QStringLiteral("summary")).toString();
     result.session.archivedMessageCount = session.value(QStringLiteral("archived_message_count")).toInt();
+    result.session.archivedAt = session.value(QStringLiteral("archived_at")).toString();
     result.session.updatedAt = session.value(QStringLiteral("updated_at")).toString();
     result.offset = payload.value(QStringLiteral("offset")).toInt();
     result.limit = payload.value(QStringLiteral("limit")).toInt();
@@ -983,6 +986,8 @@ RuntimePreferencesResult readRuntimePreferencesResult(const QJsonObject &payload
     result.permissionPolicy = payload.value(QStringLiteral("permission_policy")).toString(QStringLiteral("smart_confirm"));
     result.personality = payload.value(QStringLiteral("personality")).toString(QStringLiteral("professional"));
     result.memoryEnabled = payload.value(QStringLiteral("memory_enabled")).toBool(false);
+    result.conversationRetentionDays = qBound(
+        0, payload.value(QStringLiteral("conversation_retention_days")).toInt(), 3650);
     result.updatedAt = payload.value(QStringLiteral("updated_at")).toString();
     result.notes = payload.value(QStringLiteral("notes")).toString();
     return result;
@@ -1445,7 +1450,7 @@ void BackendClient::sendChatMessage(const QString &message,
     });
 }
 
-void BackendClient::requestConversationContext(const QString &conversationId)
+void BackendClient::requestConversationContext(const QString &conversationId, const QString &projectScope)
 {
     const QString normalizedId = conversationId.trimmed();
     if (normalizedId.isEmpty()) {
@@ -1453,9 +1458,13 @@ void BackendClient::requestConversationContext(const QString &conversationId)
         return;
     }
 
-    const QString encodedId = QString::fromLatin1(QUrl::toPercentEncoding(normalizedId));
-    QNetworkReply *reply = networkManager_.get(
-        createRequest(QStringLiteral("/api/chat/conversations/%1").arg(encodedId), 10000));
+    const QString normalizedScope = projectScope.trimmed().isEmpty() ? QStringLiteral("global") : projectScope.trimmed();
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/chat/conversations/%1").arg(normalizedId));
+    QUrlQuery query;
+    query.addQueryItem(QStringLiteral("project_scope"), normalizedScope);
+    url.setQuery(query);
+    QNetworkReply *reply = networkManager_.get(createRequest(url, 10000));
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         if (reply->error() != QNetworkReply::NoError) {
             const QString message = replyErrorMessage(reply);
@@ -1552,6 +1561,95 @@ void BackendClient::requestConversationTranscript(
             return;
         }
         emit conversationTranscriptReceived(result);
+    });
+}
+
+void BackendClient::archiveConversation(const QString &conversationId, const QString &projectScope)
+{
+    const QString normalizedId = conversationId.trimmed();
+    if (normalizedId.isEmpty()) {
+        emit conversationLifecycleFailed(QStringLiteral("archive"), QStringLiteral("会话标识为空，无法归档。"));
+        return;
+    }
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/chat/conversations/%1/archive").arg(normalizedId));
+    QUrlQuery query;
+    query.addQueryItem(QStringLiteral("project_scope"), projectScope.trimmed().isEmpty() ? QStringLiteral("global") : projectScope.trimmed());
+    url.setQuery(query);
+    QNetworkReply *reply = networkManager_.post(createRequest(url, 10000), QByteArray());
+    connect(reply, &QNetworkReply::finished, this, [this, reply, normalizedId]() {
+        if (reply->error() != QNetworkReply::NoError) {
+            const QString message = replyErrorMessage(reply);
+            reply->deleteLater();
+            emit conversationLifecycleFailed(QStringLiteral("archive"), message);
+            return;
+        }
+        const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+        reply->deleteLater();
+        if (!document.isObject() || document.object().value(QStringLiteral("conversation_id")).toString() != normalizedId) {
+            emit conversationLifecycleFailed(QStringLiteral("archive"), QStringLiteral("后端归档会话响应格式无效。"));
+            return;
+        }
+        emit conversationLifecycleCompleted(QStringLiteral("archive"), normalizedId, 1);
+    });
+}
+
+void BackendClient::deleteConversation(const QString &conversationId, const QString &projectScope)
+{
+    const QString normalizedId = conversationId.trimmed();
+    if (normalizedId.isEmpty()) {
+        emit conversationLifecycleFailed(QStringLiteral("delete"), QStringLiteral("会话标识为空，无法删除。"));
+        return;
+    }
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/chat/conversations/%1").arg(normalizedId));
+    QUrlQuery query;
+    query.addQueryItem(QStringLiteral("project_scope"), projectScope.trimmed().isEmpty() ? QStringLiteral("global") : projectScope.trimmed());
+    url.setQuery(query);
+    QNetworkReply *reply = networkManager_.deleteResource(createRequest(url, 10000));
+    connect(reply, &QNetworkReply::finished, this, [this, reply, normalizedId]() {
+        if (reply->error() != QNetworkReply::NoError) {
+            const QString message = replyErrorMessage(reply);
+            reply->deleteLater();
+            emit conversationLifecycleFailed(QStringLiteral("delete"), message);
+            return;
+        }
+        const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+        reply->deleteLater();
+        if (!document.isObject() || document.object().value(QStringLiteral("conversation_id")).toString() != normalizedId) {
+            emit conversationLifecycleFailed(QStringLiteral("delete"), QStringLiteral("后端删除会话响应格式无效。"));
+            return;
+        }
+        emit conversationLifecycleCompleted(QStringLiteral("delete"), normalizedId, 1);
+    });
+}
+
+void BackendClient::clearConversations(const QString &projectScope)
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/chat/conversations"));
+    QUrlQuery query;
+    query.addQueryItem(QStringLiteral("project_scope"), projectScope.trimmed().isEmpty() ? QStringLiteral("global") : projectScope.trimmed());
+    query.addQueryItem(QStringLiteral("confirm"), QStringLiteral("true"));
+    url.setQuery(query);
+    QNetworkReply *reply = networkManager_.deleteResource(createRequest(url, 15000));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        if (reply->error() != QNetworkReply::NoError) {
+            const QString message = replyErrorMessage(reply);
+            reply->deleteLater();
+            emit conversationLifecycleFailed(QStringLiteral("clear"), message);
+            return;
+        }
+        const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+        reply->deleteLater();
+        if (!document.isObject() || !document.object().contains(QStringLiteral("deleted_conversation_count"))) {
+            emit conversationLifecycleFailed(QStringLiteral("clear"), QStringLiteral("后端清理会话响应格式无效。"));
+            return;
+        }
+        emit conversationLifecycleCompleted(
+            QStringLiteral("clear"),
+            QString(),
+            document.object().value(QStringLiteral("deleted_conversation_count")).toInt());
     });
 }
 
@@ -3327,7 +3425,8 @@ void BackendClient::requestRuntimePreferences()
 void BackendClient::saveRuntimePreferences(
     const QString &permissionPolicy,
     const QString &personality,
-    bool memoryEnabled)
+    bool memoryEnabled,
+    int conversationRetentionDays)
 {
     if (permissionPolicy.trimmed().isEmpty() || personality.trimmed().isEmpty()) {
         emit runtimePreferencesSaveFailed(QStringLiteral("权限模式或 Agent 风格为空。"));
@@ -3339,6 +3438,7 @@ void BackendClient::saveRuntimePreferences(
     payload.insert(QStringLiteral("personality"), personality.trimmed());
     // 开关只表达“是否允许读取已确认的短记忆”；记忆内容不会经由设置接口传输。
     payload.insert(QStringLiteral("memory_enabled"), memoryEnabled);
+    payload.insert(QStringLiteral("conversation_retention_days"), qBound(0, conversationRetentionDays, 3650));
 
     QNetworkReply *reply = networkManager_.put(
         createRequest(buildRuntimePreferencesUrl(), 10000),

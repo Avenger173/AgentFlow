@@ -45,6 +45,7 @@ def update_runtime_preferences(
             permission_policy=request.permission_policy,
             personality=request.personality,
             memory_enabled=request.memory_enabled,
+            conversation_retention_days=request.conversation_retention_days,
         )
     except RuntimePreferencesStoreError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -56,9 +57,11 @@ def _build_response(preferences) -> RuntimePreferencesResponse:
         permission_policy=preferences.permission_policy,
         personality=preferences.personality,
         memory_enabled=preferences.memory_enabled,
+        conversation_retention_days=preferences.conversation_retention_days,
         updated_at=preferences.updated_at,
         notes=(
-            "运行偏好只影响默认确认策略、Agent 表达风格和总指挥是否读取已确认的长期记忆；"
+            "运行偏好只影响默认确认策略、Agent 表达风格、总指挥是否读取已确认的长期记忆，"
+            "以及在明确开启后按最后活动时间清理会话归档；"
             "真实文件写入、联网、Shell、插件等高权限动作仍由 Runtime 权限边界和审计记录控制。"
         ),
         permission_policy_options=_permission_policy_options(),

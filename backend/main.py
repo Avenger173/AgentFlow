@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.workflow.runtime_jobs import recover_interrupted_runtime_jobs
 from app.database.knowledge_repository import recover_pending_knowledge_base_deletions
 from app.services.knowledge_keyword_index import recover_interrupted_knowledge_index_jobs
+from app.services.conversation_lifecycle import run_configured_conversation_retention
 
 
 @asynccontextmanager
@@ -17,6 +18,7 @@ async def _agentflow_lifespan(app: FastAPI):
     recovered_task_ids = await asyncio.to_thread(recover_interrupted_runtime_jobs)
     recovered_knowledge_job_ids = await asyncio.to_thread(recover_interrupted_knowledge_index_jobs)
     recovered_knowledge_deletion_ids = await asyncio.to_thread(recover_pending_knowledge_base_deletions)
+    retention_maintenance = await asyncio.to_thread(run_configured_conversation_retention)
     # 仅保存数量供本进程诊断；客户仍通过任务历史读取每条真实审计事件。
     app.state.recovered_runtime_task_count = len(recovered_task_ids)
     # 知识库索引同样不能在重启后盲目续跑。K1 先收束为失败并等待显式重试，避免磁盘上半写
@@ -25,6 +27,8 @@ async def _agentflow_lifespan(app: FastAPI):
     # 删除流程先由索引恢复收束 running job，再继续清理私有资料目录，避免重启后留下不可见
     # 但仍可被磁盘占用的候选副本。
     app.state.recovered_knowledge_deletion_count = len(recovered_knowledge_deletion_ids)
+    # 默认保留期为关闭；只有客户已经明确配置天数时，启动恢复才会清理超期会话。
+    app.state.retention_cleanup_conversation_count = retention_maintenance.deleted_conversation_count
     yield
 
 

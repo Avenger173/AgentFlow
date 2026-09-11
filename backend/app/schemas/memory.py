@@ -122,3 +122,27 @@ class LongTermMemoryProposalRejectRequest(BaseModel):
     """拒绝待确认候选需要显式确认；拒绝操作可安全重试。"""
 
     user_rejected: bool = False
+
+
+class MemoryObservationRecord(BaseModel):
+    """MEM-6 无正文观测记录，供本地诊断与验收使用。"""
+
+    observation_id: str
+    event_type: Literal["context", "retrieval", "lifecycle"]
+    observed_at: str
+    context_budget_tokens: int = Field(default=0, ge=0)
+    context_estimated_tokens: int = Field(default=0, ge=0)
+    compaction_count: int = Field(default=0, ge=0)
+    summary_message_count: int = Field(default=0, ge=0)
+    retrieval_mode: str = Field(default="", max_length=80)
+    candidate_count: int = Field(default=0, ge=0)
+    recalled_memory_ids: list[str] = Field(default_factory=list, max_length=8)
+    retrieval_latency_ms: int = Field(default=0, ge=0)
+    fallback_reason: str = Field(default="", max_length=200)
+    lifecycle_action: str = Field(default="", max_length=80)
+    affected_conversation_count: int = Field(default=0, ge=0)
+    affected_proposal_count: int = Field(default=0, ge=0)
+
+
+class MemoryObservationListResponse(BaseModel):
+    items: list[MemoryObservationRecord] = Field(default_factory=list, max_length=200)

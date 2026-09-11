@@ -31,6 +31,7 @@ class QListWidget;
 class QPlainTextEdit;
 class QResizeEvent;
 class QScrollArea;
+class QSpinBox;
 class QTimer;
 class QTableWidget;
 class QTextBrowser;
@@ -110,6 +111,8 @@ private:
     void handleDispatchConversationSessionsFailed(const QString &message);
     void handleDispatchConversationTranscript(const ConversationTranscriptPageResult &result);
     void handleDispatchConversationTranscriptFailed(const QString &conversationId, const QString &message);
+    void handleDispatchConversationLifecycleCompleted(const QString &action, const QString &conversationId, int affectedCount);
+    void handleDispatchConversationLifecycleFailed(const QString &action, const QString &message);
     // 安全只读的单材料任务不应把客户带进“计划 -> 预演 -> 再确认”的控制流。
     // 这里仅识别已经通过后端准入的知识库问答与数据预览；写入、联网、深度分析
     // 或多个专业分支仍沿用原有计划与人工确认边界。
@@ -632,6 +635,7 @@ private:
     QComboBox *settingsPermissionPolicyCombo = nullptr;
     QComboBox *settingsPersonalityCombo = nullptr;
     QCheckBox *settingsMemoryEnabledCheck = nullptr;
+    QSpinBox *settingsConversationRetentionSpin = nullptr;
     QPushButton *settingsRefreshPreferencesButton = nullptr;
     QPushButton *settingsManageMemoriesButton = nullptr;
     QPushButton *settingsSavePreferencesButton = nullptr;

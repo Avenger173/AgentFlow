@@ -1,6 +1,16 @@
 from app.schemas.chat import ChatRequest, ChatResponse, WorkflowPlan
-from app.schemas.conversation import ConversationContext, ConversationSessionList, ConversationTranscriptPage
+from app.schemas.conversation import (
+    ConversationArchiveResponse,
+    ConversationContext,
+    ConversationDeleteResponse,
+    ConversationScopeClearResponse,
+    ConversationSessionList,
+    ConversationTranscriptPage,
+)
 from app.database.conversation_repository import (
+    archive_conversation,
+    clear_conversations_for_scope,
+    delete_conversation,
     get_conversation_context,
     get_conversation_transcript,
     list_conversations,
@@ -15,7 +25,8 @@ from app.services.conversation_memory import (
 from app.services.llm_chat import LlmChatError, create_llm_chat_response, is_llm_enabled
 from app.services.long_term_memory import LongTermMemorySafetyError, normalize_memory_scope
 from app.services.mock_chat import create_mock_chat_response
-from fastapi import APIRouter, HTTPException
+from app.services.conversation_lifecycle import run_configured_conversation_retention
+from fastapi import APIRouter, HTTPException, Query
 
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -53,7 +64,62 @@ async def get_conversation_list(project_scope: str = "global", limit: int = 40) 
         normalized_scope = normalize_memory_scope(project_scope)
     except LongTermMemorySafetyError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    run_configured_conversation_retention()
     return list_conversations(project_scope=normalized_scope, limit=limit)
+
+
+@router.delete("/conversations", response_model=ConversationScopeClearResponse)
+async def clear_conversation_scope(
+    project_scope: str = Query(default="global", max_length=80),
+    confirm: bool = Query(default=False),
+) -> ConversationScopeClearResponse:
+    """清空当前项目范围的会话归档；必须由客户端显式确认。"""
+
+    if not confirm:
+        raise HTTPException(status_code=400, detail="清空会话归档需要 confirm=true。")
+    try:
+        normalized_scope = normalize_memory_scope(project_scope)
+        return clear_conversations_for_scope(project_scope=normalized_scope)
+    except LongTermMemorySafetyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/conversations/{conversation_id}/archive", response_model=ConversationArchiveResponse)
+async def archive_conversation_endpoint(
+    conversation_id: str,
+    project_scope: str = Query(default="global", max_length=80),
+) -> ConversationArchiveResponse:
+    """归档一段会话，数据仍可按原 scope 恢复。"""
+
+    try:
+        normalized_id = normalize_conversation_id(conversation_id)
+        normalized_scope = normalize_memory_scope(project_scope)
+        if not normalized_id:
+            raise LookupError("未找到指定会话。")
+        return archive_conversation(conversation_id=normalized_id, project_scope=normalized_scope)
+    except (ConversationSafetyError, LongTermMemorySafetyError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="未找到指定会话。") from exc
+
+
+@router.delete("/conversations/{conversation_id}", response_model=ConversationDeleteResponse)
+async def delete_conversation_endpoint(
+    conversation_id: str,
+    project_scope: str = Query(default="global", max_length=80),
+) -> ConversationDeleteResponse:
+    """删除一段会话及其候选软关联，拒绝跨 project scope 操作。"""
+
+    try:
+        normalized_id = normalize_conversation_id(conversation_id)
+        normalized_scope = normalize_memory_scope(project_scope)
+        if not normalized_id:
+            raise LookupError("未找到指定会话。")
+        return delete_conversation(conversation_id=normalized_id, project_scope=normalized_scope)
+    except (ConversationSafetyError, LongTermMemorySafetyError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="未找到指定会话。") from exc
 
 
 @router.get("/conversations/{conversation_id}/messages", response_model=ConversationTranscriptPage)
@@ -84,17 +150,22 @@ async def get_conversation_messages(
 
 
 @router.get("/conversations/{conversation_id}", response_model=ConversationContext)
-async def get_conversation(conversation_id: str) -> ConversationContext:
+async def get_conversation(
+    conversation_id: str,
+    project_scope: str = Query(default="global", max_length=80),
+) -> ConversationContext:
     """恢复一段已脱敏的有限会话，供桌面端重启后重新展示近轮上下文。"""
 
     try:
         normalized_id = normalize_conversation_id(conversation_id)
-    except ConversationSafetyError as exc:
+        normalized_scope = normalize_memory_scope(project_scope)
+    except (ConversationSafetyError, LongTermMemorySafetyError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not normalized_id:
         raise HTTPException(status_code=404, detail="未找到指定会话。")
     try:
-        return get_conversation_context(normalized_id)
+        run_configured_conversation_retention()
+        return get_conversation_context(normalized_id, project_scope=normalized_scope)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail="未找到指定会话。") from exc
 
@@ -109,6 +180,8 @@ async def chat(request: ChatRequest) -> ChatResponse:
         request.project_scope = normalize_memory_scope(request.project_scope)
     except LongTermMemorySafetyError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    run_configured_conversation_retention()
 
     try:
         prepared_conversation = prepare_conversation(

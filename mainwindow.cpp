@@ -53,6 +53,7 @@
 #include <QSignalBlocker>
 #include <QSize>
 #include <QSizePolicy>
+#include <QSpinBox>
 #include <QSplitter>
 #include <QSettings>
 #include <QStringDecoder>
@@ -1254,6 +1255,14 @@ void MainWindow::setupBackendIntegration()
             &BackendClient::conversationTranscriptFailed,
             this,
             &MainWindow::handleDispatchConversationTranscriptFailed);
+    connect(backendClient,
+            &BackendClient::conversationLifecycleCompleted,
+            this,
+            &MainWindow::handleDispatchConversationLifecycleCompleted);
+    connect(backendClient,
+            &BackendClient::conversationLifecycleFailed,
+            this,
+            &MainWindow::handleDispatchConversationLifecycleFailed);
     connect(backendClient, &BackendClient::taskLogReceived, this, &MainWindow::handleTaskLogReceived);
     connect(backendClient, &BackendClient::taskLogFinished, this, &MainWindow::handleTaskLogFinished);
     connect(backendClient, &BackendClient::taskLogFailed, this, &MainWindow::handleTaskLogFailed);
@@ -1777,8 +1786,9 @@ void MainWindow::handleDispatchConversationSessions(const ConversationSessionLis
                                                                  : session.title.trimmed().left(56);
         const QString timestamp = session.updatedAt.left(19).replace(QLatin1Char('T'), QLatin1Char(' '));
         QAction *action = menu->addAction(
-            QStringLiteral("%1\n%2 条消息 · %3")
+            QStringLiteral("%1%2\n%3 条消息 · %4")
                 .arg(title)
+                .arg(session.archivedAt.isEmpty() ? QString() : QStringLiteral(" · 已归档"))
                 .arg(QString::number(session.archivedMessageCount))
                 .arg(timestamp));
         action->setCheckable(true);
@@ -1795,9 +1805,50 @@ void MainWindow::handleDispatchConversationSessions(const ConversationSessionLis
     }
     if (!currentDispatchConversationId.isEmpty()) {
         menu->addSeparator();
-        QAction *archiveAction = menu->addAction(
+        QAction *viewArchiveAction = menu->addAction(
             style()->standardIcon(QStyle::SP_FileDialogDetailedView), QStringLiteral("查看当前完整记录"));
-        connect(archiveAction, &QAction::triggered, this, &MainWindow::openDispatchConversationArchive);
+        connect(viewArchiveAction, &QAction::triggered, this, &MainWindow::openDispatchConversationArchive);
+        QAction *archiveConversationAction = menu->addAction(
+            style()->standardIcon(QStyle::SP_DialogSaveButton), QStringLiteral("归档当前会话"));
+        connect(archiveConversationAction, &QAction::triggered, this, [this]() {
+            if (backendClient && !currentDispatchConversationId.isEmpty()) {
+                backendClient->archiveConversation(currentDispatchConversationId, currentDispatchProjectScope);
+            }
+        });
+        QAction *deleteConversationAction = menu->addAction(
+            style()->standardIcon(QStyle::SP_TrashIcon), QStringLiteral("删除当前会话"));
+        connect(deleteConversationAction, &QAction::triggered, this, [this]() {
+            if (!backendClient || currentDispatchConversationId.isEmpty()) {
+                return;
+            }
+            const auto answer = QMessageBox::warning(
+                this,
+                QStringLiteral("删除当前会话"),
+                QStringLiteral("将删除当前会话的脱敏消息、Working State 和关联记忆候选；任务历史和已确认长期记忆会保留。确定继续吗？"),
+                QMessageBox::Yes | QMessageBox::Cancel,
+                QMessageBox::Cancel);
+            if (answer == QMessageBox::Yes) {
+                backendClient->deleteConversation(currentDispatchConversationId, currentDispatchProjectScope);
+            }
+        });
+    }
+    if (!result.conversations.isEmpty()) {
+        QAction *clearScopeAction = menu->addAction(
+            style()->standardIcon(QStyle::SP_TrashIcon), QStringLiteral("清理当前项目会话"));
+        connect(clearScopeAction, &QAction::triggered, this, [this]() {
+            if (!backendClient) {
+                return;
+            }
+            const auto answer = QMessageBox::warning(
+                this,
+                QStringLiteral("清理当前项目会话"),
+                QStringLiteral("将删除当前项目范围的全部会话、Working State、脱敏消息和关联记忆候选；任务历史和已确认长期记忆会保留。确定继续吗？"),
+                QMessageBox::Yes | QMessageBox::Cancel,
+                QMessageBox::Cancel);
+            if (answer == QMessageBox::Yes) {
+                backendClient->clearConversations(currentDispatchProjectScope);
+            }
+        });
     }
 
     menu->popup(ui->dispatchConversationHistoryButton->mapToGlobal(
@@ -1809,6 +1860,36 @@ void MainWindow::handleDispatchConversationSessionsFailed(const QString &message
     ui->dispatchConversationHistoryButton->setEnabled(true);
     ui->dispatchChatStatus->setText(
         QStringLiteral("会话列表暂时无法读取 · %1").arg(message.left(100)));
+}
+
+void MainWindow::handleDispatchConversationLifecycleCompleted(
+    const QString &action,
+    const QString &conversationId,
+    int affectedCount)
+{
+    if (action == QStringLiteral("archive")) {
+        ui->dispatchChatStatus->setText(QStringLiteral("当前会话已归档，可随时从历史会话恢复"));
+        return;
+    }
+    if (action == QStringLiteral("delete") || action == QStringLiteral("clear")) {
+        const bool deletedCurrent = action == QStringLiteral("clear")
+            || (!conversationId.isEmpty() && conversationId == currentDispatchConversationId);
+        if (deletedCurrent) {
+            startNewDispatchConversation();
+        }
+        ui->dispatchChatStatus->setText(
+            action == QStringLiteral("clear")
+                ? QStringLiteral("已清理当前项目的 %1 段会话 · 任务历史保持不变").arg(affectedCount)
+                : QStringLiteral("当前会话已删除 · 任务历史保持不变"));
+    }
+}
+
+void MainWindow::handleDispatchConversationLifecycleFailed(const QString &action, const QString &message)
+{
+    const QString actionText = action == QStringLiteral("archive")
+        ? QStringLiteral("归档")
+        : action == QStringLiteral("delete") ? QStringLiteral("删除") : QStringLiteral("清理");
+    ui->dispatchChatStatus->setText(QStringLiteral("会话%1未完成 · %2").arg(actionText, message.left(120)));
 }
 
 void MainWindow::openDispatchConversationArchive()
@@ -2020,7 +2101,7 @@ void MainWindow::requestDispatchConversationContext()
     }
     dispatchConversationRestoreInProgress = true;
     ui->dispatchChatStatus->setText(QStringLiteral("正在恢复当前会话"));
-    backendClient->requestConversationContext(currentDispatchConversationId);
+    backendClient->requestConversationContext(currentDispatchConversationId, currentDispatchProjectScope);
 }
 
 void MainWindow::handleDispatchConversationContext(const ConversationContextInfo &context)
@@ -11987,6 +12068,7 @@ void MainWindow::setupSettingsPage()
     settingsPermissionPolicyCombo = ui->settingsPermissionPolicyCombo;
     settingsPersonalityCombo = ui->settingsPersonalityCombo;
     settingsMemoryEnabledCheck = ui->settingsMemoryEnabledCheck;
+    settingsConversationRetentionSpin = ui->settingsConversationRetentionSpin;
     settingsRefreshPreferencesButton = ui->settingsRefreshPreferencesButton;
     settingsManageMemoriesButton = ui->settingsManageMemoriesButton;
     settingsSavePreferencesButton = ui->settingsSavePreferencesButton;
@@ -12023,6 +12105,7 @@ void MainWindow::setupSettingsPage()
     connect(settingsMemoryEnabledCheck, &QCheckBox::toggled, this, [markDirty](bool) {
         markDirty(0);
     });
+    connect(settingsConversationRetentionSpin, qOverload<int>(&QSpinBox::valueChanged), this, markDirty);
 
     polishBadge(settingsRuntimeStatusBadge, QStringLiteral("badgeGray"));
     settingsRuntimeNotesText->setHtml(
@@ -12195,7 +12278,8 @@ void MainWindow::refreshRuntimePreferences()
 
 void MainWindow::saveRuntimePreferencesFromSettings()
 {
-    if (!backendClient || !settingsPermissionPolicyCombo || !settingsPersonalityCombo || !settingsMemoryEnabledCheck) {
+    if (!backendClient || !settingsPermissionPolicyCombo || !settingsPersonalityCombo || !settingsMemoryEnabledCheck
+        || !settingsConversationRetentionSpin) {
         return;
     }
 
@@ -12215,7 +12299,8 @@ void MainWindow::saveRuntimePreferencesFromSettings()
     backendClient->saveRuntimePreferences(
         settingsPermissionPolicyCombo->currentData().toString(),
         settingsPersonalityCombo->currentData().toString(),
-        settingsMemoryEnabledCheck->isChecked());
+        settingsMemoryEnabledCheck->isChecked(),
+        settingsConversationRetentionSpin->value());
 }
 
 void MainWindow::handleRuntimePreferencesReceived(const RuntimePreferencesResult &result)
@@ -12311,6 +12396,10 @@ void MainWindow::applyRuntimePreferencesToSettings(const RuntimePreferencesResul
     if (settingsMemoryEnabledCheck) {
         settingsMemoryEnabledCheck->setChecked(result.memoryEnabled);
     }
+    if (settingsConversationRetentionSpin) {
+        const QSignalBlocker retentionBlocker(settingsConversationRetentionSpin);
+        settingsConversationRetentionSpin->setValue(result.conversationRetentionDays);
+    }
     runtimePreferencesLoading = false;
     if (settingsRuntimeNotesText) {
         settingsRuntimeNotesText->setHtml(formatRuntimePreferencesNotesHtml(result));
@@ -12362,6 +12451,10 @@ QString MainWindow::formatRuntimePreferencesNotesHtml(const RuntimePreferencesRe
                 .arg(result.memoryEnabled
                          ? QStringLiteral("已开启，仅读取用户确认的相关短记忆")
                          : QStringLiteral("已关闭，不读取任何长期记忆"));
+    html += QStringLiteral("<p style=\"margin:4px 0;\"><b>会话保留期：</b>%1</p>")
+                .arg(result.conversationRetentionDays > 0
+                         ? QStringLiteral("%1 天，按最后活动时间自动清理会话归档").arg(result.conversationRetentionDays)
+                         : QStringLiteral("已关闭，不自动删除会话归档"));
     html += QStringLiteral("<p style=\"margin:4px 0;\"><b>更新时间：</b>%1</p>")
                 .arg(result.updatedAt.isEmpty() ? QStringLiteral("尚未保存") : result.updatedAt.toHtmlEscaped());
     if (!result.notes.isEmpty()) {
@@ -12388,8 +12481,8 @@ void MainWindow::openLongTermMemoryManager()
     auto *dialog = new QDialog(this);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setWindowTitle(QStringLiteral("长期记忆管理"));
-    dialog->setMinimumSize(900, 600);
-    dialog->resize(1080, 700);
+    dialog->setMinimumSize(1080, 600);
+    dialog->resize(1240, 700);
     longTermMemoryDialog = dialog;
 
     auto *rootLayout = new QVBoxLayout(dialog);
@@ -12419,18 +12512,23 @@ void MainWindow::openLongTermMemoryManager()
     auto *splitter = new QSplitter(Qt::Horizontal, dialog);
     splitter->setChildrenCollapsible(false);
     auto *table = new QTableWidget(splitter);
-    table->setColumnCount(4);
-    table->setHorizontalHeaderLabels({QStringLiteral("类型"), QStringLiteral("标题"), QStringLiteral("范围"), QStringLiteral("状态")});
+    table->setColumnCount(6);
+    table->setHorizontalHeaderLabels({
+        QStringLiteral("类型"), QStringLiteral("标题"), QStringLiteral("范围"),
+        QStringLiteral("状态"), QStringLiteral("来源"), QStringLiteral("最近使用")});
     table->setSelectionBehavior(QAbstractItemView::SelectRows);
     table->setSelectionMode(QAbstractItemView::SingleSelection);
     table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     table->setAlternatingRowColors(true);
     table->verticalHeader()->setVisible(false);
-    table->horizontalHeader()->setStretchLastSection(true);
+    table->horizontalHeader()->setStretchLastSection(false);
     table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
     table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
     table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
-    table->setMinimumWidth(450);
+    table->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+    table->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
+    table->horizontalHeader()->setSectionResizeMode(5, QHeaderView::ResizeToContents);
+    table->setMinimumWidth(640);
 
     auto *editorFrame = new QFrame(splitter);
     editorFrame->setObjectName(QStringLiteral("contentCard"));
@@ -12658,6 +12756,18 @@ void MainWindow::handleLongTermMemoriesReceived(const QList<LongTermMemoryInfo> 
             longTermMemoryTable->setItem(row, 2, new QTableWidgetItem(item.scope));
             longTermMemoryTable->setItem(
                 row, 3, new QTableWidgetItem(item.enabled ? QStringLiteral("可引用") : QStringLiteral("已关闭")));
+            longTermMemoryTable->setItem(
+                row,
+                4,
+                new QTableWidgetItem(
+                    item.sourceTaskId.isEmpty() ? QStringLiteral("手动确认") : item.sourceTaskId));
+            longTermMemoryTable->setItem(
+                row,
+                5,
+                new QTableWidgetItem(
+                    item.lastUsedAt.isEmpty()
+                        ? QStringLiteral("尚未使用")
+                        : item.lastUsedAt.left(19).replace(QLatin1Char('T'), QLatin1Char(' '))));
             if (item.memoryId == currentLongTermMemoryId) {
                 selectedRow = row;
             }
@@ -12776,11 +12886,15 @@ void MainWindow::openLongTermMemoryProposalReview(const LongTermMemoryProposalLi
     summaryInput->setMinimumHeight(120);
     auto *tagsInput = new QLineEdit(dialog);
     tagsInput->setPlaceholderText(QStringLiteral("可选标签，用逗号分隔"));
+    auto *sourceLabel = new QLabel(dialog);
+    sourceLabel->setObjectName(QStringLiteral("tinyText"));
+    sourceLabel->setWordWrap(true);
     form->addRow(QStringLiteral("类型"), kindLabel);
     form->addRow(QStringLiteral("保存范围"), scopeInput);
     form->addRow(QStringLiteral("标题"), titleInput);
     form->addRow(QStringLiteral("摘要"), summaryInput);
     form->addRow(QStringLiteral("标签"), tagsInput);
+    form->addRow(QStringLiteral("候选来源"), sourceLabel);
     layout->addLayout(form, 1);
 
     auto *reasonLabel = new QLabel(dialog);
@@ -12795,7 +12909,7 @@ void MainWindow::openLongTermMemoryProposalReview(const LongTermMemoryProposalLi
     auto *confirmButton = buttons->addButton(QStringLiteral("确认保存"), QDialogButtonBox::AcceptRole);
     layout->addWidget(buttons);
 
-    auto populate = [this, proposals, kindLabel, scopeInput, titleInput, summaryInput, tagsInput, reasonLabel](int index) {
+    auto populate = [this, proposals, kindLabel, scopeInput, titleInput, summaryInput, tagsInput, sourceLabel, reasonLabel](int index) {
         if (index < 0 || index >= proposals.size()) {
             return;
         }
@@ -12805,6 +12919,16 @@ void MainWindow::openLongTermMemoryProposalReview(const LongTermMemoryProposalLi
         titleInput->setText(activeLongTermMemoryProposal.title);
         summaryInput->setPlainText(activeLongTermMemoryProposal.summary);
         tagsInput->setText(activeLongTermMemoryProposal.tags.join(QStringLiteral(", ")));
+        QString sourceText = activeLongTermMemoryProposal.sourceType.isEmpty()
+            ? QStringLiteral("受控候选")
+            : activeLongTermMemoryProposal.sourceType;
+        if (!activeLongTermMemoryProposal.sourceId.isEmpty()) {
+            sourceText += QStringLiteral(" · %1").arg(activeLongTermMemoryProposal.sourceId);
+        }
+        if (!activeLongTermMemoryProposal.sourceConversationId.isEmpty()) {
+            sourceText += QStringLiteral(" · 会话 %1").arg(activeLongTermMemoryProposal.sourceConversationId);
+        }
+        sourceLabel->setText(sourceText);
         reasonLabel->setText(activeLongTermMemoryProposal.reason);
     };
     populate(0);

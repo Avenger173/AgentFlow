@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -9,9 +10,12 @@ from app.database.sqlite import get_connection
 from app.schemas.chat import WorkflowMaterialBinding
 from app.schemas.conversation import (
     ConversationContext,
+    ConversationArchiveResponse,
+    ConversationDeleteResponse,
     ConversationMessageRecord,
     ConversationSessionList,
     ConversationSessionRecord,
+    ConversationScopeClearResponse,
     ConversationTranscriptPage,
     ConversationWorkingState,
 )
@@ -26,6 +30,16 @@ CONVERSATION_TITLE_MAX_LENGTH = 42
 
 class ConversationWorkingStateConflict(RuntimeError):
     """结构化会话状态在读取到写入之间发生了竞争更新。"""
+
+
+@dataclass(frozen=True)
+class ConversationRetentionCleanupResult:
+    """内部保留期结果；不携带 scope、标题、正文或消息标识。"""
+
+    deleted_conversation_count: int = 0
+    deleted_message_count: int = 0
+    deleted_working_state_count: int = 0
+    deleted_proposal_count: int = 0
 
 _SUMMARY_CLAUSE_SPLIT_PATTERN = re.compile(r"[。！？!?；;\n]+")
 _CONSTRAINT_SIGNAL_PATTERN = re.compile(
@@ -78,13 +92,108 @@ def get_conversation(conversation_id: str) -> ConversationSessionRecord | None:
     return _row_to_session(row) if row is not None else None
 
 
-def get_conversation_context(conversation_id: str) -> ConversationContext:
+def archive_conversation(*, conversation_id: str, project_scope: str) -> ConversationArchiveResponse:
+    """标记会话为归档，保留完整脱敏记录，之后仍允许客户显式恢复。"""
+
+    now = _utc_now()
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT conversation_id FROM commander_conversations
+            WHERE conversation_id = ? AND project_scope = ?
+            """,
+            (conversation_id, project_scope),
+        ).fetchone()
+        if row is None:
+            raise LookupError("未找到指定会话。")
+        connection.execute(
+            """
+            UPDATE commander_conversations
+            SET archived_at = ?
+            WHERE conversation_id = ? AND project_scope = ?
+            """,
+            (now, conversation_id, project_scope),
+        )
+    return ConversationArchiveResponse(
+        conversation_id=conversation_id,
+        project_scope=project_scope,
+        archived_at=now,
+    )
+
+
+def delete_conversation(
+    *,
+    conversation_id: str,
+    project_scope: str,
+) -> ConversationDeleteResponse:
+    """按 scope 删除一段会话，并清理其所有候选软关联。"""
+
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT conversation_id FROM commander_conversations
+            WHERE conversation_id = ? AND project_scope = ?
+            """,
+            (conversation_id, project_scope),
+        ).fetchone()
+        if row is None:
+            raise LookupError("未找到指定会话。")
+        deleted_message_count = _count_conversation_messages(connection, conversation_id=conversation_id)
+        deleted_working_state_count = _count_conversation_working_states(connection, conversation_id=conversation_id)
+        deleted_proposal_count = connection.execute(
+            "DELETE FROM long_term_memory_proposals WHERE source_conversation_id = ?",
+            (conversation_id,),
+        ).rowcount
+        # 两个子表由外键 CASCADE 清理；任务历史没有会话外键，始终独立保留。
+        connection.execute(
+            "DELETE FROM commander_conversations WHERE conversation_id = ? AND project_scope = ?",
+            (conversation_id, project_scope),
+        )
+    return ConversationDeleteResponse(
+        conversation_id=conversation_id,
+        project_scope=project_scope,
+        deleted_message_count=max(deleted_message_count, 0),
+        deleted_working_state_count=max(deleted_working_state_count, 0),
+        deleted_proposal_count=max(deleted_proposal_count, 0),
+    )
+
+
+def clear_conversations_for_scope(*, project_scope: str) -> ConversationScopeClearResponse:
+    """清理一个项目范围的会话及候选，不触碰独立任务历史或正式长期记忆。"""
+
+    with get_connection() as connection:
+        counts = _delete_conversations_matching(
+            connection=connection,
+            where_sql="project_scope = ?",
+            params=(project_scope,),
+        )
+    return ConversationScopeClearResponse(project_scope=project_scope, **counts)
+
+
+def delete_expired_conversations(*, updated_before: str) -> ConversationRetentionCleanupResult:
+    """按严格小于边界执行保留期清理；边界时刻本身不删除，保证结果可重复。"""
+
+    with get_connection() as connection:
+        counts = _delete_conversations_matching(
+            connection=connection,
+            where_sql="updated_at < ?",
+            params=(updated_before,),
+        )
+    return ConversationRetentionCleanupResult(**counts)
+
+
+def get_conversation_context(
+    conversation_id: str,
+    *,
+    project_scope: str | None = None,
+) -> ConversationContext:
     """读取结构化摘要与受 token 预算约束的近轮原文。"""
 
     with get_connection() as connection:
         session_row = connection.execute(
-            "SELECT * FROM commander_conversations WHERE conversation_id = ?",
-            (conversation_id,),
+            "SELECT * FROM commander_conversations WHERE conversation_id = ?"
+            + (" AND project_scope = ?" if project_scope is not None else ""),
+            (conversation_id, project_scope) if project_scope is not None else (conversation_id,),
         ).fetchone()
         if session_row is None:
             raise LookupError("未找到指定会话。")
@@ -347,7 +456,7 @@ def save_conversation_turn(
             """
             UPDATE commander_conversations
             SET title = ?, summary = ?, summary_message_count = ?, material_bindings_json = ?,
-                last_task_id = ?, last_plan_id = ?, updated_at = ?
+                last_task_id = ?, last_plan_id = ?, archived_at = '', updated_at = ?
             WHERE conversation_id = ?
             """,
             (
@@ -406,7 +515,7 @@ def append_conversation_assistant_delivery(
             connection.execute(
                 """
                 UPDATE commander_conversations
-                SET summary = ?, summary_message_count = ?, last_task_id = ?, updated_at = ?
+                SET summary = ?, summary_message_count = ?, last_task_id = ?, archived_at = '', updated_at = ?
                 WHERE conversation_id = ?
                 """,
                 (summary, summary_message_count, task_id, now, conversation_id),
@@ -533,6 +642,7 @@ def _row_to_session(row) -> ConversationSessionRecord:
         archived_message_count=int(row["archived_message_count"] or 0)
         if "archived_message_count" in row.keys()
         else 0,
+        archived_at=str(row["archived_at"] or "") if "archived_at" in row.keys() else "",
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
     )
@@ -647,3 +757,56 @@ def _utc_now() -> str:
     # 微秒级时间让连续轮次在 SQLite 的文本排序中保持真实先后；同一轮仍由 message_id 后缀
     # 保证用户消息先于助手消息。
     return datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _count_conversation_messages(connection, *, conversation_id: str) -> int:
+    return int(
+        connection.execute(
+            "SELECT COUNT(*) FROM commander_conversation_messages WHERE conversation_id = ?",
+            (conversation_id,),
+        ).fetchone()[0]
+    )
+
+
+def _count_conversation_working_states(connection, *, conversation_id: str) -> int:
+    return int(
+        connection.execute(
+            "SELECT COUNT(*) FROM commander_conversation_working_states WHERE conversation_id = ?",
+            (conversation_id,),
+        ).fetchone()[0]
+    )
+
+
+def _delete_conversations_matching(*, connection, where_sql: str, params: tuple[object, ...]) -> dict[str, int]:
+    """在一个事务中统计并清理目标会话，先删候选软关联再交给 FK 清除子表。"""
+
+    subquery = f"SELECT conversation_id FROM commander_conversations WHERE {where_sql}"
+    deleted_conversation_count = int(
+        connection.execute(f"SELECT COUNT(*) FROM commander_conversations WHERE {where_sql}", params).fetchone()[0]
+    )
+    deleted_message_count = int(
+        connection.execute(
+            "SELECT COUNT(*) FROM commander_conversation_messages "
+            f"WHERE conversation_id IN ({subquery})",
+            params,
+        ).fetchone()[0]
+    )
+    deleted_working_state_count = int(
+        connection.execute(
+            "SELECT COUNT(*) FROM commander_conversation_working_states "
+            f"WHERE conversation_id IN ({subquery})",
+            params,
+        ).fetchone()[0]
+    )
+    deleted_proposal_count = connection.execute(
+        "DELETE FROM long_term_memory_proposals "
+        f"WHERE source_conversation_id IN ({subquery})",
+        params,
+    ).rowcount
+    connection.execute(f"DELETE FROM commander_conversations WHERE {where_sql}", params)
+    return {
+        "deleted_conversation_count": max(deleted_conversation_count, 0),
+        "deleted_message_count": max(deleted_message_count, 0),
+        "deleted_working_state_count": max(deleted_working_state_count, 0),
+        "deleted_proposal_count": max(deleted_proposal_count, 0),
+    }
