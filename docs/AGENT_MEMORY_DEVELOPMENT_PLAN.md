@@ -1,6 +1,6 @@
 # AgentFlow 记忆系统开发与验收计划
 
-> 状态：实施中（MEM-0、MEM-1、MEM-2、MEM-3、MEM-4 已完成，MEM-5 待执行）
+> 状态：实施中（MEM-0、MEM-1、MEM-2、MEM-3、MEM-4、MEM-5 已完成；BM25 已准入，Hybrid 暂不准入；MEM-6 待执行）
 >
 > 建立日期：2026-09-10
 >
@@ -256,6 +256,13 @@ flowchart LR
 | 本地 Hybrid P95 | 不高于 500 ms | 记录事实 |
 
 Hybrid 只有在语义改写用例上优于 BM25，并且 required 指标、延迟、打包体积和降级回归同时通过后才进入默认路径。没有增益时保留 BM25/词面方案。
+
+**实施记录（2026-09-11）**
+
+- 新增前向 SQLite migration `20260911_long_term_memory_bm25_v1`：`long_term_memory_fts` 是可重建的 FTS5 派生索引，回填旧库短标题、摘要、标签和中文二元词影子字段；正式检索仍在联表 SQL 中先过滤 `scope + enabled + user_confirmed`。
+- 默认 Commander 路径已切换到 BM25，并把项目精确约束、全局用户偏好和 BM25 候选分通道去重。FTS 异常时只在同范围已确认短事实中回退到词面排序；Dense 依赖或模型不可用时返回带原因的 BM25 回退，均不会跨范围读取。
+- `LocalMemoryDenseCandidateProvider` 只复用知识库既有 FastEmbed Adapter 且禁止下载，RRF 与 7:3 加权已由确定性候选夹具覆盖。本机缺少 `fastembed` 和 `chromadb`，没有真实语义收益或 Hybrid 延迟证据；因此 Hybrid 未进入默认路径。
+- `verify_long_term_memory_retrieval.py` 通过旧库升级、索引同步、冲突/范围边界、RRF/加权对照、降级和 10,000 条 BM25 性能评测：required Recall@3 为 100%、MRR 为 1.000、BM25 P95 为 6.044 ms。详情见 `docs/AGENT_MEMORY_MEM5_ACCEPTANCE.md`。
 
 ### MEM-6：生命周期、管理入口与可观测性
 

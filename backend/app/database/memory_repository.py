@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 import json
-import re
 from datetime import UTC, datetime
+import sqlite3
 from uuid import uuid4
 
 from app.database.sqlite import get_connection
+from app.memory_search import build_memory_fts_match, build_memory_fts_shadow, build_memory_search_terms
 from app.schemas.memory import LongTermMemoryProposal, LongTermMemoryRecord
 from app.services.long_term_memory import build_memory_conflict_key
+from app.services.memory_retrieval import (
+    LongTermMemoryRetrievalDiagnostics,
+    LongTermMemoryRetrievalResult,
+    MemoryDenseCandidateProvider,
+    fuse_ranked_memory_ids_rrf,
+    fuse_ranked_memory_ids_weighted,
+)
 
 
 class LongTermMemoryNotFoundError(LookupError):
@@ -131,13 +139,14 @@ def update_long_term_memory(
         connection.execute(
             """
             UPDATE long_term_memories
-            SET title = ?, summary = ?, tags_json = ?, enabled = ?, memory_key = ?, updated_at = ?
+            SET title = ?, summary = ?, tags_json = ?, retrieval_shadow = ?, enabled = ?, memory_key = ?, updated_at = ?
             WHERE memory_id = ?
             """,
             (
                 updated.title,
                 updated.summary,
                 json.dumps(updated.tags, ensure_ascii=False),
+                build_memory_fts_shadow([updated.title, updated.summary, *updated.tags]),
                 int(updated.enabled),
                 build_memory_conflict_key(
                     kind=updated.kind,
@@ -174,49 +183,223 @@ def search_long_term_memories(
     scopes: set[str],
     limit: int = 3,
 ) -> list[LongTermMemoryRecord]:
-    """以标签、标题与摘要做轻量本地检索。
+    """返回默认 BM25 路径的最小长期记忆上下文。"""
 
-    C2 初版刻意不用向量库或全量 embedding：检索数据很少、每条均为用户确认的短事实，
-    关键词和中文二字片段足以服务最小上下文注入，并且结果稳定、可解释、零网络开销。
+    return search_long_term_memory_retrieval(
+        query=query,
+        scopes=scopes,
+        limit=limit,
+    ).records
+
+
+def search_long_term_memory_retrieval(
+    *,
+    query: str,
+    scopes: set[str],
+    limit: int = 3,
+    dense_candidate_provider: MemoryDenseCandidateProvider | None = None,
+    fusion_strategy: str = "rrf",
+) -> LongTermMemoryRetrievalResult:
+    """按范围检索长期记忆，并在明确请求时评测可选 Dense 候选。
+
+    Commander 默认不传 Dense Provider，因此不会在正常聊天中加载 Embedding 模型。评测调用
+    可以复用知识库已确认的本地模型；模型、依赖或缓存不可用时结果安全回退到 BM25/词面，
+    并且所有候选都先经 SQL 范围、开关和确认状态过滤。
     """
 
     normalized_scopes = sorted({scope.strip() for scope in scopes if scope and scope.strip()})
     if not normalized_scopes:
-        return []
+        return LongTermMemoryRetrievalResult(
+            records=[],
+            diagnostics=LongTermMemoryRetrievalDiagnostics(
+                mode="no_scope",
+                bm25_candidate_count=0,
+                structured_candidate_count=0,
+                global_preference_candidate_count=0,
+                dense_candidate_count=0,
+            ),
+        )
+    if fusion_strategy not in {"rrf", "weighted"}:
+        raise ValueError("长期记忆 Hybrid 融合策略只能是 rrf 或 weighted。")
+
     result_limit = max(1, min(limit, 3))
-    candidate_pool_limit = 200
-    scope_placeholders = ",".join("?" for _ in normalized_scopes)
+    fallback_reason = ""
+    try:
+        bm25_pairs = _search_bm25_candidates(query=query, scopes=normalized_scopes)
+        mode = "bm25"
+    except sqlite3.DatabaseError:
+        # FTS5 是可重建派生索引。异常时仍只扫描已确认的同范围短事实，绝不放宽 scope。
+        fallback_records = _load_active_memory_records(scopes=normalized_scopes, limit=10_000)
+        bm25_pairs = _score_lexical_candidates(query=query, candidates=fallback_records)
+        mode = "lexical_fallback"
+        fallback_reason = "fts_unavailable"
+
+    bm25_records = [item for _, item in bm25_pairs]
+    records_by_id = {item.memory_id: item for item in bm25_records}
+    global_preferences = _load_global_preference_records(scopes=normalized_scopes)
+    records_by_id.update({item.memory_id: item for item in global_preferences})
+    search_terms = build_memory_search_terms(query)
+    structured_ids = [
+        item.memory_id
+        for item in bm25_records
+        if _structured_match_score(item, search_terms) > 0
+    ]
+    keyword_ids = [item.memory_id for item in bm25_records]
+    dense_ids: list[str] = []
+    ranked_primary = _merge_ids(structured_ids, keyword_ids)
+
+    if dense_candidate_provider is not None:
+        dense_candidates = _load_active_memory_records(scopes=normalized_scopes, limit=10_000)
+        records_by_id.update({item.memory_id: item for item in dense_candidates})
+        try:
+            dense_ids = dense_candidate_provider.rank(
+                query=query,
+                candidates=dense_candidates,
+                limit=32,
+            )
+            dense_ids = [memory_id for memory_id in dense_ids if memory_id in records_by_id]
+            fused = (
+                fuse_ranked_memory_ids_rrf(keyword_ids=keyword_ids, dense_ids=dense_ids)
+                if fusion_strategy == "rrf"
+                else fuse_ranked_memory_ids_weighted(keyword_ids=keyword_ids, dense_ids=dense_ids)
+            )
+            ranked_primary = _merge_ids(structured_ids, fused)
+            mode = f"hybrid_{fusion_strategy}" if mode == "bm25" else f"{mode}_{fusion_strategy}"
+        except Exception:
+            # 这里禁止自动下载或重试模型。普通记忆读取仍可继续，真实 Dense 准入由 MEM-5
+            # 专项评测另行记录，不能因临时依赖问题扩大客户输入或范围。
+            fallback_reason = (
+                "dense_unavailable"
+                if not fallback_reason
+                else f"{fallback_reason};dense_unavailable"
+            )
+            mode = f"{mode}_dense_unavailable"
+
+    # 全局用户偏好是独立通道：没有关键词重叠时仍可被最小上下文采用，但它只会追加在结构化
+    # 项目约束和 BM25/Hybrid 候选之后，避免通用表达偏好压过当前项目的明确事实。
+    final_ids = _merge_ids(
+        ranked_primary,
+        [item.memory_id for item in global_preferences],
+    )
+    records = [records_by_id[memory_id] for memory_id in final_ids if memory_id in records_by_id]
+    return LongTermMemoryRetrievalResult(
+        records=records[:result_limit],
+        diagnostics=LongTermMemoryRetrievalDiagnostics(
+            mode=mode,
+            bm25_candidate_count=len(bm25_records),
+            structured_candidate_count=len(structured_ids),
+            global_preference_candidate_count=len(global_preferences),
+            dense_candidate_count=len(dense_ids),
+            fallback_reason=fallback_reason,
+        ),
+    )
+
+
+def _search_bm25_candidates(
+    *,
+    query: str,
+    scopes: list[str],
+) -> list[tuple[float, LongTermMemoryRecord]]:
+    """从 FTS5 取有限 BM25 候选，并在同一 SQL 中重申长期记忆准入边界。"""
+
+    match_query = build_memory_fts_match(query)
+    if not match_query:
+        return []
+    scope_placeholders = ",".join("?" for _ in scopes)
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT memory.*, bm25(long_term_memory_fts, 1.6, 1.0, 1.4, 1.2) AS bm25_rank
+            FROM long_term_memory_fts
+            INNER JOIN long_term_memories AS memory
+                ON memory.rowid = long_term_memory_fts.rowid
+            WHERE long_term_memory_fts MATCH ?
+                AND memory.scope IN ({scope_placeholders})
+                AND memory.enabled = 1
+                AND memory.user_confirmed = 1
+            ORDER BY bm25_rank ASC, memory.updated_at DESC, memory.memory_id ASC
+            LIMIT 96
+            """,
+            [match_query, *scopes],
+        ).fetchall()
+    # SQLite FTS5 的 bm25 值越小越相关；转成正分数仅为了让 fallback 与测试的排序方向一致。
+    return [(-float(row["bm25_rank"]), _row_to_record(row)) for row in rows]
+
+
+def _load_active_memory_records(*, scopes: list[str], limit: int) -> list[LongTermMemoryRecord]:
+    """读取已确认且启用的同范围候选，Dense 与 FTS 故障回退共用这道 SQL 边界。"""
+
+    scope_placeholders = ",".join("?" for _ in scopes)
     with get_connection() as connection:
         rows = connection.execute(
             "SELECT * FROM long_term_memories "
             f"WHERE scope IN ({scope_placeholders}) AND enabled = 1 AND user_confirmed = 1 "
-            "ORDER BY updated_at DESC, created_at DESC LIMIT ?",
-            [*normalized_scopes, candidate_pool_limit],
+            "ORDER BY updated_at DESC, created_at DESC, memory_id DESC LIMIT ?",
+            [*scopes, max(1, min(limit, 10_000))],
         ).fetchall()
-    # 范围、开关和确认状态必须在 SQL 中先过滤再 LIMIT。若先从全库取最近 200 条，其他项目
-    # 的新记录会把当前项目的较早约束挤出候选池，表现为“没有泄漏但错误漏召回”。
-    candidates = [_row_to_record(row) for row in rows]
-    terms = _search_terms(query)
-    scored: list[tuple[int, LongTermMemoryRecord]] = []
+    return [_row_to_record(row) for row in rows]
+
+
+def _load_global_preference_records(*, scopes: list[str]) -> list[LongTermMemoryRecord]:
+    if "global" not in scopes:
+        return []
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT * FROM long_term_memories
+            WHERE scope = 'global' AND kind = 'user_preference'
+                AND enabled = 1 AND user_confirmed = 1
+            ORDER BY updated_at DESC, created_at DESC, memory_id DESC
+            LIMIT 12
+            """
+        ).fetchall()
+    return [_row_to_record(row) for row in rows]
+
+
+def _score_lexical_candidates(
+    *,
+    query: str,
+    candidates: list[LongTermMemoryRecord],
+) -> list[tuple[float, LongTermMemoryRecord]]:
+    """FTS 故障时的有限词面回退，保留 C2 的可解释排序语义。"""
+
+    terms = build_memory_search_terms(query)
+    scored: list[tuple[float, LongTermMemoryRecord]] = []
     for item in candidates:
-        haystack = f"{item.title}\n{item.summary}".lower()
-        tag_set = {tag.lower() for tag in item.tags}
-        score = 0
-        # 全局偏好本身可能没有与本次任务重叠的关键词，但它通常是客户明确希望持续遵从的
-        # 表达/交付约束，因此给一个很小的基础分，仍会被明确匹配的项目约束超过。
-        if item.kind == "user_preference" and item.scope == "global":
-            score = 1
-        for term in terms:
-            if term in tag_set:
-                score += 8
-            if term in item.title.lower():
-                score += 5
-            if term in haystack:
-                score += 2
+        score = _lexical_match_score(item, terms)
         if score > 0:
             scored.append((score, item))
-    scored.sort(key=lambda pair: (pair[0], pair[1].updated_at), reverse=True)
-    return [item for _, item in scored[:result_limit]]
+    scored.sort(key=lambda pair: (pair[0], pair[1].updated_at, pair[1].memory_id), reverse=True)
+    return scored
+
+
+def _structured_match_score(item: LongTermMemoryRecord, terms: list[str]) -> int:
+    """为项目范围的精确约束提供独立候选通道。"""
+
+    if item.kind != "project_constraint" or not terms:
+        return 0
+    title = item.title.lower()
+    tags = {tag.lower() for tag in item.tags}
+    return sum(8 for term in terms if term in tags) + sum(5 for term in terms if term in title)
+
+
+def _lexical_match_score(item: LongTermMemoryRecord, terms: list[str]) -> int:
+    title = item.title.lower()
+    summary = item.summary.lower()
+    tags = {tag.lower() for tag in item.tags}
+    score = 1 if item.kind == "user_preference" and item.scope == "global" else 0
+    for term in terms:
+        if term in tags:
+            score += 8
+        if term in title:
+            score += 5
+        if term in summary:
+            score += 2
+    return score
+
+
+def _merge_ids(*groups: list[str]) -> list[str]:
+    return list(dict.fromkeys(memory_id for group in groups for memory_id in group if memory_id))
 
 
 def mark_long_term_memories_used(memory_ids: list[str]) -> None:
@@ -513,10 +696,10 @@ def _insert_long_term_memory(*, connection, record: LongTermMemoryRecord, memory
     connection.execute(
         """
         INSERT INTO long_term_memories (
-            memory_id, kind, scope, title, summary, tags_json, source_task_id,
+            memory_id, kind, scope, title, summary, tags_json, retrieval_shadow, source_task_id,
             user_confirmed, enabled, memory_key, replaced_by_memory_id,
             created_at, updated_at, last_used_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)
         """,
         (
             record.memory_id,
@@ -525,6 +708,7 @@ def _insert_long_term_memory(*, connection, record: LongTermMemoryRecord, memory
             record.title,
             record.summary,
             json.dumps(record.tags, ensure_ascii=False),
+            build_memory_fts_shadow([record.title, record.summary, *record.tags]),
             record.source_task_id or "",
             int(record.user_confirmed),
             int(record.enabled),
@@ -607,17 +791,6 @@ def _row_to_proposal(row) -> LongTermMemoryProposal:
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
     )
-
-
-def _search_terms(query: str) -> list[str]:
-    normalized = " ".join(query.lower().split())
-    terms = set(re.findall(r"[a-z0-9_+-]{2,}", normalized))
-    # 中文通常没有空格分词。二字片段是可解释的轻量兜底，且只用于极少量已确认记录，
-    # 不等同于 RAG 语义检索。
-    for segment in re.findall(r"[\u4e00-\u9fff]{2,}", normalized):
-        terms.add(segment)
-        terms.update(segment[index : index + 2] for index in range(len(segment) - 1))
-    return sorted(terms)
 
 
 def _utc_now() -> str:

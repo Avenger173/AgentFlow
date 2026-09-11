@@ -106,6 +106,17 @@ GATE_PROFILE_CATEGORIES = {
         "scope_isolation",
         "privacy",
     },
+    # MEM-5 has a dedicated FTS5/BM25 and Hybrid-admission verifier while retaining the same
+    # complete memory, scope, privacy and recovery regression floor as MEM-4.
+    "mem5": {
+        "baseline_probe",
+        "state_update",
+        "task_recovery",
+        "compaction",
+        "long_term_retrieval",
+        "scope_isolation",
+        "privacy",
+    },
 }
 SYNTHETIC_INPUTS = {
     "synthetic_secret": "模拟凭据 sk-fixtureonly00000000，不代表真实密钥。",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from hashlib import sha256
+import json
 import sqlite3
 from pathlib import Path
 from threading import Lock
@@ -1227,6 +1228,101 @@ def _apply_long_term_memory_candidate_lifecycle_v1(connection: sqlite3.Connectio
     )
 
 
+def _apply_long_term_memory_bm25_v1(connection: sqlite3.Connection) -> None:
+    """建立长期记忆的 SQLite FTS5 派生索引。
+
+    该索引只复制正式记录的短标题、摘要、标签和由相同短事实导出的中文二元词影子字段；它
+    不接触会话、任务日志、候选来源或文件正文。每次查询仍会联表校验 scope、enabled 和
+    user_confirmed，FTS 不能绕过长期记忆既有的确认与隔离边界。
+    """
+
+    from app.memory_search import build_memory_fts_shadow
+
+    connection.execute(
+        "ALTER TABLE long_term_memories ADD COLUMN retrieval_shadow TEXT NOT NULL DEFAULT ''"
+    )
+    connection.execute(
+        """
+        CREATE VIRTUAL TABLE IF NOT EXISTS long_term_memory_fts USING fts5(
+            memory_id UNINDEXED,
+            scope UNINDEXED,
+            kind UNINDEXED,
+            title,
+            summary,
+            tags,
+            retrieval_shadow,
+            tokenize = 'unicode61'
+        )
+        """
+    )
+    rows = connection.execute(
+        "SELECT rowid, memory_id, title, summary, tags_json FROM long_term_memories"
+    ).fetchall()
+    for row in rows:
+        try:
+            tags = json.loads(str(row["tags_json"] or "[]"))
+        except json.JSONDecodeError:
+            tags = []
+        if not isinstance(tags, list):
+            tags = []
+        shadow = build_memory_fts_shadow(
+            [str(row["title"]), str(row["summary"]), *(str(tag) for tag in tags)]
+        )
+        connection.execute(
+            "UPDATE long_term_memories SET retrieval_shadow = ? WHERE rowid = ?",
+            (shadow, int(row["rowid"])),
+        )
+
+    # FTS 是可重建派生数据。迁移重跑或旧开发库曾手动创建该表时，先从正式表回填为同一快照。
+    connection.execute("DELETE FROM long_term_memory_fts")
+    connection.execute(
+        """
+        INSERT INTO long_term_memory_fts(
+            rowid, memory_id, scope, kind, title, summary, tags, retrieval_shadow
+        )
+        SELECT rowid, memory_id, scope, kind, title, summary, tags_json, retrieval_shadow
+        FROM long_term_memories
+        """
+    )
+    connection.executescript(
+        """
+        DROP TRIGGER IF EXISTS long_term_memory_fts_after_insert;
+        DROP TRIGGER IF EXISTS long_term_memory_fts_after_delete;
+        DROP TRIGGER IF EXISTS long_term_memory_fts_after_update;
+
+        CREATE TRIGGER long_term_memory_fts_after_insert
+        AFTER INSERT ON long_term_memories
+        BEGIN
+            INSERT INTO long_term_memory_fts(
+                rowid, memory_id, scope, kind, title, summary, tags, retrieval_shadow
+            ) VALUES (
+                new.rowid, new.memory_id, new.scope, new.kind, new.title, new.summary,
+                new.tags_json, new.retrieval_shadow
+            );
+        END;
+
+        CREATE TRIGGER long_term_memory_fts_after_delete
+        AFTER DELETE ON long_term_memories
+        BEGIN
+            DELETE FROM long_term_memory_fts WHERE rowid = old.rowid;
+        END;
+
+        CREATE TRIGGER long_term_memory_fts_after_update
+        AFTER UPDATE OF memory_id, scope, kind, title, summary, tags_json, retrieval_shadow
+        ON long_term_memories
+        BEGIN
+            DELETE FROM long_term_memory_fts WHERE rowid = old.rowid;
+            INSERT INTO long_term_memory_fts(
+                rowid, memory_id, scope, kind, title, summary, tags, retrieval_shadow
+            ) VALUES (
+                new.rowid, new.memory_id, new.scope, new.kind, new.title, new.summary,
+                new.tags_json, new.retrieval_shadow
+            );
+        END;
+        """
+    )
+
+
 def _apply_langgraph_runtime_bridges_v1(connection: sqlite3.Connection) -> None:
     """建立 LGM5 主任务与 LangGraph checkpoint 的脱敏关联表。"""
 
@@ -1438,5 +1534,14 @@ _SCHEMA_MIGRATIONS: tuple[_SchemaMigration, ...] = (
             "sanitized_candidate_fact_and_source_id_only"
         ),
         apply=_apply_long_term_memory_candidate_lifecycle_v1,
+    ),
+    _SchemaMigration(
+        migration_id="20260911_long_term_memory_bm25_v1",
+        signature=(
+            "long_term_memories:v3;retrieval_shadow;long_term_memory_fts:fts5;"
+            "scope_enabled_confirmed_join_filter;unicode61_and_cjk_bigram_shadow;"
+            "retrieval_field_only_sync_trigger"
+        ),
+        apply=_apply_long_term_memory_bm25_v1,
     ),
 )

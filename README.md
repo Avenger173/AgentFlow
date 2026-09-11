@@ -66,6 +66,7 @@ AgentFlow 是一个 C++ Qt 桌面端 + Python FastAPI 后端的多 Agent 工作�
 - Qt 任务历史页已增加当前选中任务轻量自动刷新，并在详情区下方增加紧凑产物工具条：可选择产物、弹窗预览、复制受控路径/URI，并只对后端声明的 `agentflow-output://` runtime outputs 文件启用打开。
 - Qt 任务历史页已提供显式“开始执行/继续执行”按钮，可调用 `POST /api/tasks/{task_id}/execute` 从 dry-run 派生 runtime task，或在权限批准后继续 runtime task。
 - 调度台可通过输入框旁的项目范围图标选择 `global` 或 `project:<稳定标识>`，用于隔离长期记忆检索；任务历史仅对已完成 Runtime 总指挥任务提供“记住约束”，候选必须经过可编辑的明确确认才会保存。
+- 长期记忆默认使用 scope 过滤后的 SQLite FTS5/BM25；结构化项目约束、全局偏好和关键词候选独立去重。Hybrid 仍需通过真实本地 Dense 语义收益、延迟和降级门禁，当前不会隐式加载或下载 Embedding 模型。
 - 后端重启时，遗留的 Runtime 不会被自动重跑：`pending/running/waiting_permission` 会安全转为 `blocked` 并保留审计，客户复核后可 retry 创建新的执行记录。
 - Qt 调度台“＋”按钮与文档助手共用 workspace 导入：支持 UTF-8 txt/md/markdown、PDF、DOCX；保存后的文件名会自动带入任务输入框，Commander 可把明确的 PDF/DOCX 文件名委派给文档助手。
 - Qt 调度台的 `/api/chat` 请求已单独放宽到 120 秒超时，避免真实模型调用被 3 秒短超时误杀。
@@ -296,6 +297,7 @@ python scripts\verify_commander_memory_proposals.py
 ```powershell
 cd D:\project\AgentFlow\AgentFlow\backend
 python scripts\verify_commander_memory_lifecycle.py
+python scripts\verify_long_term_memory_retrieval.py
 ```
 
 总指挥重启后 Runtime 安全停驻专项回归：

@@ -33,7 +33,7 @@
 
 > 当前阶段以本节为准：阶段 5 内置 Agent MVP；知识库已完成 K4.1-K4.15、K5.1 本地检索短缓存、K5.2 Provider usage 基础可观测、K5.3 K4 任务指标聚合、K5.4 索引性能事实、K5.5 无变化索引快路径、K5.6 受控增量向量复用与 K5.7 上下文路由/预算边界，Commander 已完成 C5.1 的全库深度总结受控委派、C5.2 的父子状态镜像、C5.3 的关联工作台入口和 R5.4A/B/R5.4C 首版数据交付。文档助手与数据工作台是可用的基础闭环，仍保留后续扩展空间；资料对照仍仅在知识库工作台启动。
 
-> **2026-09-10 Agent 记忆管理对照与短期记忆修正：**已按持续技术基线复核会话、长期记忆、Runtime 状态和程序性规则的真实调用链。短期记忆从固定 8 条升级为最多 20 条、约 18k token 的受控近轮窗口，Prompt 不再把原文二次截成 6 条、每条 420 字；归档单条上限增至 8000 字，旧消息压缩为带 task_id 的目标/约束/待办/结果摘要，并暴露摘要水位与估算 token 供诊断。长期记忆仍保持用户确认、默认关闭和 global/project 隔离，不照搬静默永久写入；向量 + BM25、typed session state 和会话 TTL 仍是有验收门槛的后续项。完整结论见 `docs/AGENT_MEMORY_IMPLEMENTATION_AUDIT.md`。
+> **2026-09-10 Agent 记忆管理对照与短期记忆修正：**已按持续技术基线复核会话、长期记忆、Runtime 状态和程序性规则的真实调用链。短期记忆从固定 8 条升级为最多 20 条、约 18k token 的受控近轮窗口，Prompt 不再把原文二次截成 6 条、每条 420 字；归档单条上限增至 8000 字，旧消息压缩为带 task_id 的目标/约束/待办/结果摘要，并暴露摘要水位与估算 token 供诊断。长期记忆保持用户确认、默认关闭和 global/project 隔离；随后 MEM-5 已将 scoped FTS5/BM25 准入默认读取，Hybrid 继续受真实本地 Dense 证据门禁约束。完整结论见 `docs/AGENT_MEMORY_IMPLEMENTATION_AUDIT.md`。
 
 > **2026-09-10 Agent 记忆系统实施门禁：**已建立 `docs/AGENT_MEMORY_DEVELOPMENT_PLAN.md`，把后续开发拆为 MEM-0 至 MEM-7：先固定 48 例离线评测并修复 Intent 尾部截断、长期记忆 scope-before-limit 等确定性遗漏，再建设 Current Working State、统一 ContextEnvelope、候选生命周期和清理入口，最后以 Recall@3/MRR、范围泄漏、预算、恢复与延迟指标决定 BM25/Hybrid 准入并进行真实模型/Qt 验收。MEM-0、MEM-1 已完成：48 个分类夹具加 3 个实现探针当前 31 项通过、20 项仅属 MEM-2 的结构化状态/任务投影未支持；MEM-1 使最新 Intent 要求可保留、500 条跨项目噪声下 Recall@3 达 100%、模型失败不再更新 `last_used_at`。本轮未把未实施能力计入项目完成度或简历；修复前证据与 MEM-1 验收分别见 `docs/AGENT_MEMORY_MEM0_BASELINE.md`、`docs/AGENT_MEMORY_MEM1_ACCEPTANCE.md`。
 
@@ -42,6 +42,8 @@
 > **2026-09-10 Agent 记忆 MEM-3 统一上下文出口：**已新增 `ContextEnvelope`，让 Intent JSON、Commander 计划审计和最终回复消费同一份选材结果，移除 Intent 独有的 2200 字符截断。预算按已核验模型窗口或 16,384-token 保守回退，扣除输出、系统/工具、当前输入和安全余量后计算，记忆输入封顶 20k；工作状态优先于长期记忆、确定性摘要和最近完整 user/assistant 轮次。工作状态摘要已补全 active task/plan、未完成事项和最小 artifact 标识；空间不足会在模型调用前失败，不静默丢状态。计划仅记录无正文估算和选择计数，明确不是 Provider usage。专项夹具及既有 C6、MEM-2 回归均已通过；未调用真实模型、网络或客户材料，未改 Qt。下一步固定为 MEM-4 的长期记忆候选生命周期、冲突治理与 compaction 前待确认候选，详情见 `docs/AGENT_MEMORY_MEM3_ACCEPTANCE.md`。
 
 > **2026-09-11 Agent 记忆 MEM-4 候选生命周期出口：**已新增 SQLite 持久候选账本与前向 migration；候选保存经脱敏的短事实、来源、指纹、冲突键、状态及替代关系，但不会进入长期检索或自动创建正式记忆。已完成 Commander Runtime 可沉淀已验证项目约束，客户明确要求且有真实 artifact 的完成任务可沉淀成功经验；普通会话在 Compaction 前提取强长期表达，归档和 Working State 成功后才落账。任务结果与设置 API 均支持查看、编辑后确认和拒绝；Qt 任务历史和长期记忆管理页接入同一复核链路，确认幂等，同键新值会停用旧有效记忆。专项回归验证一次性请求、三种来源、设置入口、重试/恢复去重、替代检索、敏感信息/路径/长原文拦截与旧库 migration；Qt Debug 构建与 CTest 也已通过。未调用真实模型、网络或客户材料。自动保留期、候选清理和自动过期仍是 MEM-6；下一步固定为 MEM-5 的检索评测与 BM25/Hybrid 准入，详情见 `docs/AGENT_MEMORY_MEM4_ACCEPTANCE.md`。
+
+> **2026-09-11 Agent 记忆 MEM-5 检索准入出口：**已新增 `20260911_long_term_memory_bm25_v1`，为用户确认的长期短事实建立可重建 SQLite FTS5/BM25 派生索引和中文二元词影子字段；检索在 SQL 联表中先校验范围、启用和确认状态，再组合项目精确约束、BM25 与全局偏好。旧库回填、写入/编辑同步、冲突旧值排除、范围隔离、FTS 故障词面回退和 Dense 故障 BM25 回退均有临时 SQLite 回归。10,000 条合成记录的 BM25 P95 为 6.044 ms，required Recall@3 为 100%、MRR 为 1.000。RRF、7:3 对照和复用知识库 FastEmbed 的可选 Dense Provider 已具备，但本机未安装 `fastembed`/`chromadb`，真实语义收益与 Hybrid P95 未形成证据，Hybrid 没有进入默认路径。未调用真实模型、网络或客户材料；下一步固定为 MEM-6 生命周期清理与无正文可观测性，详情见 `docs/AGENT_MEMORY_MEM5_ACCEPTANCE.md`。
 
 > **2026-09-08 LGM5.7 CLI 自验证：**`verify_lgm57_trial_cli.py` 会在独立临时 SQLite 中真实执行候选目录与成对准备 CLI，覆盖候选列出、缺少 `--confirm-prepare` 时拒绝写入、确认后创建 Native/Graph Runtime 对及输出脱敏。内部开发验证不再要求用户手动运行该命令；真实任务库没有 C6.4 候选只代表没有经批准的真实组合计划，不能通过伪造任务绕过试点授权。
 
