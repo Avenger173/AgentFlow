@@ -21,6 +21,7 @@ from app.schemas.commander_intent import CommanderIntentCandidate, CommanderInte
 from app.schemas.context_envelope import ContextEnvelopeAudit
 from app.schemas.memory import LongTermMemoryRecord
 from app.services.long_term_memory import build_memory_context_summary
+from app.services.conversation_history_recall import is_conversation_history_recall_request
 from app.services.data_join import DataJoinError, build_data_join_intent
 from app.services.data_transform_intent import DataTransformIntentError, build_data_transform_intent
 from app.mcp.connection_store import McpConnectionStoreError, load_public_reference_connection
@@ -158,31 +159,42 @@ def create_commander_plan(
     )
     semantic_kind = accepted_semantic_intent.intent if accepted_semantic_intent is not None else ""
     search_query = _extract_workspace_search_query(message)
-    knowledge_deep_requested = _matches_any(lowered, KNOWLEDGE_DEEP_ROUTE_KEYWORDS)
+    history_recall_requested = is_conversation_history_recall_request(message)
+    knowledge_deep_requested = not history_recall_requested and _matches_any(
+        lowered,
+        KNOWLEDGE_DEEP_ROUTE_KEYWORDS,
+    )
     # PPT 创作拥有最高的显式意图优先级。即使调度台仍挂着上一次的数据集或资料库，
     # “帮我做 PPT”也不能被错误解释成“分析当前数据/资料库”。
-    presentation_requested = _matches_any(lowered, PRESENTATION_ROUTE_KEYWORDS)
+    presentation_requested = not history_recall_requested and _matches_any(
+        lowered,
+        PRESENTATION_ROUTE_KEYWORDS,
+    )
     fresh_external_information_requested = (
-        not presentation_requested
+        not history_recall_requested
+        and not presentation_requested
         and _requests_fresh_external_information(lowered)
     )
     public_reference_requested = (
-        not presentation_requested
+        not history_recall_requested
+        and not presentation_requested
         and not fresh_external_information_requested
         and _matches_any(lowered, PUBLIC_REFERENCE_ROUTE_KEYWORDS)
     )
-    knowledge_intent_requested = (
+    knowledge_intent_requested = not history_recall_requested and (
         _matches_any(lowered, KNOWLEDGE_ROUTE_KEYWORDS)
         or knowledge_deep_requested
     )
     # “资料库”是知识库专属实体；不能因为 DOCUMENT_ROUTE_KEYWORDS 里的宽泛词“资料”
     # 把一个明确的知识库问题同时路由成“请选择文档”。知识库意图优先于泛化的文档词。
-    document_intent_requested = not (
+    document_intent_requested = not history_recall_requested and not (
         knowledge_intent_requested
         or public_reference_requested
         or fresh_external_information_requested
     ) and _matches_any(lowered, DOCUMENT_ROUTE_KEYWORDS)
-    data_intent_requested = not (public_reference_requested or fresh_external_information_requested) and (
+    data_intent_requested = not history_recall_requested and not (
+        public_reference_requested or fresh_external_information_requested
+    ) and (
         _matches_any(lowered, DATA_ROUTE_KEYWORDS)
     )
     raw_specialist_intent = any(
@@ -197,7 +209,7 @@ def create_commander_plan(
     )
     # 用户原句已经清楚表达专业任务时，以原句为准。语义候选用于补足“把这些结果做得
     # 更直观”这类省略表达，不能把一个明确的文档/PPT/资料库请求再扩展成第二个 Agent。
-    if not raw_specialist_intent:
+    if not history_recall_requested and not raw_specialist_intent:
         if semantic_kind == "presentation":
             presentation_requested = True
         elif semantic_kind == "fresh_external_information":
@@ -210,8 +222,14 @@ def create_commander_plan(
             document_intent_requested = True
         elif semantic_kind == "data":
             data_intent_requested = True
-    data_transform_intent_requested = _matches_any(lowered, DATA_TRANSFORM_KEYWORDS)
-    data_join_intent_requested = _matches_any(lowered, DATA_JOIN_KEYWORDS)
+    data_transform_intent_requested = not history_recall_requested and _matches_any(
+        lowered,
+        DATA_TRANSFORM_KEYWORDS,
+    )
+    data_join_intent_requested = not history_recall_requested and _matches_any(
+        lowered,
+        DATA_JOIN_KEYWORDS,
+    )
     explicit_specialist_intent = (
         fresh_external_information_requested
         or public_reference_requested

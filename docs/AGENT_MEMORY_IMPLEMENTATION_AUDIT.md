@@ -38,9 +38,9 @@
 | 摘要保留目标、约束、TODO、标识符 | 摘要按 `[目标]/[约束]/[待办]/[结果]` 分类；Working State 注入目标、有效约束、未完成事项、active task/plan 和已验证 artifact | 达标 | 当前为确定性抽取，不额外消耗 LLM；复杂语义更新仍可能漏判 |
 | 明确修改覆盖旧结构化状态 | 白名单 Reducer 覆盖预算、格式、材料范围、数量与时间范围；不明确变更进入待确认 | 达标 | 当前只支持已登记字段，不把自由文本误当成结构化事实 |
 | 会话/线程隔离与恢复 | 稳定 conversation_id、project_scope、SQLite 归档、Working State revision 和 Runtime checkpoint | 达标 | 重启 JSON 与重复 checkpoint 均由离线夹具验证；LangGraph 不是聊天主链路 |
-| 清理、归档和沉淀 | 消息可分页归档，长期记忆可删除；会话没有 TTL、归档状态或删除 API | 未达标 | 长期桌面使用会积累数据，隐私和体积策略不完整 |
+| 清理、归档和沉淀 | 支持会话归档、恢复、单会话删除、按项目清理和默认关闭的可配置保留期；候选关联会级联清理 | 达标 | 任务历史与已确认长期记忆保持独立保留策略 |
 | 长期记忆外部持久化 | SQLite 表、global/project 命名空间、跨会话按需读取 | 达标 | 不依赖上下文窗口存活 |
-| 语义/情景/程序性记忆 | 偏好/约束对应语义，experience + source_task_id 对应轻量情景，SKILL/Workflow 对应程序性 | 基本达标 | 情景记忆的文件变更、工具轨迹仍在任务历史，不在通用记忆检索中 |
+| 语义/情景/程序性记忆 | 已确认偏好/约束对应语义；同 scope 脱敏会话归档支持用户显式只读回顾；SKILL/Workflow 对应程序性 | 达标 | 任务结果、文件变更和工具轨迹仍需从任务历史按稳定 ID 查看，未做模糊跨任务正文检索 |
 | RAG 式按需检索 | 开关开启后按 query 取 Top 3，不全量注入 | 达标 | 数据规模小时方案合理 |
 | 向量 + BM25 混合排序 | FTS5/BM25 已经以 scope 过滤后成为默认；RRF、7:3 对照和 FastEmbed 复用 Adapter 已有离线契约，真实 Dense 因本机依赖未安装而未准入 | 部分达标 | Hybrid 继续保持关闭，待已确认本地模型的真实语义收益、P95 和打包证据齐全后再决定 |
 | 压缩前自动沉淀长期记忆 | 强长期表达在消息归档 Compaction 前提取，并在成功归档后持久化为待确认候选；任务完成也可补建可重放候选 | 达标 | 不自动写正式记忆；指纹、来源、拒绝与替代关系均可回读 |
@@ -58,17 +58,18 @@
 - 摘要改为目标、约束、待办、结果四类，并保留 task_id；上下文公开摘要水位与估算 token 数，便于回归和诊断。
 - 保留完整任务状态与 Tool trace 的独立存储，不把原始日志、隐藏推理或未校验 Tool 输出直接塞进聊天 Prompt。
 - 新增独立 Working State：已成功归档的用户输入以白名单覆盖/合并字段，含糊修改进入待确认；Runtime checkpoint 才更新任务进度，只有真实 Runtime 已登记 artifact 才可登记验证结果。
+- 新增情景记忆只读回顾：用户明确问“我叫你生成过什么内容的 PPT”时，在模型和 Commander 规划前按 `project_scope` 查询最多五条已脱敏用户请求；回顾不创建计划、任务、文件或工作台跳转，也不把跨会话正文隐式注入普通 Prompt。
 
 ## 4. 后续优先级
 
-1. **P1：保留期和删除能力。** 增加会话删除、归档与可配置 TTL，默认不自动删除客户仍在使用的记录，并提供按 project_scope 清理和审计计数。
-2. **P1：真实本地 Dense 准入。** 在现有知识库 FastEmbed 依赖和客户确认模型已就绪时，用脱敏同义表达集补齐真实语义收益、Hybrid P95、打包体积与降级证据；达不到门槛则继续使用 BM25。
-3. **P1：会话清理与保留期。** 增加单会话删除、按项目清理、候选级联与默认关闭的可配置 TTL；不能把 `expired` 状态枚举误写成已有自动清理。
+1. **P1：任务级情景回顾。** 在已有任务历史 API 的稳定 task/conversation ID 边界内，补充“上次任务做到哪一步、交付是否通过”的只读摘要；先建立范围、状态和 artifact 来源闭环，再评估按自然语言检索的必要性。
+2. **P1：透明用户画像视图。** 将已确认的 global `user_preference` 聚合为单独的用户画像摘要，显示每条偏好的来源、确认时间和开关；不从原始会话自动推断人格或隐私属性。
+3. **P1：真实本地 Dense 准入。** 在现有知识库 FastEmbed 依赖和客户确认模型已就绪时，用脱敏同义表达集补齐真实语义收益、Hybrid P95、打包体积与降级证据；达不到门槛则继续使用 BM25。
 4. **P2：LLM 摘要准入评估。** 只在信息保留率有量化提升、Provider 失败可回退且 usage/cost 可记录时，再与现有确定性摘要比较；否则保持确定性方案。
 
 ## 5. 简历可用表述
 
-- 设计并实现 Agent 分层记忆架构：基于 SQLite 的会话隔离与可恢复归档、统一 ContextEnvelope 动态预算、结构化摘要、可版本化的当前工作状态，以及 global/project 命名空间的用户确认式长期记忆。
+- 设计并实现 Agent 分层记忆架构：基于 SQLite 的会话隔离与可恢复归档、显式触发的同范围情景回顾、统一 ContextEnvelope 动态预算、结构化摘要、可版本化的当前工作状态，以及 global/project 命名空间的用户确认式长期记忆。
 - 将 Agent 记忆与 Workflow 状态解耦：会话层只注入受控摘要和最小工作状态，任务进度、Tool trace、checkpoint 和审计事件独立持久化；只有可信 checkpoint 可投影任务事实，避免原始日志和虚拟产物污染 Prompt。
 - 建立隐私优先的记忆治理：长期记忆默认关闭，支持持久候选复核、确认/拒绝、冲突替代、敏感信息/绝对路径/长原文拦截、启停编辑删除和跨项目隔离。
 - 采用评测驱动的检索演进策略：将 scoped SQLite FTS5/BM25 作为默认长期记忆召回，并以 RRF/7:3 对照、语义收益、延迟和降级门禁决定是否启用复用现有 FastEmbed 的 Hybrid 路径。
@@ -79,6 +80,7 @@
 - `python backend/scripts/verify_commander_c6_conversation.py`
 - `python backend/scripts/verify_commander_memory.py`
 - `python backend/scripts/verify_conversation_working_state.py`
+- `python backend/scripts/verify_conversation_history_recall.py`
 - `python backend/scripts/verify_commander_memory_quality.py --mode gate --gate-profile mem4`
 - `python backend/scripts/verify_commander_memory_proposals.py`
 - `python backend/scripts/verify_commander_memory_lifecycle.py`

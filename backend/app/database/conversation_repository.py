@@ -41,6 +41,17 @@ class ConversationRetentionCleanupResult:
     deleted_working_state_count: int = 0
     deleted_proposal_count: int = 0
 
+
+@dataclass(frozen=True)
+class ConversationHistoryRecallItem:
+    """同一项目范围内、可供只读历史回顾使用的一条用户请求。"""
+
+    conversation_id: str
+    title: str
+    content: str
+    created_at: str
+
+
 _SUMMARY_CLAUSE_SPLIT_PATTERN = re.compile(r"[。！？!?；;\n]+")
 _CONSTRAINT_SIGNAL_PATTERN = re.compile(
     r"(?:必须|不得|不能|不要|只能|只需|固定|统一|保持|预算|格式|范围|来源|要求|约束)"
@@ -397,6 +408,67 @@ def get_conversation_transcript(
         total=int(total),
         messages=[_row_to_message(row) for row in rows],
     )
+
+
+def find_conversation_history_recall_items(
+    *,
+    project_scope: str,
+    query_terms: tuple[str, ...] = (),
+    excluded_content: str = "",
+    limit: int = 5,
+) -> list[ConversationHistoryRecallItem]:
+    """为用户主动发起的历史回顾返回有限、同 scope 的已脱敏请求。
+
+    这不是普通对话的隐式上下文注入，也不读取助手的自由文本。调用方只能将结果
+    用于本轮只读回顾答复，避免历史中的关键词重新触发任务创建或工作台跳转。
+    """
+
+    bounded_limit = max(1, min(limit, 12))
+    filters = [
+        "conversation.project_scope = ?",
+        "message.role = 'user'",
+    ]
+    parameters: list[object] = [project_scope]
+    normalized_excluded_content = " ".join(excluded_content.split())
+    if normalized_excluded_content:
+        filters.append("message.content <> ?")
+        parameters.append(normalized_excluded_content)
+
+    normalized_terms = tuple(
+        term.strip().lower()
+        for term in query_terms
+        if term and term.strip()
+    )[:8]
+    if normalized_terms:
+        term_filters = []
+        for term in normalized_terms:
+            term_filters.append("INSTR(LOWER(message.content), ?) > 0")
+            parameters.append(term)
+        filters.append("(" + " OR ".join(term_filters) + ")")
+
+    parameters.append(bounded_limit)
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT conversation.conversation_id, conversation.title, message.content, message.created_at
+            FROM commander_conversations AS conversation
+            JOIN commander_conversation_messages AS message
+                ON message.conversation_id = conversation.conversation_id
+            WHERE {' AND '.join(filters)}
+            ORDER BY message.created_at DESC, message.message_id DESC
+            LIMIT ?
+            """,
+            parameters,
+        ).fetchall()
+    return [
+        ConversationHistoryRecallItem(
+            conversation_id=str(row["conversation_id"]),
+            title=str(row["title"] or ""),
+            content=str(row["content"] or ""),
+            created_at=str(row["created_at"]),
+        )
+        for row in rows
+    ]
 
 
 def save_conversation_turn(

@@ -8,6 +8,10 @@ from app.services.commander_memory import (
     retrieve_commander_memory_context,
 )
 from app.services.conversation_context_envelope import build_context_envelope
+from app.services.conversation_history_recall import (
+    build_conversation_history_recall_reply,
+    is_conversation_history_recall_request,
+)
 from app.services.conversation_memory import PreparedConversation
 from app.database.memory_observability_repository import record_memory_observation_safely
 from app.services.runtime_preferences_store import load_runtime_preferences
@@ -22,6 +26,17 @@ def create_mock_chat_response(
 ) -> ChatResponse:
     # 模拟模式只生成稳定、可预测的响应，方便 Qt 端先完成协议和 UI 联调。
     task_id = request.task_id or f"task_{uuid4().hex[:12]}"
+    if agent_id == COMMANDER_AGENT_ID and is_conversation_history_recall_request(message):
+        return ChatResponse(
+            task_id=task_id,
+            agent_id=agent_id,
+            reply=build_conversation_history_recall_reply(
+                message=message,
+                project_scope=request.project_scope,
+            ),
+            conversation_id=request.conversation_id or "",
+            mode="history_recall",
+        )
     workflow_plan = None
     workflow_run = None
     if agent_id == COMMANDER_AGENT_ID:

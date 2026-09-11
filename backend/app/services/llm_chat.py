@@ -25,6 +25,10 @@ from app.services.commander_intent import (
 from app.services.conversation_memory import (
     PreparedConversation,
 )
+from app.services.conversation_history_recall import (
+    build_conversation_history_recall_reply,
+    is_conversation_history_recall_request,
+)
 from app.services.conversation_context_envelope import (
     ContextEnvelopeBudgetError,
     build_context_envelope,
@@ -76,6 +80,19 @@ async def create_llm_chat_response(
     DeepSeek 只是当前默认 profile，不再是唯一实现。
     """
 
+    task_id = request.task_id or f"task_llm_{uuid4().hex[:12]}"
+    if agent.id == COMMANDER_AGENT_ID and is_conversation_history_recall_request(message):
+        return ChatResponse(
+            task_id=task_id,
+            agent_id=agent.id,
+            reply=build_conversation_history_recall_reply(
+                message=message,
+                project_scope=request.project_scope,
+            ),
+            conversation_id=request.conversation_id or "",
+            mode="history_recall",
+        )
+
     # 同一次聊天只读取一次偏好，确保自然语言回复与 Commander 计划快照使用同一版本。
     runtime_preferences = load_runtime_preferences().to_workflow_preferences()
     memory_context = (
@@ -87,7 +104,6 @@ async def create_llm_chat_response(
         if agent.id == COMMANDER_AGENT_ID
         else []
     )
-    task_id = request.task_id or f"task_llm_{uuid4().hex[:12]}"
     workflow_plan = None
     workflow_run = None
     planning_context = ""

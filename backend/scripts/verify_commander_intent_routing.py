@@ -79,6 +79,14 @@ def main() -> None:
     assert conversation_plan.workspace_scope.read_paths == []
     assert conversation_plan.next_action == "execute_after_confirm"
 
+    # 历史回顾中提到 PPT 只是在询问已保存记录，不能打开 PPT 制作工作台。
+    history_recall_plan = create_commander_plan(
+        "我叫你生成过什么内容的 PPT？",
+        available_agents=agents,
+    )
+    assert history_recall_plan.intent == "direct_answer"
+    assert not any(step.action == "open_presentation_studio" for step in history_recall_plan.steps)
+
     # 同一会话的省略式短追问由表达模型依据受控近轮上下文承接，不能被规则层仅因字数短
     # 误改为“你希望完成什么”。新会话的孤立短句仍保留原有澄清，避免脱离上下文乱猜。
     isolated_short_plan = create_commander_plan("思想演变", available_agents=agents)
