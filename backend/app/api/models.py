@@ -6,11 +6,14 @@ from app.core.config import settings
 from app.schemas.model import (
     ModelConnectionTestRequest,
     ModelConnectionTestResponse,
+    ModelCatalogRequest,
+    ModelCatalogResponse,
     ModelConfigResponse,
     ModelConfigUpdateRequest,
     ModelProviderInfo,
     ModelProviderListResponse,
     ModelProviderStatus,
+    ModelGenerationParameters,
     ModelRouteAuditSnapshot,
     ModelRouteListResponse,
     ModelRouteScope,
@@ -27,12 +30,17 @@ from app.services.model_config_store import (
 )
 from app.services.model_gateway import (
     ModelGatewayError,
+    discover_model_catalog,
     get_model_provider_profile,
     list_model_provider_profiles,
+    model_provider_api_key_source,
+    model_provider_connection_preview,
     normalize_model_provider,
     resolve_model_runtime,
     resolve_model_runtime_for_route,
     resolve_model_runtime_for_test,
+    resolve_visual_model_runtime,
+    resolve_visual_model_runtime_for_route,
 )
 from app.services.model_route_store import (
     MODEL_ROUTE_DEFINITIONS,
@@ -61,29 +69,49 @@ def list_model_providers() -> ModelProviderListResponse:
         # provider 清单仍可展示；当前配置异常会由 current.configuration_error 单独说明。
         stored_config = StoredModelConfig()
 
-    providers = [
-        ModelProviderInfo(
+    providers: list[ModelProviderInfo] = []
+    for profile in list_model_provider_profiles():
+        configured = stored_config.provider_config_for(profile.provider)
+        api_key_source = model_provider_api_key_source(profile.provider, stored_config=stored_config)
+        resolved_base_url, resolved_model = model_provider_connection_preview(
+            profile.provider,
+            stored_config=stored_config,
+        )
+        providers.append(ModelProviderInfo(
             provider=profile.provider,
             label=profile.label,
             transport=profile.transport,
+            model_kind=profile.model_kind,
             default_base_url=profile.default_base_url,
             default_model=profile.default_model,
+            recommended_models=list(profile.recommended_models),
             supports_thinking=profile.supports_thinking,
             supports_json_output=profile.supports_json_output,
             supports_tool_calls=profile.supports_tool_calls,
+            supports_temperature=profile.sends_temperature,
+            supports_top_p=profile.sends_top_p,
+            supports_max_tokens=profile.model_kind == "chat",
+            supports_presence_penalty=profile.sends_presence_penalty,
+            supports_frequency_penalty=profile.sends_frequency_penalty,
+            supports_visual_generation=profile.supports_visual_generation,
             context_cache_mode=profile.context_cache_mode,
             context_cache_note=profile.context_cache_note,
-            api_key_configured=stored_config.api_key_configured_for(profile.provider),
+            api_key_configured=api_key_source != "none",
+            configured_base_url=resolved_base_url if configured or resolved_base_url != profile.default_base_url else None,
+            configured_model=resolved_model if configured or resolved_model != (profile.default_model or "") else None,
+            configured_thinking=(
+                configured.thinking if configured and configured.thinking in {"enabled", "disabled"} else "disabled"
+            ),
+            configured_parameters=configured.parameters if configured else ModelGenerationParameters(),
             notes=profile.notes,
-        )
-        for profile in list_model_provider_profiles()
-    ]
+        ))
 
     config = _build_model_config_response()
     current = ModelProviderStatus(
         provider=config.provider,
         label=config.label,
         transport=config.transport,
+        model_kind=config.model_kind,
         base_url=config.base_url,
         model=config.model,
         thinking=config.thinking,
@@ -93,6 +121,7 @@ def list_model_providers() -> ModelProviderListResponse:
         secure_storage_available=config.secure_storage_available,
         secure_storage=config.secure_storage,
         supports_thinking=_supports_thinking(config.provider),
+        parameters=config.parameters,
         context_cache_mode=config.context_cache_mode,
         context_cache_note=config.context_cache_note,
         configuration_error=config.configuration_error,
@@ -123,7 +152,7 @@ def list_model_routes() -> ModelRouteListResponse:
     routes: list[ModelRouteStatus] = []
     for raw_route_id in list_model_route_ids():
         route_id = raw_route_id  # 保留稳定字符串，Pydantic 在 response 边界做 Literal 校验。
-        label, description, capabilities, runtime_enabled = MODEL_ROUTE_DEFINITIONS[route_id]
+        label, description, capabilities, runtime_enabled, recommended_parameters = MODEL_ROUTE_DEFINITIONS[route_id]
         settings_value = load_model_route_settings(route_id)  # type: ignore[arg-type]
         if not runtime_enabled:
             routes.append(
@@ -133,6 +162,7 @@ def list_model_routes() -> ModelRouteListResponse:
                     description=description,
                     required_capabilities=list(capabilities),
                     settings=settings_value,
+                    recommended_parameters=recommended_parameters,
                     availability="reserved",
                     availability_message="该作用域尚未接入通用模型网关，当前配置只作预留。",
                     resolved=None,
@@ -140,7 +170,11 @@ def list_model_routes() -> ModelRouteListResponse:
             )
             continue
         try:
-            resolution = resolve_model_runtime_for_route(route_id, validate=True)  # type: ignore[arg-type]
+            resolution = (
+                resolve_visual_model_runtime_for_route(route_id, validate=True)
+                if "visual_generation" in capabilities
+                else resolve_model_runtime_for_route(route_id, validate=True)
+            )  # type: ignore[arg-type]
         except (ModelGatewayError, ModelRouteStoreError) as exc:
             routes.append(
                 ModelRouteStatus(
@@ -149,6 +183,7 @@ def list_model_routes() -> ModelRouteListResponse:
                     description=description,
                     required_capabilities=list(capabilities),
                     settings=settings_value,
+                    recommended_parameters=recommended_parameters,
                     availability="unavailable",
                     availability_message=str(exc),
                     resolved=_unavailable_route_snapshot(route_id, settings_value, str(exc)),  # type: ignore[arg-type]
@@ -162,6 +197,7 @@ def list_model_routes() -> ModelRouteListResponse:
                 description=description,
                 required_capabilities=list(capabilities),
                 settings=settings_value,
+                recommended_parameters=recommended_parameters,
                 availability="ready",
                 availability_message="可用于已接入该作用域的真实模型调用。",
                 resolved=resolution.audit_snapshot(),
@@ -174,12 +210,12 @@ def list_model_routes() -> ModelRouteListResponse:
 def update_model_route(route_id: ModelRouteScope, request: ModelRouteUpdateRequest) -> ModelRouteStatus:
     """保存一个作用域的模型 Profile，并在落盘前做能力与 Key 准入。"""
 
-    label, description, capabilities, runtime_enabled = MODEL_ROUTE_DEFINITIONS[route_id]
+    label, description, capabilities, runtime_enabled, recommended_parameters = MODEL_ROUTE_DEFINITIONS[route_id]
     if not runtime_enabled:
         raise HTTPException(status_code=400, detail=f"{label} 尚未接入通用模型网关，不能保存可执行路由。")
 
     if request.mode == "inherit_global":
-        settings_value = ModelRouteSettings(route_id=route_id)
+        settings_value = ModelRouteSettings(route_id=route_id, parameters=request.parameters)
     else:
         provider = normalize_model_provider(request.provider)
         try:
@@ -192,8 +228,10 @@ def update_model_route(route_id: ModelRouteScope, request: ModelRouteUpdateReque
             supports_json_output=profile.supports_json_output,
             supports_tool_calls=profile.supports_tool_calls,
             supports_thinking=profile.supports_thinking,
+            supports_visual_generation=profile.supports_visual_generation,
             thinking=request.thinking,
         )
+        _validate_parameter_capabilities(profile, request.parameters)
         base_url = (request.base_url or profile.default_base_url or "").strip().rstrip("/")
         model = (request.model or profile.default_model or "").strip()
         if not base_url or not model:
@@ -205,22 +243,46 @@ def update_model_route(route_id: ModelRouteScope, request: ModelRouteUpdateReque
             base_url=base_url,
             model=model,
             thinking=request.thinking,
+            parameters=request.parameters,
         )
 
     try:
         # 在写入前先证明候选 Profile 能解析到自己的 Key。显式配置不能先落下一个无效路由，
         # 再由后续任务悄悄继承全局默认模型。
         if settings_value.mode == "inherit_global":
-            resolve_model_runtime(validate=True)
+            if "visual_generation" in capabilities:
+                inherited_visual = resolve_visual_model_runtime_for_route(route_id, validate=True)
+                _validate_parameter_capabilities(
+                    get_model_provider_profile(inherited_visual.runtime.provider),
+                    settings_value.parameters,
+                )
+            else:
+                inherited_runtime = resolve_model_runtime(validate=True)
+                _validate_parameter_capabilities(
+                    get_model_provider_profile(inherited_runtime.provider),
+                    settings_value.parameters,
+                )
         else:
-            resolve_model_runtime_for_test(
-                provider=settings_value.provider,
-                base_url=settings_value.base_url,
-                model=settings_value.model,
-                thinking=settings_value.thinking,
-            )
+            if "visual_generation" in capabilities:
+                resolve_visual_model_runtime(
+                    provider=settings_value.provider,
+                    base_url=settings_value.base_url,
+                    model=settings_value.model,
+                    validate=True,
+                )
+            else:
+                resolve_model_runtime_for_test(
+                    provider=settings_value.provider,
+                    base_url=settings_value.base_url,
+                    model=settings_value.model,
+                    thinking=settings_value.thinking,
+                )
         save_model_route_settings(settings_value)
-        resolution = resolve_model_runtime_for_route(route_id, validate=True)
+        resolution = (
+            resolve_visual_model_runtime_for_route(route_id, validate=True)
+            if "visual_generation" in capabilities
+            else resolve_model_runtime_for_route(route_id, validate=True)
+        )
     except (ModelGatewayError, ModelRouteStoreError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -231,9 +293,30 @@ def update_model_route(route_id: ModelRouteScope, request: ModelRouteUpdateReque
         description=description,
         required_capabilities=list(capabilities),
         settings=saved,
+        recommended_parameters=recommended_parameters,
         availability="ready",
         availability_message="配置已保存；后续已接入该作用域的任务会使用此 Profile。",
         resolved=resolution.audit_snapshot(),
+    )
+
+
+@router.post("/catalog", response_model=ModelCatalogResponse)
+async def get_model_catalog(request: ModelCatalogRequest) -> ModelCatalogResponse:
+    """读取当前账号可见模型；目录不可用时返回可编辑的内置候选。"""
+
+    try:
+        models, source, message = await discover_model_catalog(
+            provider=request.provider,
+            base_url=request.base_url,
+            api_key=request.api_key,
+        )
+    except ModelGatewayError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ModelCatalogResponse(
+        provider=normalize_model_provider(request.provider),
+        models=models,
+        source=source,
+        message=message,
     )
 
 
@@ -299,6 +382,7 @@ def update_model_config(request: ModelConfigUpdateRequest) -> ModelConfigRespons
         raise HTTPException(status_code=400, detail=f"{profile.label} Base URL 不能为空。")
     if not model:
         raise HTTPException(status_code=400, detail=f"{profile.label} 模型名称不能为空。")
+    _validate_parameter_capabilities(profile, request.parameters)
 
     api_key = request.api_key.strip() if request.api_key is not None else None
     clear_api_key = request.clear_api_key or api_key == ""
@@ -312,6 +396,8 @@ def update_model_config(request: ModelConfigUpdateRequest) -> ModelConfigRespons
             base_url=base_url,
             model=model,
             thinking=request.thinking,
+            parameters=request.parameters,
+            set_as_default=request.set_as_default and profile.model_kind == "chat",
             api_key=api_key_to_save,
             clear_api_key=clear_api_key,
         )
@@ -320,7 +406,7 @@ def update_model_config(request: ModelConfigUpdateRequest) -> ModelConfigRespons
     except (ModelConfigStoreError, SecretStoreError) as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    return _build_model_config_response()
+    return _build_provider_config_response(provider)
 
 
 def _validate_route_capabilities(
@@ -330,6 +416,7 @@ def _validate_route_capabilities(
     supports_json_output: bool,
     supports_tool_calls: bool,
     supports_thinking: bool,
+    supports_visual_generation: bool,
     thinking: str,
 ) -> None:
     """拒绝能力不匹配的显式 Profile，不能把它降级为全局模型。"""
@@ -339,7 +426,7 @@ def _validate_route_capabilities(
         unavailable.append("JSON Output")
     if "tool_calls" in required_capabilities and not supports_tool_calls:
         unavailable.append("Tool Calls")
-    if "visual_generation" in required_capabilities:
+    if "visual_generation" in required_capabilities and not supports_visual_generation:
         unavailable.append("视觉生成")
     if thinking == "enabled" and not supports_thinking:
         unavailable.append("思考模式")
@@ -347,6 +434,27 @@ def _validate_route_capabilities(
         raise HTTPException(
             status_code=400,
             detail=f"{label} 需要的能力当前 Provider 不满足：{'、'.join(unavailable)}。请更换兼容模型。",
+        )
+
+
+def _validate_parameter_capabilities(profile: object, parameters: ModelGenerationParameters) -> None:
+    unsupported: list[str] = []
+    checks = (
+        ("temperature", "温度", "sends_temperature"),
+        ("top_p", "Top P", "sends_top_p"),
+        ("presence_penalty", "Presence Penalty", "sends_presence_penalty"),
+        ("frequency_penalty", "Frequency Penalty", "sends_frequency_penalty"),
+    )
+    for field, label, capability in checks:
+        if getattr(parameters, field) is not None and not bool(getattr(profile, capability, False)):
+            unsupported.append(label)
+    if parameters.max_tokens is not None and getattr(profile, "model_kind", "chat") != "chat":
+        unsupported.append("最大输出 Token")
+    if unsupported:
+        provider_label = str(getattr(profile, "label", "当前 Provider"))
+        raise HTTPException(
+            status_code=400,
+            detail=f"{provider_label} 当前适配不发送这些参数：{'、'.join(unsupported)}。请留空使用供应商默认值。",
         )
 
 
@@ -364,6 +472,7 @@ def _unavailable_route_snapshot(
         provider=settings_value.provider,
         model=settings_value.model,
         thinking=settings_value.thinking,
+        parameters=settings_value.parameters,
         compatibility="unavailable",
         note=message[:240],
     )
@@ -402,9 +511,17 @@ def _build_model_config_response() -> ModelConfigResponse:
         provider=runtime.provider,
         label=runtime.label,
         transport=runtime.transport,
+        model_kind="chat",
         base_url=runtime.base_url or None,
         model=runtime.model or None,
         thinking=runtime.thinking if runtime.thinking in {"enabled", "disabled"} else "disabled",
+        parameters=ModelGenerationParameters(
+            temperature=runtime.temperature,
+            top_p=runtime.top_p,
+            max_tokens=runtime.max_tokens,
+            presence_penalty=runtime.presence_penalty,
+            frequency_penalty=runtime.frequency_penalty,
+        ),
         api_key_configured=runtime.api_key_configured,
         api_key_source=_api_key_source(runtime.api_key_configured, stored_config, runtime.provider),
         configuration_source=_configuration_source(stored_config),
@@ -413,6 +530,42 @@ def _build_model_config_response() -> ModelConfigResponse:
         updated_at=stored_config.updated_at or None,
         context_cache_mode=runtime.context_cache_mode,
         context_cache_note=runtime.context_cache_note,
+    )
+
+
+def _build_provider_config_response(provider: str) -> ModelConfigResponse:
+    """构造某个 Provider 的脱敏配置，不把图像配置误设为当前聊天 Runtime。"""
+
+    stored_config = load_model_config()
+    profile = get_model_provider_profile(provider)
+    configured = stored_config.provider_config_for(provider)
+    api_key_source = model_provider_api_key_source(provider, stored_config=stored_config)
+    resolved_base_url, resolved_model = model_provider_connection_preview(
+        provider,
+        stored_config=stored_config,
+    )
+    secret = stored_config.api_key_secret_for(provider)
+    return ModelConfigResponse(
+        provider=provider,
+        label=profile.label,
+        transport=profile.transport,
+        model_kind=profile.model_kind,
+        base_url=resolved_base_url or None,
+        model=resolved_model or None,
+        thinking=(
+            configured.thinking
+            if configured and configured.thinking in {"enabled", "disabled"}
+            else "disabled"
+        ),
+        parameters=configured.parameters if configured else ModelGenerationParameters(),
+        api_key_configured=api_key_source != "none",
+        api_key_source=api_key_source,
+        configuration_source="local_config" if configured else "environment" if api_key_source == "environment" else "default",
+        secure_storage_available=model_secure_storage_available(),
+        secure_storage=str(secret.get("storage") or "") if secret else "",
+        updated_at=configured.updated_at if configured and configured.updated_at else None,
+        context_cache_mode=profile.context_cache_mode,
+        context_cache_note=profile.context_cache_note,
     )
 
 

@@ -7,6 +7,7 @@
 #include "knowledgeanswerdialog.h"
 #include "knowledgedeeptaskdialog.h"
 #include "presentationstudiodialog.h"
+#include "spinboxarrowstyle.h"
 #include "taskactivityindicator.h"
 #include "ui_mainwindow.h"
 
@@ -25,6 +26,7 @@
 #include <QDesktopServices>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDoubleSpinBox>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -1330,6 +1332,8 @@ void MainWindow::setupBackendIntegration()
             &MainWindow::handleTaskDeliveryCardFailed);
     connect(backendClient, &BackendClient::modelProvidersReceived, this, &MainWindow::handleModelProvidersReceived);
     connect(backendClient, &BackendClient::modelProvidersFailed, this, &MainWindow::handleModelProvidersFailed);
+    connect(backendClient, &BackendClient::modelCatalogReceived, this, &MainWindow::handleModelCatalogReceived);
+    connect(backendClient, &BackendClient::modelCatalogFailed, this, &MainWindow::handleModelCatalogFailed);
     connect(backendClient, &BackendClient::modelRoutesReceived, this, &MainWindow::handleModelRoutesReceived);
     connect(backendClient, &BackendClient::modelRoutesFailed, this, &MainWindow::handleModelRoutesFailed);
     connect(backendClient, &BackendClient::modelRouteSaved, this, &MainWindow::handleModelRouteSaved);
@@ -11614,9 +11618,9 @@ QString MainWindow::formatDispatchUserMessageHtml(const QString &message) const
     const QString escaped = message.toHtmlEscaped().replace(QStringLiteral("\n"), QStringLiteral("<br/>"));
     return QStringLiteral(
                "<table width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin:10px 0;\">"
-               "<tr><td width=\"30%\"></td><td width=\"70%\" bgcolor=\"#2563EB\">"
-               "<p align=\"right\" style=\"margin:8px 12px 2px 12px;color:#DBEAFE;\"><b>我</b></p>"
-               "<p style=\"margin:2px 12px 10px 12px;color:white;line-height:1.6;\">%1</p>"
+               "<tr><td width=\"30%\"></td><td width=\"70%\" bgcolor=\"#F1F6FD\" style=\"border:1px solid #D5E2F1;\">"
+               "<p align=\"right\" style=\"margin:8px 12px 2px 12px;color:#52677E;\"><b>我</b></p>"
+               "<p style=\"margin:2px 12px 10px 12px;color:#1E293B;line-height:1.6;\">%1</p>"
                "</td></tr></table>")
         .arg(escaped);
 }
@@ -13407,6 +13411,9 @@ void MainWindow::setupModelPage()
     modelConfigModelInput = ui->modelConfigModelInput;
     modelConfigApiKeyInput = ui->modelConfigApiKeyInput;
     modelConfigThinkingCombo = ui->modelConfigThinkingCombo;
+    modelConfigTemperatureSpin = ui->modelConfigTemperatureSpin;
+    modelConfigMaxTokensSpin = ui->modelConfigMaxTokensSpin;
+    modelCatalogRefreshButton = ui->modelCatalogRefreshButton;
     modelRefreshButton = ui->modelRefreshButton;
     modelRoutesButton = ui->modelRoutesButton;
     modelTestConfigButton = ui->modelTestConfigButton;
@@ -13429,12 +13436,34 @@ void MainWindow::setupModelPage()
     connect(modelSearchInput, &QLineEdit::textChanged, this, &MainWindow::applyModelKeywordFilter);
 
     modelConfigBaseUrlInput->setClearButtonEnabled(true);
-    modelConfigModelInput->setClearButtonEnabled(true);
+    if (modelConfigModelInput->lineEdit()) {
+        modelConfigModelInput->lineEdit()->setClearButtonEnabled(true);
+    }
     modelConfigApiKeyInput->setClearButtonEnabled(true);
     connect(modelConfigBaseUrlInput, &QLineEdit::textChanged, this, &MainWindow::updateModelConfigButtons);
-    connect(modelConfigModelInput, &QLineEdit::textChanged, this, &MainWindow::updateModelConfigButtons);
+    connect(modelConfigModelInput, &QComboBox::currentTextChanged, this, &MainWindow::updateModelConfigButtons);
     modelConfigThinkingCombo->addItem(QStringLiteral("关闭"), QStringLiteral("disabled"));
     modelConfigThinkingCombo->addItem(QStringLiteral("开启"), QStringLiteral("enabled"));
+
+    modelConfigTemperatureSpin->setRange(-0.1, 2.0);
+    modelConfigTemperatureSpin->setSingleStep(0.1);
+    modelConfigTemperatureSpin->setDecimals(2);
+    modelConfigTemperatureSpin->setSpecialValueText(QStringLiteral("默认"));
+    modelConfigTemperatureSpin->setButtonSymbols(QAbstractSpinBox::UpDownArrows);
+    installSpinBoxArrowStyle(modelConfigTemperatureSpin);
+    modelConfigMaxTokensSpin->setRange(0, 131072);
+    modelConfigMaxTokensSpin->setSingleStep(256);
+    modelConfigMaxTokensSpin->setSpecialValueText(QStringLiteral("默认"));
+    modelConfigMaxTokensSpin->setButtonSymbols(QAbstractSpinBox::UpDownArrows);
+    installSpinBoxArrowStyle(modelConfigMaxTokensSpin);
+    for (QDoubleSpinBox *spin : {modelConfigTemperatureSpin}) {
+        connect(spin, &QDoubleSpinBox::valueChanged, this, [this](double) { updateModelConfigButtons(); });
+    }
+    connect(modelConfigMaxTokensSpin, &QSpinBox::valueChanged, this, [this](int) { updateModelConfigButtons(); });
+
+    modelCatalogRefreshButton->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
+    modelCatalogRefreshButton->setText(QString());
+    connect(modelCatalogRefreshButton, &QPushButton::clicked, this, &MainWindow::refreshSelectedModelCatalog);
 
     modelTestConfigButton->setIcon(style()->standardIcon(QStyle::SP_DialogApplyButton));
     modelTestConfigButton->setToolTip(QStringLiteral("用当前表单内容发起一次小请求；不会保存配置。"));
@@ -13530,6 +13559,11 @@ void MainWindow::refreshModelProviders()
 
 void MainWindow::handleModelProvidersReceived(const ModelProviderListResult &result)
 {
+    QString preferredProvider;
+    if (modelProviderTable && modelProviderTable->currentRow() >= 0
+        && modelProviderTable->currentRow() < currentModelProviders.size()) {
+        preferredProvider = currentModelProviders.at(modelProviderTable->currentRow()).provider;
+    }
     modelProvidersLoading = false;
     modelRefreshButton->setEnabled(backendManager->isReady());
     modelRefreshButton->setText(QStringLiteral("刷新"));
@@ -13562,10 +13596,11 @@ void MainWindow::handleModelProvidersReceived(const ModelProviderListResult &res
         transportItem->setData(Qt::UserRole, provider.transport);
         transportItem->setToolTip(provider.transport);
 
-        auto *modelItem = new QTableWidgetItem(provider.defaultModel.isEmpty()
+        const QString listedModel = !provider.configuredModel.isEmpty() ? provider.configuredModel : provider.defaultModel;
+        auto *modelItem = new QTableWidgetItem(listedModel.isEmpty()
                                                    ? QStringLiteral("未设置")
-                                                   : provider.defaultModel);
-        modelItem->setToolTip(provider.defaultModel);
+                                                   : listedModel);
+        modelItem->setToolTip(listedModel);
 
         QString stateText = QStringLiteral("已支持");
         if (hasRuntimeError) {
@@ -13574,8 +13609,10 @@ void MainWindow::handleModelProvidersReceived(const ModelProviderListResult &res
             stateText = QStringLiteral("待配置 Key");
         } else if (isCurrent) {
             stateText = QStringLiteral("当前运行时");
+        } else if (provider.modelKind == QStringLiteral("image") && provider.apiKeyConfigured) {
+            stateText = QStringLiteral("图像模型可用");
         } else if (provider.apiKeyConfigured) {
-            stateText = QStringLiteral("Key 已保存");
+            stateText = QStringLiteral("已配置");
         }
 
         auto *stateItem = new QTableWidgetItem(stateText);
@@ -13611,7 +13648,8 @@ void MainWindow::handleModelProvidersReceived(const ModelProviderListResult &res
     modelProviderTable->blockSignals(false);
     updateModelSummaryPanel();
     applyModelKeywordFilter();
-    if (!selectModelProviderRowById(currentModelStatus.provider)) {
+    if (!selectModelProviderRowById(preferredProvider)
+        && !selectModelProviderRowById(currentModelStatus.provider)) {
         for (int row = 0; row < modelProviderTable->rowCount(); ++row) {
             if (!modelProviderTable->isRowHidden(row)) {
                 modelProviderTable->selectRow(row);
@@ -13642,8 +13680,9 @@ void MainWindow::openModelRouteDialogForRoute(const QString &routeId)
                        const QString &provider,
                        const QString &baseUrl,
                        const QString &model,
-                       const QString &thinking) {
-                    backendClient->saveModelRoute(routeId, mode, provider, baseUrl, model, thinking);
+                       const QString &thinking,
+                       const ModelGenerationParametersInfo &parameters) {
+                    backendClient->saveModelRoute(routeId, mode, provider, baseUrl, model, thinking, parameters);
                 });
     }
 
@@ -13989,7 +14028,7 @@ void MainWindow::updateModelConfigForm()
     const int row = modelProviderTable->currentRow();
     if (row < 0 || row >= currentModelProviders.size() || modelProviderTable->isRowHidden(row)) {
         if (modelConfigProviderLabel) {
-            modelConfigProviderLabel->setText(QStringLiteral("选择左侧供应商后可编辑全局默认模型。"));
+            modelConfigProviderLabel->setText(QStringLiteral("选择左侧供应商后可编辑该 Provider 的连接与模型。"));
         }
         if (modelConfigBaseUrlInput) {
             modelConfigBaseUrlInput->clear();
@@ -14016,20 +14055,25 @@ void MainWindow::updateModelConfigForm()
     const bool hasError = isCurrent && !currentModelStatus.configurationError.isEmpty();
     const QString baseUrl = isCurrent && !currentModelStatus.baseUrl.isEmpty()
                                 ? currentModelStatus.baseUrl
-                                : provider.defaultBaseUrl;
+                                : (!provider.configuredBaseUrl.isEmpty() ? provider.configuredBaseUrl
+                                                                         : provider.defaultBaseUrl);
     const QString model = isCurrent && !currentModelStatus.model.isEmpty()
                               ? currentModelStatus.model
-                              : provider.defaultModel;
+                              : (!provider.configuredModel.isEmpty() ? provider.configuredModel
+                                                                     : provider.defaultModel);
 
     modelConfigBaseUrlInput->blockSignals(true);
     modelConfigModelInput->blockSignals(true);
     modelConfigApiKeyInput->blockSignals(true);
     modelConfigBaseUrlInput->setText(baseUrl);
-    modelConfigModelInput->setText(model);
+    modelConfigModelInput->clear();
+    modelConfigModelInput->addItems(provider.recommendedModels);
+    modelConfigModelInput->setEditText(model);
     modelConfigApiKeyInput->clear();
     modelConfigBaseUrlInput->blockSignals(false);
     modelConfigModelInput->blockSignals(false);
     modelConfigApiKeyInput->blockSignals(false);
+    setSelectedModelParameters(isCurrent ? currentModelStatus.parameters : provider.configuredParameters);
 
     const QString providerText = provider.label.isEmpty()
                                      ? provider.provider
@@ -14043,7 +14087,8 @@ void MainWindow::updateModelConfigForm()
         modelConfigThinkingCombo->setEnabled(provider.supportsThinking);
         const QString thinking = isCurrent && !currentModelStatus.thinking.isEmpty()
                                      ? currentModelStatus.thinking
-                                     : QStringLiteral("disabled");
+                                     : (!provider.configuredThinking.isEmpty() ? provider.configuredThinking
+                                                                               : QStringLiteral("disabled"));
         const int thinkingIndex = modelConfigThinkingCombo->findData(thinking);
         modelConfigThinkingCombo->setCurrentIndex(thinkingIndex >= 0 ? thinkingIndex : 0);
         modelConfigThinkingCombo->setToolTip(provider.supportsThinking
@@ -14055,6 +14100,9 @@ void MainWindow::updateModelConfigForm()
         if (hasError) {
             polishBadge(modelConfigStatusBadge, QStringLiteral("badgeOrange"));
             modelConfigStatusBadge->setText(QStringLiteral("异常"));
+        } else if (provider.modelKind == QStringLiteral("image") && provider.apiKeyConfigured) {
+            polishBadge(modelConfigStatusBadge, QStringLiteral("badgeGreen"));
+            modelConfigStatusBadge->setText(QStringLiteral("图像可用"));
         } else if (isCurrent && currentModelStatus.apiKeyConfigured) {
             polishBadge(modelConfigStatusBadge, QStringLiteral("badgeGreen"));
             modelConfigStatusBadge->setText(QStringLiteral("已生效"));
@@ -14073,6 +14121,8 @@ void MainWindow::updateModelConfigForm()
     if (modelConfigStatusLabel) {
         if (hasError) {
             modelConfigStatusLabel->setText(QStringLiteral("当前配置异常：%1").arg(currentModelStatus.configurationError));
+        } else if (provider.modelKind == QStringLiteral("image") && provider.apiKeyConfigured) {
+            modelConfigStatusLabel->setText(QStringLiteral("该图像 Provider 已配置；保存只更新视觉生成，不会替换全局聊天模型。"));
         } else if (isCurrent && currentModelStatus.apiKeyConfigured) {
             const QString keySource = currentModelStatus.apiKeySource == QStringLiteral("local_config")
                                           ? QStringLiteral("本地安全存储")
@@ -14083,6 +14133,8 @@ void MainWindow::updateModelConfigForm()
             modelConfigStatusLabel->setText(QStringLiteral("当前 provider 尚未配置 Key；保存时填写 Key 才能用于真实模型调用。"));
         } else if (provider.apiKeyConfigured) {
             modelConfigStatusLabel->setText(QStringLiteral("该 provider 的 Key 已安全保存但尚未启用；保存配置会将它设为全局默认，Key 留空会继续使用此 provider 已保存的 Key。"));
+        } else if (provider.modelKind == QStringLiteral("image")) {
+            modelConfigStatusLabel->setText(QStringLiteral("保存图像模型与 Key 后，PPT 的视觉生成路由会直接使用该配置。"));
         } else {
             modelConfigStatusLabel->setText(QStringLiteral("保存后会把该 provider 设为全局默认；Key 留空不会使用其他 provider 的 Key。"));
         }
@@ -14101,7 +14153,7 @@ void MainWindow::updateModelConfigButtons()
                            && modelConfigBaseUrlInput
                            && modelConfigModelInput
                            && !modelConfigBaseUrlInput->text().trimmed().isEmpty()
-                           && !modelConfigModelInput->text().trimmed().isEmpty();
+                           && !modelConfigModelInput->currentText().trimmed().isEmpty();
     const bool canUseFields = backendManager->isReady()
                               && hasSelection
                               && !modelProvidersLoading
@@ -14131,6 +14183,16 @@ void MainWindow::updateModelConfigButtons()
         }
         modelConfigThinkingCombo->setEnabled(canUseFields && supportsThinking);
     }
+    const ModelProviderInfo *provider = hasSelection ? &currentModelProviders.at(modelProviderTable->currentRow()) : nullptr;
+    if (modelConfigTemperatureSpin) {
+        modelConfigTemperatureSpin->setEnabled(canUseFields && provider && provider->supportsTemperature);
+    }
+    if (modelConfigMaxTokensSpin) {
+        modelConfigMaxTokensSpin->setEnabled(canUseFields && provider && provider->supportsMaxTokens);
+    }
+    if (modelCatalogRefreshButton) {
+        modelCatalogRefreshButton->setEnabled(canUseFields);
+    }
     if (modelRefreshButton) {
         modelRefreshButton->setEnabled(backendManager->isReady() && !modelProvidersLoading && !modelConfigSaving && !modelConnectionTesting);
     }
@@ -14144,7 +14206,7 @@ void MainWindow::updateModelConfigButtons()
     }
 
     if (modelTestConfigButton) {
-        modelTestConfigButton->setEnabled(canEdit);
+        modelTestConfigButton->setEnabled(canEdit && provider && provider->modelKind != QStringLiteral("image"));
         modelTestConfigButton->setText(modelConnectionTesting ? QStringLiteral("测试中") : QStringLiteral("测试连接"));
     }
 
@@ -14152,7 +14214,8 @@ void MainWindow::updateModelConfigButtons()
         bool canClear = false;
         if (hasSelection) {
             const ModelProviderInfo &provider = currentModelProviders.at(modelProviderTable->currentRow());
-            canClear = provider.provider == currentModelStatus.provider && currentModelStatus.apiKeyConfigured;
+            canClear = provider.apiKeyConfigured
+                       || (provider.provider == currentModelStatus.provider && currentModelStatus.apiKeyConfigured);
         }
         modelClearKeyButton->setEnabled(canEdit && canClear);
     }
@@ -14171,7 +14234,7 @@ void MainWindow::saveSelectedModelConfig(bool clearKey)
 
     const ModelProviderInfo &provider = currentModelProviders.at(modelProviderTable->currentRow());
     const QString baseUrl = modelConfigBaseUrlInput->text().trimmed();
-    const QString model = modelConfigModelInput->text().trimmed();
+    const QString model = modelConfigModelInput->currentText().trimmed();
     if (baseUrl.isEmpty() || model.isEmpty()) {
         if (modelConfigStatusLabel) {
             modelConfigStatusLabel->setText(QStringLiteral("Base URL 和模型名称不能为空。"));
@@ -14200,7 +14263,104 @@ void MainWindow::saveSelectedModelConfig(bool clearKey)
     }
     updateModelConfigButtons();
 
-    backendClient->saveModelConfig(provider.provider, baseUrl, model, thinking, apiKey, clearKey);
+    backendClient->saveModelConfig(
+        provider.provider,
+        baseUrl,
+        model,
+        thinking,
+        apiKey,
+        clearKey,
+        selectedModelParameters(),
+        provider.modelKind != QStringLiteral("image"));
+}
+
+ModelGenerationParametersInfo MainWindow::selectedModelParameters() const
+{
+    ModelGenerationParametersInfo parameters;
+    if (!modelProviderTable || modelProviderTable->currentRow() < 0
+        || modelProviderTable->currentRow() >= currentModelProviders.size()) {
+        return parameters;
+    }
+    const ModelProviderInfo &provider = currentModelProviders.at(modelProviderTable->currentRow());
+    parameters.hasTemperature = provider.supportsTemperature && modelConfigTemperatureSpin->value() >= 0.0;
+    parameters.temperature = modelConfigTemperatureSpin->value();
+    parameters.hasMaxTokens = provider.supportsMaxTokens && modelConfigMaxTokensSpin->value() > 0;
+    parameters.maxTokens = modelConfigMaxTokensSpin->value();
+    return parameters;
+}
+
+void MainWindow::setSelectedModelParameters(const ModelGenerationParametersInfo &parameters)
+{
+    const QSignalBlocker temperatureBlocker(modelConfigTemperatureSpin);
+    const QSignalBlocker maxTokensBlocker(modelConfigMaxTokensSpin);
+    modelConfigTemperatureSpin->setValue(parameters.hasTemperature ? parameters.temperature : -0.1);
+    modelConfigMaxTokensSpin->setValue(parameters.hasMaxTokens ? parameters.maxTokens : 0);
+}
+
+void MainWindow::refreshSelectedModelCatalog()
+{
+    if (modelConnectionTesting || modelConfigSaving || !modelProviderTable
+        || modelProviderTable->currentRow() < 0
+        || modelProviderTable->currentRow() >= currentModelProviders.size()) {
+        return;
+    }
+    const ModelProviderInfo &provider = currentModelProviders.at(modelProviderTable->currentRow());
+    modelConnectionTesting = true;
+    if (modelConfigStatusBadge) {
+        polishBadge(modelConfigStatusBadge, QStringLiteral("badgeBlue"));
+        modelConfigStatusBadge->setText(QStringLiteral("读取中"));
+    }
+    if (modelConfigStatusLabel) {
+        modelConfigStatusLabel->setText(QStringLiteral("正在读取当前账号可见模型；失败时会保留内置候选和手工输入。"));
+    }
+    updateModelConfigButtons();
+    backendClient->requestModelCatalog(
+        provider.provider,
+        modelConfigBaseUrlInput ? modelConfigBaseUrlInput->text().trimmed() : QString(),
+        modelConfigApiKeyInput ? modelConfigApiKeyInput->text().trimmed() : QString());
+}
+
+void MainWindow::handleModelCatalogReceived(const ModelCatalogResult &result)
+{
+    modelConnectionTesting = false;
+    if (!modelProviderTable || modelProviderTable->currentRow() < 0
+        || modelProviderTable->currentRow() >= currentModelProviders.size()) {
+        updateModelConfigButtons();
+        return;
+    }
+    const ModelProviderInfo &provider = currentModelProviders.at(modelProviderTable->currentRow());
+    if (provider.provider == result.provider && modelConfigModelInput) {
+        const QString currentModel = modelConfigModelInput->currentText();
+        const QSignalBlocker blocker(modelConfigModelInput);
+        modelConfigModelInput->clear();
+        modelConfigModelInput->addItems(result.models);
+        modelConfigModelInput->setEditText(currentModel);
+    }
+    if (modelConfigStatusBadge) {
+        polishBadge(modelConfigStatusBadge, result.source == QStringLiteral("remote")
+                                                ? QStringLiteral("badgeGreen")
+                                                : QStringLiteral("badgeOrange"));
+        modelConfigStatusBadge->setText(result.source == QStringLiteral("remote")
+                                            ? QStringLiteral("已更新")
+                                            : QStringLiteral("内置候选"));
+    }
+    if (modelConfigStatusLabel) {
+        modelConfigStatusLabel->setText(result.message);
+    }
+    updateModelConfigButtons();
+}
+
+void MainWindow::handleModelCatalogFailed(const QString &message)
+{
+    modelConnectionTesting = false;
+    if (modelConfigStatusBadge) {
+        polishBadge(modelConfigStatusBadge, QStringLiteral("badgeOrange"));
+        modelConfigStatusBadge->setText(QStringLiteral("读取失败"));
+    }
+    if (modelConfigStatusLabel) {
+        modelConfigStatusLabel->setText(QStringLiteral("模型目录读取失败：%1。仍可直接输入模型名。").arg(message));
+    }
+    updateModelConfigButtons();
 }
 
 void MainWindow::testSelectedModelConnection()
@@ -14215,8 +14375,12 @@ void MainWindow::testSelectedModelConnection()
     }
 
     const ModelProviderInfo &provider = currentModelProviders.at(modelProviderTable->currentRow());
+    if (provider.modelKind == QStringLiteral("image")) {
+        refreshSelectedModelCatalog();
+        return;
+    }
     const QString baseUrl = modelConfigBaseUrlInput ? modelConfigBaseUrlInput->text().trimmed() : QString();
-    const QString model = modelConfigModelInput ? modelConfigModelInput->text().trimmed() : QString();
+    const QString model = modelConfigModelInput ? modelConfigModelInput->currentText().trimmed() : QString();
     if (baseUrl.isEmpty() || model.isEmpty()) {
         if (modelConfigStatusLabel) {
             modelConfigStatusLabel->setText(QStringLiteral("测试前请先填写 Base URL 和模型名称。"));
@@ -14247,7 +14411,6 @@ void MainWindow::testSelectedModelConnection()
 void MainWindow::handleModelConfigSaved(const ModelProviderStatus &status)
 {
     modelConfigSaving = false;
-    currentModelStatus = status;
     if (modelConfigApiKeyInput) {
         modelConfigApiKeyInput->clear();
     }
@@ -14258,7 +14421,9 @@ void MainWindow::handleModelConfigSaved(const ModelProviderStatus &status)
                                                                 : QStringLiteral("Key 空"));
     }
     if (modelConfigStatusLabel) {
-        modelConfigStatusLabel->setText(QStringLiteral("配置已保存，正在刷新当前运行时状态。"));
+        modelConfigStatusLabel->setText(status.modelKind == QStringLiteral("image")
+                                            ? QStringLiteral("图像模型配置已保存，正在刷新视觉生成状态。")
+                                            : QStringLiteral("配置已保存，正在刷新当前运行时状态。"));
     }
     refreshModelProviders();
 }
@@ -14349,7 +14514,7 @@ void MainWindow::showModelEmptyState(const QString &message)
         modelRoutesButton->setEnabled(backendManager->isReady());
     }
     if (modelHintLabel) {
-        modelHintLabel->setText(QStringLiteral("供应商列表用于选择全局默认模型；Key 只显示配置状态，不显示明文。"));
+        modelHintLabel->setText(QStringLiteral("文本与图像 Provider 在此统一配置；Key 只显示状态，不显示明文。"));
     }
 
     polishBadge(modelCurrentProviderBadge, QStringLiteral("badgeGray"));
@@ -14398,6 +14563,9 @@ QString MainWindow::modelTransportText(const QString &transport) const
     if (transport == QStringLiteral("anthropic")) {
         return QStringLiteral("Anthropic Messages");
     }
+    if (transport == QStringLiteral("ark_image")) {
+        return QStringLiteral("方舟图像生成");
+    }
     return transport.isEmpty() ? QStringLiteral("未知") : transport;
 }
 
@@ -14417,6 +14585,9 @@ QString MainWindow::modelProviderBadgeObjectName(const QString &providerId) cons
     }
     if (providerId == QStringLiteral("kimi")) {
         return QStringLiteral("badgePurple");
+    }
+    if (providerId == QStringLiteral("seedream")) {
+        return QStringLiteral("badgeOrange");
     }
     return QStringLiteral("badgeGray");
 }
@@ -14451,7 +14622,7 @@ QString MainWindow::formatModelProviderDetailHtml(const ModelProviderInfo &provi
         "%1 · %2 · %3</p>"
         "<p><b>默认入口：</b>%4<br/>"
         "<b>默认模型：</b>%5</p>"
-        "<p><b>能力：</b>思考 %6 · JSON %7 · Tool Calls %8</p>")
+        "<p><b>能力：</b>思考 %6 · JSON %7 · Tool Calls %8 · 图像生成 %9</p>")
         .arg(provider.provider.toHtmlEscaped(),
              provider.label.toHtmlEscaped(),
              modelTransportText(provider.transport).toHtmlEscaped(),
@@ -14459,7 +14630,8 @@ QString MainWindow::formatModelProviderDetailHtml(const ModelProviderInfo &provi
              (provider.defaultModel.isEmpty() ? QStringLiteral("未设置") : provider.defaultModel).toHtmlEscaped(),
              capabilityText(provider.supportsThinking),
              capabilityText(provider.supportsJsonOutput),
-             capabilityText(provider.supportsToolCalls));
+             capabilityText(provider.supportsToolCalls),
+             capabilityText(provider.supportsVisualGeneration));
 
     if (!provider.notes.isEmpty()) {
         html += QStringLiteral("<p style=\"color:#64748B;\"><b>说明：</b>%1</p>")
@@ -14490,6 +14662,11 @@ QString MainWindow::formatModelProviderDetailHtml(const ModelProviderInfo &provi
             html += QStringLiteral("<p style=\"color:#64748B;\">%1</p>")
                         .arg(currentModelStatus.notes.toHtmlEscaped());
         }
+    } else if (provider.modelKind == QStringLiteral("image")) {
+        html += QStringLiteral(
+            "<p style=\"color:#64748B;\">%1 是独立图像 Provider；保存后由视觉生成路由使用，"
+            "不会替换当前文本模型 %2。</p>")
+                    .arg(provider.label.toHtmlEscaped(), runtimeProvider.toHtmlEscaped());
     } else {
         html += QStringLiteral(
             "<p style=\"color:#64748B;\">当前运行时是 %1；选中的 %2 只是已支持的 profile，"

@@ -885,6 +885,20 @@ struct LongTermMemoryProposalListResult
     QString note;
 };
 
+struct ModelGenerationParametersInfo
+{
+    bool hasTemperature = false;
+    double temperature = 0.0;
+    bool hasTopP = false;
+    double topP = 0.0;
+    bool hasMaxTokens = false;
+    int maxTokens = 0;
+    bool hasPresencePenalty = false;
+    double presencePenalty = 0.0;
+    bool hasFrequencyPenalty = false;
+    double frequencyPenalty = 0.0;
+};
+
 // 模型供应商静态信息。只传递脱敏的 Key 是否已保存，不包含任何密钥内容。
 // 这样客户可以预先配置不同 Agent 所需模型，而不必把未启用的 provider 误判为未设置。
 struct ModelProviderInfo
@@ -892,12 +906,24 @@ struct ModelProviderInfo
     QString provider;
     QString label;
     QString transport;
+    QString modelKind;
     QString defaultBaseUrl;
     QString defaultModel;
+    QStringList recommendedModels;
     bool supportsThinking = false;
     bool supportsJsonOutput = true;
     bool supportsToolCalls = true;
+    bool supportsTemperature = true;
+    bool supportsTopP = true;
+    bool supportsMaxTokens = true;
+    bool supportsPresencePenalty = false;
+    bool supportsFrequencyPenalty = false;
+    bool supportsVisualGeneration = false;
     bool apiKeyConfigured = false;
+    QString configuredBaseUrl;
+    QString configuredModel;
+    QString configuredThinking;
+    ModelGenerationParametersInfo configuredParameters;
     QString notes;
 };
 
@@ -908,6 +934,7 @@ struct ModelProviderStatus
     QString provider;
     QString label;
     QString transport;
+    QString modelKind;
     QString baseUrl;
     QString model;
     QString thinking;
@@ -917,6 +944,7 @@ struct ModelProviderStatus
     bool apiKeyConfigured = false;
     bool secureStorageAvailable = false;
     bool supportsThinking = false;
+    ModelGenerationParametersInfo parameters;
     QString notes;
     QString configurationError;
 };
@@ -941,6 +969,8 @@ struct ModelRouteInfo
     QString baseUrl;
     QString model;
     QString thinking;
+    ModelGenerationParametersInfo parameters;
+    ModelGenerationParametersInfo recommendedParameters;
     QString updatedAt;
     QString availability;
     QString availabilityMessage;
@@ -949,6 +979,7 @@ struct ModelRouteInfo
     QString resolvedLabel;
     QString resolvedModel;
     QString resolvedThinking;
+    ModelGenerationParametersInfo resolvedParameters;
     QString resolvedCompatibility;
     QString resolvedNote;
     bool hasResolved = false;
@@ -973,6 +1004,14 @@ struct ModelConnectionTestResult
     int elapsedMs = 0;
     QString message;
     QString responsePreview;
+};
+
+struct ModelCatalogResult
+{
+    QString provider;
+    QStringList models;
+    QString source;
+    QString message;
 };
 
 // 历史任务控制接口的轻量响应。
@@ -1153,6 +1192,11 @@ public:
     void requestTaskHistory(const TaskHistoryQuery &query = TaskHistoryQuery{});
     // 拉取模型供应商清单和当前运行时状态，用于模型页只读概览。
     void requestModelProviders();
+    // 优先从 Provider 的模型目录读取当前账号可见模型，失败时后端返回内置候选。
+    void requestModelCatalog(
+        const QString &provider,
+        const QString &baseUrl = QString(),
+        const QString &apiKey = QString());
     // 拉取各 Agent/任务作用域的显式模型路由；只读取本地脱敏配置，不触发模型调用。
     void requestModelRoutes();
     // 保存一个作用域的模型路由。显式模式只引用已有的 Provider Key，不传递或保存新 Key。
@@ -1162,7 +1206,8 @@ public:
         const QString &provider = QString(),
         const QString &baseUrl = QString(),
         const QString &model = QString(),
-        const QString &thinking = QStringLiteral("disabled"));
+        const QString &thinking = QStringLiteral("disabled"),
+        const ModelGenerationParametersInfo &parameters = ModelGenerationParametersInfo{});
     // 保存全局模型配置。apiKey 为空时默认不修改已保存 Key，clearApiKey=true 时才清空本地 Key。
     void saveModelConfig(
         const QString &provider,
@@ -1170,7 +1215,9 @@ public:
         const QString &model,
         const QString &thinking,
         const QString &apiKey,
-        bool clearApiKey);
+        bool clearApiKey,
+        const ModelGenerationParametersInfo &parameters = ModelGenerationParametersInfo{},
+        bool setAsDefault = true);
     // 用当前表单内容测试一次模型连接，不会写入本地配置。
     void testModelConnection(
         const QString &provider,
@@ -1524,6 +1571,8 @@ signals:
     void taskDeliveryCardFailed(const QString &taskId, const QString &message);
     void modelProvidersReceived(const ModelProviderListResult &result);
     void modelProvidersFailed(const QString &message);
+    void modelCatalogReceived(const ModelCatalogResult &result);
+    void modelCatalogFailed(const QString &message);
     void modelRoutesReceived(const ModelRouteListResult &result);
     void modelRoutesFailed(const QString &message);
     void modelRouteSaved(const ModelRouteInfo &route);
@@ -1654,6 +1703,7 @@ private:
     void requestAgents();
     QUrl buildTaskHistoryUrl(const TaskHistoryQuery &query) const;
     QUrl buildModelProvidersUrl() const;
+    QUrl buildModelCatalogUrl() const;
     QUrl buildModelRoutesUrl() const;
     QUrl buildModelRouteUrl(const QString &routeId) const;
     QUrl buildModelConfigUrl() const;

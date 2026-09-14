@@ -3,7 +3,8 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-ModelTransport = Literal["openai_compatible", "anthropic"]
+ModelTransport = Literal["openai_compatible", "anthropic", "ark_image"]
+ModelKind = Literal["chat", "image"]
 ContextCacheMode = Literal[
     "automatic_observable",
     "explicit_request",
@@ -24,6 +25,20 @@ ModelRouteMode = Literal["inherit_global", "configured"]
 ModelRouteAvailability = Literal["ready", "unavailable", "reserved"]
 
 
+class ModelGenerationParameters(BaseModel):
+    """供应商或任务作用域可覆盖的生成参数。
+
+    ``None`` 表示不在该层强制发送：路由层会继续采用任务推荐值或 Provider 配置，
+    Provider 配置层则采用部署默认值。最终是否进入请求还受供应商能力声明约束。
+    """
+
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    top_p: float | None = Field(default=None, ge=0.0, le=1.0)
+    max_tokens: int | None = Field(default=None, ge=1, le=131072)
+    presence_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
+    frequency_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
+
+
 class ModelProviderInfo(BaseModel):
     """前端可展示的模型供应商静态信息。
 
@@ -34,16 +49,28 @@ class ModelProviderInfo(BaseModel):
     provider: str
     label: str
     transport: ModelTransport
+    model_kind: ModelKind = "chat"
     default_base_url: str
     default_model: str | None = None
+    recommended_models: list[str] = Field(default_factory=list)
     supports_thinking: bool = False
     supports_json_output: bool = True
     supports_tool_calls: bool = True
+    supports_temperature: bool = True
+    supports_top_p: bool = True
+    supports_max_tokens: bool = True
+    supports_presence_penalty: bool = False
+    supports_frequency_penalty: bool = False
+    supports_visual_generation: bool = False
     # 只说明已核验的接入方式；实际命中只依赖每次模型响应的 usage 计量。
     context_cache_mode: ContextCacheMode = "unknown"
     context_cache_note: str = ""
     # 仅说明该 provider 是否已有本地加密 Key；响应永远不包含 Key 明文或密文。
     api_key_configured: bool = False
+    configured_base_url: str | None = None
+    configured_model: str | None = None
+    configured_thinking: Literal["enabled", "disabled"] = "disabled"
+    configured_parameters: ModelGenerationParameters = Field(default_factory=ModelGenerationParameters)
     notes: str = ""
 
 
@@ -53,6 +80,7 @@ class ModelProviderStatus(BaseModel):
     provider: str
     label: str = ""
     transport: ModelTransport | None = None
+    model_kind: ModelKind = "chat"
     base_url: str | None = None
     model: str | None = None
     # 供应商列表页也要返回当前运行时的思考偏好，否则 Qt 保存后刷新会把下拉框误置为关闭。
@@ -63,6 +91,7 @@ class ModelProviderStatus(BaseModel):
     secure_storage_available: bool = False
     secure_storage: str = ""
     supports_thinking: bool = False
+    parameters: ModelGenerationParameters = Field(default_factory=ModelGenerationParameters)
     context_cache_mode: ContextCacheMode = "unknown"
     context_cache_note: str = ""
     notes: str = ""
@@ -85,6 +114,9 @@ class ModelConfigUpdateRequest(BaseModel):
     base_url: str | None = Field(default=None, max_length=500)
     model: str | None = Field(default=None, max_length=200)
     thinking: Literal["enabled", "disabled"] = "disabled"
+    parameters: ModelGenerationParameters = Field(default_factory=ModelGenerationParameters)
+    # 图像 Provider 保存时不能替换全局聊天模型；文本 Provider 默认保持旧行为。
+    set_as_default: bool = True
     api_key: str | None = Field(default=None, max_length=20000)
     clear_api_key: bool = False
 
@@ -95,9 +127,11 @@ class ModelConfigResponse(BaseModel):
     provider: str
     label: str = ""
     transport: ModelTransport | None = None
+    model_kind: ModelKind = "chat"
     base_url: str | None = None
     model: str | None = None
     thinking: Literal["enabled", "disabled"] = "disabled"
+    parameters: ModelGenerationParameters = Field(default_factory=ModelGenerationParameters)
     api_key_configured: bool = False
     api_key_source: Literal["local_config", "environment", "none"] = "none"
     configuration_source: Literal["local_config", "environment", "default", "error"] = "default"
@@ -121,6 +155,21 @@ class ModelConnectionTestRequest(BaseModel):
     model: str | None = Field(default=None, max_length=200)
     thinking: Literal["enabled", "disabled"] = "disabled"
     api_key: str | None = Field(default=None, max_length=20000)
+
+
+class ModelCatalogRequest(BaseModel):
+    """读取供应商模型目录；临时 Key 只存在于本次请求内。"""
+
+    provider: str = Field(min_length=1, max_length=80)
+    base_url: str | None = Field(default=None, max_length=500)
+    api_key: str | None = Field(default=None, max_length=20000)
+
+
+class ModelCatalogResponse(BaseModel):
+    provider: str
+    models: list[str] = Field(default_factory=list)
+    source: Literal["remote", "recommended"] = "recommended"
+    message: str = ""
 
 
 class ModelConnectionTestResponse(BaseModel):
@@ -151,6 +200,7 @@ class ModelRouteSettings(BaseModel):
     base_url: str = ""
     model: str = ""
     thinking: Literal["enabled", "disabled"] = "disabled"
+    parameters: ModelGenerationParameters = Field(default_factory=ModelGenerationParameters)
     updated_at: str = ""
 
 
@@ -167,6 +217,7 @@ class ModelRouteAuditSnapshot(BaseModel):
     label: str = ""
     model: str = ""
     thinking: Literal["enabled", "disabled"] = "disabled"
+    parameters: ModelGenerationParameters = Field(default_factory=ModelGenerationParameters)
     compatibility: ModelRouteAvailability = "unavailable"
     note: str = ""
 
@@ -179,6 +230,7 @@ class ModelRouteStatus(BaseModel):
     description: str
     required_capabilities: list[str] = Field(default_factory=list)
     settings: ModelRouteSettings
+    recommended_parameters: ModelGenerationParameters = Field(default_factory=ModelGenerationParameters)
     availability: ModelRouteAvailability
     availability_message: str = ""
     resolved: ModelRouteAuditSnapshot | None = None
@@ -200,3 +252,4 @@ class ModelRouteUpdateRequest(BaseModel):
     base_url: str | None = Field(default=None, max_length=500)
     model: str | None = Field(default=None, max_length=200)
     thinking: Literal["enabled", "disabled"] = "disabled"
+    parameters: ModelGenerationParameters = Field(default_factory=ModelGenerationParameters)

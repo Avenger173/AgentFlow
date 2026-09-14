@@ -53,6 +53,11 @@ def _first_env(*names: str, default: str = "") -> str:
     return default
 
 
+def _optional_float_env(name: str) -> float | None:
+    value = os.getenv(name, "").strip()
+    return float(value) if value else None
+
+
 @dataclass(frozen=True)
 class Settings:
     app_name: str = os.getenv("AGENTFLOW_APP_NAME", "AgentFlow Backend")
@@ -81,6 +86,9 @@ class Settings:
     llm_api_key: str = _first_env("AGENTFLOW_LLM_API_KEY", "DEEPSEEK_API_KEY")
     llm_max_tokens: int = int(os.getenv("AGENTFLOW_LLM_MAX_TOKENS", "2048"))
     llm_temperature: float = float(os.getenv("AGENTFLOW_LLM_TEMPERATURE", "0.3"))
+    llm_top_p: float | None = _optional_float_env("AGENTFLOW_LLM_TOP_P")
+    llm_presence_penalty: float | None = _optional_float_env("AGENTFLOW_LLM_PRESENCE_PENALTY")
+    llm_frequency_penalty: float | None = _optional_float_env("AGENTFLOW_LLM_FREQUENCY_PENALTY")
     llm_timeout_seconds: float = float(os.getenv("AGENTFLOW_LLM_TIMEOUT_SECONDS", "60"))
     # Node 版 DeepSeek Harness 是可选执行后端。默认关闭，直到 Adapter、权限映射和
     # 只读试点均完成验收；启用开关本身不能绕过现有 Runtime 的治理边界。

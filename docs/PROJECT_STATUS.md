@@ -1,6 +1,6 @@
 # AgentFlow 项目状态
 
-最后更新：2026-09-11
+最后更新：2026-09-14
 
 ## 当前仓库状态
 
@@ -28,6 +28,8 @@
 - `docs/飞书文档.txt`：用户提供的原始参考资料，不作为每轮必读文档，也不在未确认前删除。
 
 ## 当前阶段
+
+> **2026-09-14 模型配置与任务参数治理：**模型配置升级为 v3，DeepSeek、Kimi、OpenAI、Anthropic、Qwen、Custom 和 Seedream 均按 Provider 独立保存 Base URL、模型、Thinking 与受支持参数，Key 继续使用 Provider 级 DPAPI 密文。关键 LLM 作用域可在继承全局模型时单独覆盖生成参数，分析/问答、规划/深度任务和 PPT 创作分别采用保守推荐温度；最终参数经 Provider 能力过滤后才进入请求，通用环境 Key 也不会跨 Provider 误用。Qt 模型页增加账号模型目录刷新、可编辑模型选择和常用参数，Seedream 作为独立图像 Provider 接入同一配置与视觉路由，不会替换默认聊天模型。离线专项、C6.5 路由、全量后端、PPT 工作室回归及 Qt Debug/Release 构建与 CTest 均通过；本轮未调用真实供应商，详情见 `docs/MODEL_CONFIGURATION_AND_ROUTING.md`。
 
 > **2026-09-11 Agent 情景记忆回顾边界补充：** 调度台新增同项目范围的只读会话回顾路径，用于回答“我叫你生成过什么内容的 PPT”这类明确历史提问。该路径仅返回最多五条已脱敏用户请求，不创建 WorkflowPlan、dry-run、文件或工作台跳转，且不向普通模型上下文隐式注入跨会话正文；跨项目范围保持隔离。明确的“帮我生成一份 PPT”继续走原有演示制作路由。回归脚本为 `backend/scripts/verify_conversation_history_recall.py`，验收边界见 `docs/AGENT_MEMORY_EPISODIC_RECALL_ACCEPTANCE.md`；Qt 人工记忆验收仍按 MEM-7 保持未完成状态。
 

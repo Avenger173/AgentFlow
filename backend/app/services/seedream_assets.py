@@ -17,9 +17,7 @@ from typing import Sequence
 
 import httpx
 
-from app.core.config import settings
-from app.services.model_config_store import ModelConfigStoreError, load_model_config
-from app.services.secret_store import SecretStoreError
+from app.services.model_gateway import ModelGatewayError, VisualModelRuntime, resolve_visual_model_runtime_for_route
 
 
 _SEEDREAM_GENERATIONS_PATH = "/images/generations"
@@ -40,7 +38,7 @@ class SeedreamImageAsset:
 
     @property
     def credit_text(self) -> str:
-        return "AI 生成：Seedream 5.0"
+        return f"AI 生成：{self.model}"
 
     def audit_metadata(self) -> dict[str, object]:
         """返回供任务历史使用的脱敏元数据，绝不持久化图片或完整提示词。"""
@@ -85,9 +83,12 @@ def generate_seedream_images(
     对应页面会使用已验证的本地无图版式。
     """
 
-    api_key, key_warning = _seedream_api_key()
-    if not api_key:
-        return SeedreamAssetResolution(images=(), warnings=(key_warning,))
+    try:
+        runtime = resolve_visual_model_runtime_for_route("visual_generation", validate=True).runtime
+    except ModelGatewayError as exc:
+        return SeedreamAssetResolution(images=(), warnings=(f"图像生成配置不可用：{exc}",))
+    if not isinstance(runtime, VisualModelRuntime):
+        return SeedreamAssetResolution(images=(), warnings=("图像生成路由没有解析到视觉模型。",))
 
     clean_queries = _normalize_queries(queries, limit=limit)
     if not clean_queries:
@@ -99,7 +100,7 @@ def generate_seedream_images(
     images: list[SeedreamImageAsset] = []
     warnings: list[str] = []
     headers = {
-        "Authorization": f"Bearer {api_key}",
+        "Authorization": f"Bearer {runtime.api_key}",
         "Content-Type": "application/json",
         "User-Agent": "AgentFlow-PresentationStudio/0.1",
     }
@@ -118,7 +119,7 @@ def generate_seedream_images(
                 # 拥塞/超时进行有限重试；内容策略、授权和参数错误不重试，避免重复消耗额度。
                 for attempt in range(_MAX_GENERATION_ATTEMPTS):
                     try:
-                        image = _generate_one_image(client, query=query)
+                        image = _generate_one_image(client, runtime=runtime, query=query)
                         break
                     except (httpx.HTTPError, ValueError) as exc:
                         last_error = exc
@@ -139,27 +140,17 @@ def generate_seedream_images(
     return SeedreamAssetResolution(images=tuple(images), warnings=tuple(warnings[:4]))
 
 
-def _seedream_api_key() -> tuple[str, str]:
-    """优先读取桌面端 DPAPI 密钥，环境变量只作为无桌面配置时的部署兜底。"""
-
-    try:
-        stored_config = load_model_config()
-        if stored_config.api_key_configured_for("seedream"):
-            return stored_config.decrypt_api_key("seedream"), ""
-    except (ModelConfigStoreError, SecretStoreError):
-        # 不能把解密层的异常、路径或密文状态暴露给任务历史；仍允许显式环境配置用于部署。
-        pass
-    if settings.seedream_api_key.strip():
-        return settings.seedream_api_key.strip(), ""
-    return "", "未配置 Seedream 图像生成 Key，本次已自动使用内置版式。"
-
-
-def _generate_one_image(client: httpx.Client, *, query: str) -> SeedreamImageAsset:
+def _generate_one_image(
+    client: httpx.Client,
+    *,
+    runtime: VisualModelRuntime,
+    query: str,
+) -> SeedreamImageAsset:
     prompt = _build_generation_prompt(query)
     response = client.post(
-        f"{settings.seedream_base_url}{_SEEDREAM_GENERATIONS_PATH}",
+        f"{runtime.base_url}{_SEEDREAM_GENERATIONS_PATH}",
         json={
-            "model": settings.seedream_model,
+            "model": runtime.model,
             "prompt": prompt,
             # 使用已探测到可被方舟端点接受的参数组合；横向演示页会在 PPT 渲染层裁切到 16:9。
             "size": "2K",
@@ -197,7 +188,7 @@ def _generate_one_image(client: httpx.Client, *, query: str) -> SeedreamImageAss
         asset_id=asset_id[:100],
         query=query,
         image_bytes=image_bytes,
-        model=settings.seedream_model,
+        model=runtime.model,
         prompt_digest=hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:20],
     )
 
@@ -280,7 +271,7 @@ def _safe_error_message(exc: Exception) -> str:
     if isinstance(exc, _SeedreamHttpError):
         code = exc.error_code.casefold()
         if code == "modelnotopen":
-            return "当前账号尚未开通 Seedream 5.0，请在火山方舟模型广场开通后重试"
+            return "当前账号尚未开通所选 Seedream 模型，请在火山方舟模型广场开通后重试"
         if "content" in code or "policy" in code:
             return "生成请求未通过内容安全策略"
         if exc.status_code in {401, 403}:

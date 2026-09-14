@@ -88,6 +88,7 @@ from app.services.model_gateway import (
     ModelToolTurn,
     NativeWebSearchResult,
     NativeWebSearchSource,
+    VisualModelRuntime,
 )
 from app.services.presentation_research_gateway import (
     ResearchGatewayChartData,
@@ -134,7 +135,18 @@ def main() -> None:
         return httpx.Response(200, json={"data": [{"id": "seedream-fixture", "b64_json": "/9j/"}]})
 
     with httpx.Client(transport=httpx.MockTransport(seedream_handler)) as mock_client:
-        seedream_asset = _generate_one_image(mock_client, query="single image request fixture")
+        seedream_asset = _generate_one_image(
+            mock_client,
+            runtime=VisualModelRuntime(
+                provider="seedream",
+                label="Seedream / 火山方舟",
+                transport="ark_image",
+                base_url="https://ark.cn-beijing.volces.com/api/v3",
+                model="seedream-fixture-model",
+                api_key="fixture-key",
+            ),
+            query="single image request fixture",
+        )
     assert seedream_asset.asset_id == "seedream-fixture"
     assert seedream_asset.image_bytes.startswith(b"\xff\xd8\xff")
 

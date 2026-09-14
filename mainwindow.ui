@@ -223,12 +223,21 @@ QComboBox {
 }
 QComboBox:focus { border: 1px solid #60A5FA; }
 QLineEdit#modelConfigBaseUrlInput,
-QLineEdit#modelConfigModelInput,
+QComboBox#modelConfigModelInput,
 QLineEdit#modelConfigApiKeyInput,
 QComboBox#modelConfigThinkingCombo {
     padding: 6px 14px;
     border-radius: 15px;
 }
+QDoubleSpinBox, QSpinBox {
+    background: #FFFFFF;
+    border: 1px solid #DCE8F6;
+    border-radius: 12px;
+    padding: 2px 30px 2px 10px;
+    color: #1E293B;
+    min-height: 32px;
+}
+QDoubleSpinBox:focus, QSpinBox:focus { border: 1px solid #60A5FA; }
 QTextEdit, QTextBrowser {
     background: #F8FBFF;
     border: 1px solid #DFEAF6;
@@ -3030,10 +3039,11 @@ QPushButton#navGroupButton:hover {
 </widget></item><item row="1" column="0"><widget class="QLabel" name="modelConfigModelLabel">
 <property name="objectName"><string>tinyText</string></property>
 <property name="text"><string>模型</string></property>
-</widget></item><item row="1" column="1"><widget class="QLineEdit" name="modelConfigModelInput">
+</widget></item><item row="1" column="1"><widget class="QComboBox" name="modelConfigModelInput">
 <property name="minimumSize"><size><width>0</width><height>38</height></size></property>
-<property name="placeholderText"><string>model-name</string></property>
-</widget></item><item row="2" column="0"><widget class="QLabel" name="modelConfigThinkingLabel">
+<property name="editable"><bool>true</bool></property>
+<property name="insertPolicy"><enum>QComboBox::InsertPolicy::NoInsert</enum></property>
+</widget></item><item row="1" column="2"><widget class="QPushButton" name="modelCatalogRefreshButton"><property name="objectName"><string>ghostButton</string></property><property name="minimumSize"><size><width>42</width><height>38</height></size></property><property name="maximumSize"><size><width>42</width><height>38</height></size></property><property name="text"><string>↻</string></property><property name="toolTip"><string>读取当前账号可见模型</string></property></widget></item><item row="2" column="0"><widget class="QLabel" name="modelConfigThinkingLabel">
 <property name="objectName"><string>tinyText</string></property>
 <property name="text"><string>思考</string></property>
 </widget></item><item row="2" column="1"><widget class="QComboBox" name="modelConfigThinkingCombo">
@@ -3041,11 +3051,14 @@ QPushButton#navGroupButton:hover {
 </widget></item><item row="3" column="0"><widget class="QLabel" name="modelConfigApiKeyLabel">
 <property name="objectName"><string>tinyText</string></property>
 <property name="text"><string>API Key</string></property>
-</widget></item><item row="3" column="1"><widget class="QLineEdit" name="modelConfigApiKeyInput">
+</widget></item><item row="3" column="1" colspan="2"><widget class="QLineEdit" name="modelConfigApiKeyInput">
 <property name="minimumSize"><size><width>0</width><height>38</height></size></property>
 <property name="echoMode"><enum>QLineEdit::EchoMode::Password</enum></property>
 <property name="placeholderText"><string>留空则不修改已保存 Key</string></property>
 </widget></item>
+<item row="4" column="0"><widget class="QLabel" name="modelConfigTemperatureLabel"><property name="objectName"><string>tinyText</string></property><property name="text"><string>温度</string></property></widget></item>
+<item row="4" column="1" colspan="2"><widget class="QDoubleSpinBox" name="modelConfigTemperatureSpin"/></item>
+<item row="5" column="0"><widget class="QLabel" name="modelConfigMaxTokensLabel"><property name="objectName"><string>tinyText</string></property><property name="text"><string>最大输出</string></property></widget></item><item row="5" column="1" colspan="2"><widget class="QSpinBox" name="modelConfigMaxTokensSpin"/></item>
 </layout></item><item><widget class="QLabel" name="modelConfigStatusLabel">
 <property name="objectName"><string>tinyText</string></property>
 <property name="text"><string>Key 会由后端安全保存，界面只显示是否已配置。</string></property>

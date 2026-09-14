@@ -1,14 +1,20 @@
 #include "modelroutedialog.h"
 
+#include "spinboxarrowstyle.h"
+
 #include "ui_modelroutedialog.h"
 
 #include <QComboBox>
+#include <QDoubleSpinBox>
 #include <QHeaderView>
 #include <QIcon>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QSignalBlocker>
+#include <QSplitter>
 #include <QStyle>
+#include <QSpinBox>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 
@@ -27,6 +33,9 @@ ModelRouteDialog::ModelRouteDialog(QWidget *parent)
 {
     ui->setupUi(this);
     setWindowFlag(Qt::WindowContextHelpButtonHint, false);
+    resize(1240, 760);
+    setMinimumSize(1100, 700);
+    ui->routeSplitter->setSizes({470, 690});
     ui->routeIcon->setPixmap(QIcon(QStringLiteral(":/icons/model.svg")).pixmap(30, 30));
     ui->routeTable->setColumnCount(3);
     ui->routeTable->setHorizontalHeaderLabels({QStringLiteral("任务作用域"), QStringLiteral("当前模型"), QStringLiteral("状态")});
@@ -45,6 +54,18 @@ ModelRouteDialog::ModelRouteDialog(QWidget *parent)
     ui->thinkingCombo->addItem(QStringLiteral("关闭"), QStringLiteral("disabled"));
     ui->thinkingCombo->addItem(QStringLiteral("开启"), QStringLiteral("enabled"));
 
+    ui->temperatureSpin->setRange(-0.1, 2.0);
+    ui->temperatureSpin->setSingleStep(0.1);
+    ui->temperatureSpin->setDecimals(2);
+    ui->temperatureSpin->setSpecialValueText(QStringLiteral("任务推荐"));
+    ui->temperatureSpin->setButtonSymbols(QAbstractSpinBox::UpDownArrows);
+    installSpinBoxArrowStyle(ui->temperatureSpin);
+    ui->maxTokensSpin->setRange(0, 131072);
+    ui->maxTokensSpin->setSingleStep(256);
+    ui->maxTokensSpin->setSpecialValueText(QStringLiteral("任务默认"));
+    ui->maxTokensSpin->setButtonSymbols(QAbstractSpinBox::UpDownArrows);
+    installSpinBoxArrowStyle(ui->maxTokensSpin);
+
     ui->refreshButton->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
     ui->refreshButton->setToolTip(QStringLiteral("重新读取任务模型路由，不会调用模型。"));
     ui->saveButton->setIcon(style()->standardIcon(QStyle::SP_DialogSaveButton));
@@ -60,17 +81,35 @@ ModelRouteDialog::ModelRouteDialog(QWidget *parent)
     });
     connect(ui->providerCombo, &QComboBox::currentIndexChanged, this, [this](int) {
         if (!applyingEditorState) {
+            const bool inherited = ui->routeModeCombo->currentData().toString() == QStringLiteral("inherit_global");
+            promoteToIndependentProfile();
+            updateProviderEditor(!inherited);
+            updateActionState();
+        }
+    });
+    connect(ui->baseUrlInput, &QLineEdit::textEdited, this, [this](const QString &) {
+        promoteToIndependentProfile();
+        updateProviderEditor(true);
+        updateActionState();
+    });
+    connect(ui->modelInput, &QComboBox::currentTextChanged, this, [this](const QString &) {
+        if (!applyingEditorState) {
+            promoteToIndependentProfile();
             updateProviderEditor(true);
             updateActionState();
         }
     });
-    connect(ui->baseUrlInput, &QLineEdit::textChanged, this, &ModelRouteDialog::updateActionState);
-    connect(ui->modelInput, &QLineEdit::textChanged, this, &ModelRouteDialog::updateActionState);
     connect(ui->thinkingCombo, &QComboBox::currentIndexChanged, this, [this](int) {
         if (!applyingEditorState) {
+            promoteToIndependentProfile();
+            updateProviderEditor(true);
             updateActionState();
         }
     });
+    for (QDoubleSpinBox *spin : {ui->temperatureSpin}) {
+        connect(spin, &QDoubleSpinBox::valueChanged, this, [this](double) { updateActionState(); });
+    }
+    connect(ui->maxTokensSpin, &QSpinBox::valueChanged, this, [this](int) { updateActionState(); });
     connect(ui->refreshButton, &QPushButton::clicked, this, [this]() {
         setLoading(true, QStringLiteral("正在读取任务模型路由…"));
         emit refreshRequested();
@@ -87,8 +126,9 @@ ModelRouteDialog::ModelRouteDialog(QWidget *parent)
             mode,
             ui->providerCombo->currentData().toString(),
             ui->baseUrlInput->text(),
-            ui->modelInput->text(),
-            ui->thinkingCombo->currentData().toString());
+            ui->modelInput->currentText(),
+            ui->thinkingCombo->currentData().toString(),
+            editorParameters());
     });
     connect(ui->closeButton, &QPushButton::clicked, this, &QDialog::reject);
 
@@ -104,18 +144,7 @@ ModelRouteDialog::~ModelRouteDialog()
 void ModelRouteDialog::setModelProviders(const QList<ModelProviderInfo> &value)
 {
     providers = value;
-    const QString selectedProvider = ui->providerCombo->currentData().toString();
-    ui->providerCombo->blockSignals(true);
-    ui->providerCombo->clear();
-    for (const ModelProviderInfo &provider : providers) {
-        ui->providerCombo->addItem(provider.label, provider.provider);
-    }
-    const int selectedIndex = ui->providerCombo->findData(selectedProvider);
-    if (selectedIndex >= 0) {
-        ui->providerCombo->setCurrentIndex(selectedIndex);
-    }
-    ui->providerCombo->blockSignals(false);
-    updateProviderEditor(true);
+    updateEditor();
 }
 
 void ModelRouteDialog::setRoutes(const ModelRouteListResult &result)
@@ -225,15 +254,39 @@ void ModelRouteDialog::updateEditor()
     const int modeIndex = ui->routeModeCombo->findData(route->mode);
     ui->routeModeCombo->setCurrentIndex(modeIndex >= 0 ? modeIndex : 0);
     const QString provider = route->mode == QStringLiteral("configured") ? route->provider : route->resolvedProvider;
+    const bool visualRoute = route->requiredCapabilities.contains(QStringLiteral("visual_generation"));
+    ui->providerCombo->clear();
+    for (const ModelProviderInfo &item : providers) {
+        if ((visualRoute && item.modelKind == QStringLiteral("image"))
+            || (!visualRoute && item.modelKind != QStringLiteral("image"))) {
+            ui->providerCombo->addItem(item.label, item.provider);
+        }
+    }
     const int providerIndex = ui->providerCombo->findData(provider);
     if (providerIndex >= 0) {
         ui->providerCombo->setCurrentIndex(providerIndex);
     }
-    ui->baseUrlInput->setText(route->mode == QStringLiteral("configured") ? route->baseUrl : QString());
-    ui->modelInput->setText(route->mode == QStringLiteral("configured") ? route->model : QString());
+    ui->modelInput->clear();
+    const ModelProviderInfo *selectedProvider = providerById(provider);
+    if (selectedProvider) {
+        ui->modelInput->addItems(selectedProvider->recommendedModels);
+    }
+    const QString fallbackBaseUrl = selectedProvider
+                                       ? (!selectedProvider->configuredBaseUrl.isEmpty()
+                                              ? selectedProvider->configuredBaseUrl
+                                              : selectedProvider->defaultBaseUrl)
+                                       : QString();
+    const QString fallbackModel = selectedProvider
+                                      ? (!selectedProvider->configuredModel.isEmpty()
+                                             ? selectedProvider->configuredModel
+                                             : selectedProvider->defaultModel)
+                                      : QString();
+    ui->baseUrlInput->setText(route->mode == QStringLiteral("configured") ? route->baseUrl : fallbackBaseUrl);
+    ui->modelInput->setEditText(route->mode == QStringLiteral("configured") ? route->model : fallbackModel);
     const QString thinking = route->mode == QStringLiteral("configured") ? route->thinking : route->resolvedThinking;
     const int thinkingIndex = ui->thinkingCombo->findData(thinking);
     ui->thinkingCombo->setCurrentIndex(thinkingIndex >= 0 ? thinkingIndex : 0);
+    setEditorParameters(route->parameters);
     ui->routeRuntimeLabel->setText(route->hasResolved
                                        ? QStringLiteral("当前解析：%1").arg(resolvedModelLabel(*route))
                                        : route->availabilityMessage);
@@ -246,7 +299,7 @@ void ModelRouteDialog::updateProviderEditor(bool preserveEdits)
 {
     const ModelRouteInfo *route = currentRoute();
     const bool configured = ui->routeModeCombo->currentData().toString() == QStringLiteral("configured");
-    const bool editable = route && route->availability != QStringLiteral("reserved") && configured && !loading;
+    const bool editable = route && route->availability != QStringLiteral("reserved") && !loading;
     const ModelProviderInfo *provider = providerById(ui->providerCombo->currentData().toString());
     ui->providerCombo->setEnabled(editable);
     ui->baseUrlInput->setEnabled(editable);
@@ -261,17 +314,38 @@ void ModelRouteDialog::updateProviderEditor(bool preserveEdits)
     }
     if (editable && provider && !preserveEdits) {
         ui->baseUrlInput->setText(provider->defaultBaseUrl);
-        ui->modelInput->setText(provider->defaultModel);
+        ui->modelInput->clear();
+        ui->modelInput->addItems(provider->recommendedModels);
+        ui->modelInput->setEditText(provider->defaultModel);
+        setEditorParameters(ModelGenerationParametersInfo{});
     }
+    const bool parameterEditable = route && route->availability != QStringLiteral("reserved") && !loading;
+    ui->temperatureSpin->setEnabled(parameterEditable && provider && provider->supportsTemperature);
+    ui->maxTokensSpin->setEnabled(parameterEditable && provider && provider->supportsMaxTokens);
     const QString modeHint = configured
                                   ? QStringLiteral("独立 Profile 只引用该 Provider 已保存的 Key；不会复制 Key。")
-                                  : QStringLiteral("继承全局默认模型。切换为独立 Profile 后才可编辑下方字段。");
+                                  : QStringLiteral("当前继承全局默认；直接修改 Provider、地址、模型或思考会自动转为独立 Profile。 ");
     const QString providerHint = provider
                                      ? QStringLiteral("%1 · %2 · %3")
                                            .arg(provider->label, provider->supportsJsonOutput ? QStringLiteral("支持 JSON") : QStringLiteral("不支持 JSON"),
                                                 provider->supportsToolCalls ? QStringLiteral("支持 Tool Calls") : QStringLiteral("不支持 Tool Calls"))
                                      : QStringLiteral("请先选择已配置的 Provider。 ");
     ui->profileHintLabel->setText(QStringLiteral("%1\n%2").arg(modeHint, providerHint));
+}
+
+void ModelRouteDialog::promoteToIndependentProfile()
+{
+    if (applyingEditorState
+        || ui->routeModeCombo->currentData().toString() != QStringLiteral("inherit_global")) {
+        return;
+    }
+    const int configuredIndex = ui->routeModeCombo->findData(QStringLiteral("configured"));
+    if (configuredIndex < 0) {
+        return;
+    }
+    const QSignalBlocker blocker(ui->routeModeCombo);
+    ui->routeModeCombo->setCurrentIndex(configuredIndex);
+    setStatus(QStringLiteral("已切换为独立 Profile；保存后将在后续新任务中生效。"));
 }
 
 void ModelRouteDialog::updateActionState()
@@ -282,7 +356,7 @@ void ModelRouteDialog::updateActionState()
     const bool complete = !configured
                           || (!ui->providerCombo->currentData().toString().trimmed().isEmpty()
                               && !ui->baseUrlInput->text().trimmed().isEmpty()
-                              && !ui->modelInput->text().trimmed().isEmpty());
+                              && !ui->modelInput->currentText().trimmed().isEmpty());
     ui->routeModeCombo->setEnabled(route && !reserved && !loading);
     ui->saveButton->setEnabled(route && !reserved && !loading && complete);
     ui->refreshButton->setEnabled(!loading);
@@ -301,6 +375,26 @@ void ModelRouteDialog::setStatus(const QString &message, const QString &kind)
     ui->statusLabel->setObjectName(objectName);
     ui->statusLabel->style()->unpolish(ui->statusLabel);
     ui->statusLabel->style()->polish(ui->statusLabel);
+}
+
+ModelGenerationParametersInfo ModelRouteDialog::editorParameters() const
+{
+    ModelGenerationParametersInfo parameters;
+    const ModelProviderInfo *provider = providerById(ui->providerCombo->currentData().toString());
+    if (!provider) {
+        return parameters;
+    }
+    parameters.hasTemperature = provider->supportsTemperature && ui->temperatureSpin->value() >= 0.0;
+    parameters.temperature = ui->temperatureSpin->value();
+    parameters.hasMaxTokens = provider->supportsMaxTokens && ui->maxTokensSpin->value() > 0;
+    parameters.maxTokens = ui->maxTokensSpin->value();
+    return parameters;
+}
+
+void ModelRouteDialog::setEditorParameters(const ModelGenerationParametersInfo &parameters)
+{
+    ui->temperatureSpin->setValue(parameters.hasTemperature ? parameters.temperature : -0.1);
+    ui->maxTokensSpin->setValue(parameters.hasMaxTokens ? parameters.maxTokens : 0);
 }
 
 const ModelRouteInfo *ModelRouteDialog::currentRoute() const

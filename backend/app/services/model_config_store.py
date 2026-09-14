@@ -8,6 +8,7 @@ from threading import Lock
 from typing import Any
 
 from app.core.config import settings
+from app.schemas.model import ModelGenerationParameters
 from app.services.secret_store import protect_text, secure_storage_available, unprotect_text
 
 
@@ -20,11 +21,50 @@ class ModelConfigStoreError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class StoredProviderConfig:
+    """一个 Provider 的非敏感连接与生成参数。"""
+
+    base_url: str = ""
+    model: str = ""
+    thinking: str = ""
+    parameters: ModelGenerationParameters = field(default_factory=ModelGenerationParameters)
+    updated_at: str = ""
+
+    @classmethod
+    def from_json(cls, value: object) -> "StoredProviderConfig | None":
+        if not isinstance(value, dict):
+            return None
+        try:
+            parameters = ModelGenerationParameters.model_validate(value.get("parameters") or {})
+        except ValueError:
+            parameters = ModelGenerationParameters()
+        return cls(
+            base_url=str(value.get("base_url") or "").strip(),
+            model=str(value.get("model") or "").strip(),
+            thinking=str(value.get("thinking") or "").strip().lower(),
+            parameters=parameters,
+            updated_at=str(value.get("updated_at") or "").strip(),
+        )
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "base_url": self.base_url,
+            "model": self.model,
+            "thinking": self.thinking,
+            "parameters": self.parameters.model_dump(mode="json"),
+            "updated_at": self.updated_at,
+        }
+
+
+@dataclass(frozen=True)
 class StoredModelConfig:
     provider: str = ""
     base_url: str = ""
     model: str = ""
     thinking: str = ""
+    parameters: ModelGenerationParameters = field(default_factory=ModelGenerationParameters)
+    # v3 开始每个 Provider 独立保存模型与参数；顶层字段继续表示全局默认聊天模型，兼容旧配置。
+    provider_configs: dict[str, StoredProviderConfig] = field(default_factory=dict)
     # 每个 provider 分别保存 DPAPI 密文。全局当前 provider 只是“默认运行时”，不能成为
     # 密钥所有权边界，否则用户切换模型会意外丢失已经配置好的其它 Key。
     api_key_secrets: dict[str, dict[str, str]] = field(default_factory=dict)
@@ -54,6 +94,21 @@ class StoredModelConfig:
     def api_key_configured_for(self, provider: str) -> bool:
         return self.api_key_secret_for(provider) is not None
 
+    def provider_config_for(self, provider: str) -> StoredProviderConfig | None:
+        normalized = _normalize_provider_id(provider)
+        configured = self.provider_configs.get(normalized)
+        if configured is not None:
+            return configured
+        if normalized and normalized == self.provider and any((self.base_url, self.model, self.thinking)):
+            return StoredProviderConfig(
+                base_url=self.base_url,
+                model=self.model,
+                thinking=self.thinking,
+                parameters=self.parameters,
+                updated_at=self.updated_at,
+            )
+        return None
+
     def decrypt_api_key(self, provider: str | None = None) -> str:
         # 只有真实调用或运行时解析需要明文 Key；状态接口只看 api_key_configured 即可。
         target_provider = _normalize_provider_id(provider or self.provider)
@@ -67,28 +122,51 @@ class StoredModelConfig:
     def from_json(cls, data: dict[str, Any]) -> "StoredModelConfig":
         provider = _normalize_provider_id(str(data.get("provider") or ""))
         api_key_secrets = _read_api_key_secrets(data.get("api_key_secrets"))
+        provider_configs = _read_provider_configs(data.get("provider_configs"))
+        try:
+            parameters = ModelGenerationParameters.model_validate(data.get("parameters") or {})
+        except ValueError:
+            parameters = ModelGenerationParameters()
 
         # 兼容 v1 的单 Key 配置。迁移只在下次保存时落盘为 v2，不读取或输出 Key 明文。
         legacy_secret = data.get("api_key_secret")
         if provider and cls._is_valid_secret(legacy_secret) and provider not in api_key_secrets:
             api_key_secrets[provider] = legacy_secret
 
-        return cls(
-            provider=provider,
+        legacy_provider_config = StoredProviderConfig(
             base_url=str(data.get("base_url") or "").strip(),
             model=str(data.get("model") or "").strip(),
             thinking=str(data.get("thinking") or "").strip().lower(),
-            api_key_secrets=api_key_secrets,
+            parameters=parameters,
             updated_at=str(data.get("updated_at") or "").strip(),
+        )
+        if provider and provider not in provider_configs and any(
+            (legacy_provider_config.base_url, legacy_provider_config.model, legacy_provider_config.thinking)
+        ):
+            provider_configs[provider] = legacy_provider_config
+
+        return cls(
+            provider=provider,
+            base_url=legacy_provider_config.base_url,
+            model=legacy_provider_config.model,
+            thinking=legacy_provider_config.thinking,
+            parameters=parameters,
+            provider_configs=provider_configs,
+            api_key_secrets=api_key_secrets,
+            updated_at=legacy_provider_config.updated_at,
         )
 
     def to_json(self) -> dict[str, Any]:
         data: dict[str, Any] = {
-            "version": 2,
+            "version": 3,
             "provider": self.provider,
             "base_url": self.base_url,
             "model": self.model,
             "thinking": self.thinking,
+            "parameters": self.parameters.model_dump(mode="json"),
+            "provider_configs": {
+                provider: config.to_json() for provider, config in sorted(self.provider_configs.items())
+            },
             "updated_at": self.updated_at,
         }
         if self.api_key_secrets:
@@ -151,11 +229,15 @@ class ModelConfigRepository:
         base_url: str,
         model: str,
         thinking: str,
+        parameters: ModelGenerationParameters | None = None,
+        set_as_default: bool = True,
         api_key: str | None = None,
         clear_api_key: bool = False,
     ) -> StoredModelConfig:
         existing = self.load()
         normalized_provider = _normalize_provider_id(provider)
+        if not normalized_provider:
+            raise ModelConfigStoreError("provider 不能为空。")
 
         api_key_secrets = dict(existing.api_key_secrets)
         if clear_api_key or api_key == "":
@@ -164,13 +246,27 @@ class ModelConfigRepository:
             # protect_text 内部会拒绝无安全后端的平台，确保不会写出明文 Key。
             api_key_secrets[normalized_provider] = protect_text(api_key.strip()).to_json()
 
-        config = StoredModelConfig(
-            provider=normalized_provider,
+        updated_at = _utc_now()
+        provider_config = StoredProviderConfig(
             base_url=base_url.strip().rstrip("/"),
             model=model.strip(),
             thinking=thinking.strip().lower(),
+            parameters=parameters or ModelGenerationParameters(),
+            updated_at=updated_at,
+        )
+        provider_configs = dict(existing.provider_configs)
+        provider_configs[normalized_provider] = provider_config
+        active_provider = normalized_provider if set_as_default else existing.provider
+        active_config = provider_config if set_as_default else existing.provider_config_for(existing.provider)
+        config = StoredModelConfig(
+            provider=active_provider,
+            base_url=active_config.base_url if active_config else existing.base_url,
+            model=active_config.model if active_config else existing.model,
+            thinking=active_config.thinking if active_config else existing.thinking,
+            parameters=active_config.parameters if active_config else existing.parameters,
+            provider_configs=provider_configs,
             api_key_secrets=api_key_secrets,
-            updated_at=_utc_now(),
+            updated_at=updated_at,
         )
         self._write_atomic(config)
         return config
@@ -197,6 +293,8 @@ class ModelConfigRepository:
             base_url=existing.base_url,
             model=existing.model,
             thinking=existing.thinking,
+            parameters=existing.parameters,
+            provider_configs=existing.provider_configs,
             api_key_secrets=api_key_secrets,
             updated_at=_utc_now(),
         )
@@ -237,6 +335,8 @@ def save_model_config(
     base_url: str,
     model: str,
     thinking: str,
+    parameters: ModelGenerationParameters | None = None,
+    set_as_default: bool = True,
     api_key: str | None = None,
     clear_api_key: bool = False,
 ) -> StoredModelConfig:
@@ -245,6 +345,8 @@ def save_model_config(
         base_url=base_url,
         model=model,
         thinking=thinking,
+        parameters=parameters,
+        set_as_default=set_as_default,
         api_key=api_key,
         clear_api_key=clear_api_key,
     )
@@ -277,3 +379,15 @@ def _read_api_key_secrets(value: object) -> dict[str, dict[str, str]]:
         if normalized_provider and StoredModelConfig._is_valid_secret(secret):
             secrets[normalized_provider] = secret
     return secrets
+
+
+def _read_provider_configs(value: object) -> dict[str, StoredProviderConfig]:
+    if not isinstance(value, dict):
+        return {}
+    configs: dict[str, StoredProviderConfig] = {}
+    for provider, raw_config in value.items():
+        normalized_provider = _normalize_provider_id(str(provider))
+        provider_config = StoredProviderConfig.from_json(raw_config)
+        if normalized_provider and provider_config is not None:
+            configs[normalized_provider] = provider_config
+    return configs

@@ -1223,6 +1223,48 @@ WorkflowExecutionResult readWorkflowExecutionResult(const QJsonObject &payload)
     return result;
 }
 
+ModelGenerationParametersInfo readModelGenerationParameters(const QJsonObject &payload)
+{
+    ModelGenerationParametersInfo parameters;
+    const QJsonValue temperature = payload.value(QStringLiteral("temperature"));
+    parameters.hasTemperature = temperature.isDouble();
+    parameters.temperature = temperature.toDouble();
+    const QJsonValue topP = payload.value(QStringLiteral("top_p"));
+    parameters.hasTopP = topP.isDouble();
+    parameters.topP = topP.toDouble();
+    const QJsonValue maxTokens = payload.value(QStringLiteral("max_tokens"));
+    parameters.hasMaxTokens = maxTokens.isDouble();
+    parameters.maxTokens = maxTokens.toInt();
+    const QJsonValue presencePenalty = payload.value(QStringLiteral("presence_penalty"));
+    parameters.hasPresencePenalty = presencePenalty.isDouble();
+    parameters.presencePenalty = presencePenalty.toDouble();
+    const QJsonValue frequencyPenalty = payload.value(QStringLiteral("frequency_penalty"));
+    parameters.hasFrequencyPenalty = frequencyPenalty.isDouble();
+    parameters.frequencyPenalty = frequencyPenalty.toDouble();
+    return parameters;
+}
+
+QJsonObject writeModelGenerationParameters(const ModelGenerationParametersInfo &parameters)
+{
+    QJsonObject payload;
+    if (parameters.hasTemperature) {
+        payload.insert(QStringLiteral("temperature"), parameters.temperature);
+    }
+    if (parameters.hasTopP) {
+        payload.insert(QStringLiteral("top_p"), parameters.topP);
+    }
+    if (parameters.hasMaxTokens) {
+        payload.insert(QStringLiteral("max_tokens"), parameters.maxTokens);
+    }
+    if (parameters.hasPresencePenalty) {
+        payload.insert(QStringLiteral("presence_penalty"), parameters.presencePenalty);
+    }
+    if (parameters.hasFrequencyPenalty) {
+        payload.insert(QStringLiteral("frequency_penalty"), parameters.frequencyPenalty);
+    }
+    return payload;
+}
+
 ModelProviderInfo readModelProviderInfo(const QJsonObject &payload)
 {
     // 后端使用 snake_case；Qt 端结构体使用更贴近 C++ 习惯的 camelCase。
@@ -1231,12 +1273,30 @@ ModelProviderInfo readModelProviderInfo(const QJsonObject &payload)
     provider.provider = payload.value(QStringLiteral("provider")).toString();
     provider.label = payload.value(QStringLiteral("label")).toString();
     provider.transport = payload.value(QStringLiteral("transport")).toString();
+    provider.modelKind = payload.value(QStringLiteral("model_kind")).toString(QStringLiteral("chat"));
     provider.defaultBaseUrl = payload.value(QStringLiteral("default_base_url")).toString();
     provider.defaultModel = payload.value(QStringLiteral("default_model")).toString();
+    for (const QJsonValue &value : payload.value(QStringLiteral("recommended_models")).toArray()) {
+        const QString model = value.toString().trimmed();
+        if (!model.isEmpty()) {
+            provider.recommendedModels.append(model);
+        }
+    }
     provider.supportsThinking = payload.value(QStringLiteral("supports_thinking")).toBool();
     provider.supportsJsonOutput = payload.value(QStringLiteral("supports_json_output")).toBool(true);
     provider.supportsToolCalls = payload.value(QStringLiteral("supports_tool_calls")).toBool(true);
+    provider.supportsTemperature = payload.value(QStringLiteral("supports_temperature")).toBool(true);
+    provider.supportsTopP = payload.value(QStringLiteral("supports_top_p")).toBool(true);
+    provider.supportsMaxTokens = payload.value(QStringLiteral("supports_max_tokens")).toBool(true);
+    provider.supportsPresencePenalty = payload.value(QStringLiteral("supports_presence_penalty")).toBool();
+    provider.supportsFrequencyPenalty = payload.value(QStringLiteral("supports_frequency_penalty")).toBool();
+    provider.supportsVisualGeneration = payload.value(QStringLiteral("supports_visual_generation")).toBool();
     provider.apiKeyConfigured = payload.value(QStringLiteral("api_key_configured")).toBool();
+    provider.configuredBaseUrl = payload.value(QStringLiteral("configured_base_url")).toString();
+    provider.configuredModel = payload.value(QStringLiteral("configured_model")).toString();
+    provider.configuredThinking = payload.value(QStringLiteral("configured_thinking")).toString(QStringLiteral("disabled"));
+    provider.configuredParameters = readModelGenerationParameters(
+        payload.value(QStringLiteral("configured_parameters")).toObject());
     provider.notes = payload.value(QStringLiteral("notes")).toString();
     return provider;
 }
@@ -1247,6 +1307,7 @@ ModelProviderStatus readModelProviderStatus(const QJsonObject &payload)
     status.provider = payload.value(QStringLiteral("provider")).toString();
     status.label = payload.value(QStringLiteral("label")).toString();
     status.transport = payload.value(QStringLiteral("transport")).toString();
+    status.modelKind = payload.value(QStringLiteral("model_kind")).toString(QStringLiteral("chat"));
     status.baseUrl = payload.value(QStringLiteral("base_url")).toString();
     status.model = payload.value(QStringLiteral("model")).toString();
     status.thinking = payload.value(QStringLiteral("thinking")).toString(QStringLiteral("disabled"));
@@ -1256,6 +1317,7 @@ ModelProviderStatus readModelProviderStatus(const QJsonObject &payload)
     status.apiKeyConfigured = payload.value(QStringLiteral("api_key_configured")).toBool();
     status.secureStorageAvailable = payload.value(QStringLiteral("secure_storage_available")).toBool();
     status.supportsThinking = payload.value(QStringLiteral("supports_thinking")).toBool();
+    status.parameters = readModelGenerationParameters(payload.value(QStringLiteral("parameters")).toObject());
     status.notes = payload.value(QStringLiteral("notes")).toString();
     status.configurationError = payload.value(QStringLiteral("configuration_error")).toString();
     return status;
@@ -1300,6 +1362,9 @@ ModelRouteInfo readModelRouteInfo(const QJsonObject &payload)
     route.baseUrl = settings.value(QStringLiteral("base_url")).toString();
     route.model = settings.value(QStringLiteral("model")).toString();
     route.thinking = settings.value(QStringLiteral("thinking")).toString(QStringLiteral("disabled"));
+    route.parameters = readModelGenerationParameters(settings.value(QStringLiteral("parameters")).toObject());
+    route.recommendedParameters = readModelGenerationParameters(
+        payload.value(QStringLiteral("recommended_parameters")).toObject());
     route.updatedAt = settings.value(QStringLiteral("updated_at")).toString();
     route.availability = payload.value(QStringLiteral("availability")).toString();
     route.availabilityMessage = payload.value(QStringLiteral("availability_message")).toString();
@@ -1311,6 +1376,7 @@ ModelRouteInfo readModelRouteInfo(const QJsonObject &payload)
     route.resolvedLabel = resolved.value(QStringLiteral("label")).toString();
     route.resolvedModel = resolved.value(QStringLiteral("model")).toString();
     route.resolvedThinking = resolved.value(QStringLiteral("thinking")).toString();
+    route.resolvedParameters = readModelGenerationParameters(resolved.value(QStringLiteral("parameters")).toObject());
     route.resolvedCompatibility = resolved.value(QStringLiteral("compatibility")).toString();
     route.resolvedNote = resolved.value(QStringLiteral("note")).toString();
     return route;
@@ -1672,6 +1738,43 @@ void BackendClient::requestModelProviders()
     });
 }
 
+void BackendClient::requestModelCatalog(
+    const QString &provider,
+    const QString &baseUrl,
+    const QString &apiKey)
+{
+    QJsonObject payload;
+    payload.insert(QStringLiteral("provider"), provider.trimmed());
+    if (!baseUrl.trimmed().isEmpty()) {
+        payload.insert(QStringLiteral("base_url"), baseUrl.trimmed());
+    }
+    if (!apiKey.trimmed().isEmpty()) {
+        payload.insert(QStringLiteral("api_key"), apiKey.trimmed());
+    }
+    QNetworkReply *reply = networkManager_.post(
+        createRequest(buildModelCatalogUrl(), 20000),
+        QJsonDocument(payload).toJson(QJsonDocument::Compact));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError) {
+            emit modelCatalogFailed(replyErrorMessage(reply));
+            return;
+        }
+        const QJsonObject payload = QJsonDocument::fromJson(reply->readAll()).object();
+        ModelCatalogResult result;
+        result.provider = payload.value(QStringLiteral("provider")).toString();
+        result.source = payload.value(QStringLiteral("source")).toString();
+        result.message = payload.value(QStringLiteral("message")).toString();
+        for (const QJsonValue &value : payload.value(QStringLiteral("models")).toArray()) {
+            const QString model = value.toString().trimmed();
+            if (!model.isEmpty()) {
+                result.models.append(model);
+            }
+        }
+        emit modelCatalogReceived(result);
+    });
+}
+
 void BackendClient::requestModelRoutes()
 {
     // 路由列表是低频检查器数据，不发起真实模型调用，也不返回 API Key 或 Base URL 之外的
@@ -1688,7 +1791,8 @@ void BackendClient::saveModelRoute(
     const QString &provider,
     const QString &baseUrl,
     const QString &model,
-    const QString &thinking)
+    const QString &thinking,
+    const ModelGenerationParametersInfo &parameters)
 {
     if (routeId.trimmed().isEmpty()) {
         emit modelRouteSaveFailed(QStringLiteral("未选择任务模型作用域。"));
@@ -1699,6 +1803,7 @@ void BackendClient::saveModelRoute(
     payload.insert(QStringLiteral("mode"), mode == QStringLiteral("configured")
                                                 ? QStringLiteral("configured")
                                                 : QStringLiteral("inherit_global"));
+    payload.insert(QStringLiteral("parameters"), writeModelGenerationParameters(parameters));
     if (payload.value(QStringLiteral("mode")).toString() == QStringLiteral("configured")) {
         payload.insert(QStringLiteral("provider"), provider.trimmed());
         payload.insert(QStringLiteral("base_url"), baseUrl.trimmed());
@@ -1722,7 +1827,9 @@ void BackendClient::saveModelConfig(
     const QString &model,
     const QString &thinking,
     const QString &apiKey,
-    bool clearApiKey)
+    bool clearApiKey,
+    const ModelGenerationParametersInfo &parameters,
+    bool setAsDefault)
 {
     if (provider.trimmed().isEmpty()) {
         emit modelConfigSaveFailed(QStringLiteral("请选择模型供应商。"));
@@ -1735,6 +1842,8 @@ void BackendClient::saveModelConfig(
     payload.insert(QStringLiteral("model"), model.trimmed());
     payload.insert(QStringLiteral("thinking"), thinking.isEmpty() ? QStringLiteral("disabled") : thinking);
     payload.insert(QStringLiteral("clear_api_key"), clearApiKey);
+    payload.insert(QStringLiteral("parameters"), writeModelGenerationParameters(parameters));
+    payload.insert(QStringLiteral("set_as_default"), setAsDefault);
     if (!apiKey.trimmed().isEmpty()) {
         // Key 只放在这一次 PUT 请求体里；后端响应和后续状态刷新都只返回脱敏状态。
         payload.insert(QStringLiteral("api_key"), apiKey.trimmed());
@@ -3956,6 +4065,13 @@ QUrl BackendClient::buildModelProvidersUrl() const
 {
     QUrl url(baseUrl_);
     url.setPath(QStringLiteral("/api/models/providers"));
+    return url;
+}
+
+QUrl BackendClient::buildModelCatalogUrl() const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/models/catalog"));
     return url;
 }
 

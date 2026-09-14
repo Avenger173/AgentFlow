@@ -1,5 +1,12 @@
 # AgentFlow 开发流水
 
+## 2026-09-14
+
+- 模型配置从“一个全局模型 + 固定温度”升级为 Provider 配置与任务路由两层：每个 Provider 独立保存连接、模型、Thinking 和常用生成参数，关键任务作用域可在不更换模型时覆盖参数；最终请求按 Provider 能力发送，避免 Kimi、Claude 等模型因不兼容参数被拒绝。
+- Qt 模型服务页加入可编辑模型下拉框、账号目录刷新、温度、Top P、最大输出和 penalty 控件；任务模型路由也支持同一参数对象。目录读取失败时保留维护候选和手工模型名，不把候选冒充账号实时目录。
+- Seedream 从 PPT 私有环境配置提升为独立图像 Provider，Base URL、模型和 Key 可在模型服务页维护，视觉生成通过 `visual_generation` 路由解析；图像配置不会替换全局文本模型。
+- 新增 `verify_model_configuration.py`，以临时目录和假 Key 验证 v2 到 v3 迁移、参数实际入请求、能力拒绝、环境 Key 状态、跨 Provider Key 隔离和视觉路由；模型路由、全量后端、PPT 工作室回归及 Qt Debug/Release 构建与 CTest 通过。本轮没有调用真实 Provider 或消耗额度。
+
 ## 2026-07-16
 
 - 文档助手交互收敛：直接入口改为异步受理，Qt 拿到 task_id 后连接 WebSocket，按真实的材料范围确认、模型回合、搜索/读取、来源校验和终态更新页面；完成后才读取已通过 Guardrail 的结构化结果。实时缓冲仅用于当前进程观察，最终任务历史仍落 SQLite，并限制保留数量。

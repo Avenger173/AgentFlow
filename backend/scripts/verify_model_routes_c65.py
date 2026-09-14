@@ -70,7 +70,7 @@ def main() -> None:
             initial.raise_for_status()
             routes = {item["route_id"]: item for item in initial.json()["routes"]}
             assert routes["commander_planning"]["availability"] == "ready"
-            assert routes["visual_generation"]["availability"] == "reserved"
+            assert routes["visual_generation"]["availability"] == "unavailable"
 
             saved = client.put(
                 "/api/models/routes/commander_planning",

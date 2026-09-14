@@ -13,61 +13,69 @@ from pathlib import Path
 from threading import Lock
 
 from app.core.config import settings
-from app.schemas.model import ModelRouteScope, ModelRouteSettings
+from app.schemas.model import ModelGenerationParameters, ModelRouteScope, ModelRouteSettings
 
 
 class ModelRouteStoreError(RuntimeError):
     """模型路由配置文件损坏或无法安全写入时抛出。"""
 
 
-MODEL_ROUTE_DEFINITIONS: dict[str, tuple[str, str, tuple[str, ...], bool]] = {
+MODEL_ROUTE_DEFINITIONS: dict[str, tuple[str, str, tuple[str, ...], bool, ModelGenerationParameters]] = {
     "commander_planning": (
         "总指挥规划",
         "生成本轮计划说明与客户可见回复。",
         (),
         True,
+        ModelGenerationParameters(temperature=0.3),
     ),
     "commander_synthesis": (
         "总指挥汇总",
         "汇总已完成专业分支；当前 C6.4 使用确定性汇总，配置会保留到模型汇总启用时。",
         (),
         False,
+        ModelGenerationParameters(temperature=0.3),
     ),
     "document_analysis": (
         "文档分析",
         "受控读取、结构化分析与来源收束。",
         ("json_output", "tool_calls"),
         True,
+        ModelGenerationParameters(temperature=0.2),
     ),
     "document_presentation": (
         "文档与 PPT 制作",
         "项目方案、审查和可编辑 PPT 的结构化创作。",
         ("json_output",),
         True,
+        ModelGenerationParameters(temperature=0.7),
     ),
     "data_insight": (
         "数据洞察",
         "基于确定性统计结果生成解释与结论。",
         ("json_output",),
         True,
+        ModelGenerationParameters(temperature=0.2),
     ),
     "knowledge_answer": (
         "知识库问答",
         "仅依据活动索引中的证据生成带来源回答。",
         ("json_output",),
         True,
+        ModelGenerationParameters(temperature=0.2),
     ),
     "knowledge_deep_analysis": (
         "知识库深度分析",
         "Map-Reduce 的章节小结与递归归并。",
         ("json_output",),
         True,
+        ModelGenerationParameters(temperature=0.3),
     ),
     "visual_generation": (
         "视觉生成",
-        "图片生成 Provider 尚未接入通用模型 Profile，当前仅保留显式路由位置。",
+        "PPT 等交付中的 AI 图片生成；默认使用 Seedream，也可独立选择已接入的图像 Provider。",
         ("visual_generation",),
-        False,
+        True,
+        ModelGenerationParameters(),
     ),
 }
 
@@ -80,6 +88,12 @@ def list_model_route_ids() -> tuple[str, ...]:
 
 def default_model_route_settings(route_id: ModelRouteScope) -> ModelRouteSettings:
     return ModelRouteSettings(route_id=route_id)
+
+
+def model_route_recommended_parameters(route_id: ModelRouteScope) -> ModelGenerationParameters:
+    """返回该任务类型的保守推荐值，供默认解析和 Qt 提示使用。"""
+
+    return MODEL_ROUTE_DEFINITIONS[route_id][4].model_copy(deep=True)
 
 
 class ModelRouteRepository:
@@ -137,7 +151,7 @@ class ModelRouteRepository:
         path.parent.mkdir(parents=True, exist_ok=True)
         temp_path = path.with_name(f"{path.name}.tmp")
         payload = {
-            "version": 1,
+            "version": 2,
             "routes": {route_id: route.model_dump(mode="json") for route_id, route in routes.items()},
         }
         try:

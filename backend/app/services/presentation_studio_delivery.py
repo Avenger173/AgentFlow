@@ -1656,7 +1656,7 @@ def _render_sources(
             f"{image.photographer or 'Pexels 摄影师'} · {image.photo_url or 'Pexels'}" for image in pexels_sources
         )
     if seedream_sources:
-        entries.append("生成式视觉：由 Seedream 5.0 生成，未叠加文字水印，已保留模型审计记录。")
+        entries.append("生成式视觉：由已配置的 Seedream 模型生成，未叠加文字水印，已保留模型审计记录。")
         entries.extend(f"AI 生成图片 · 页面意图：{image.query}" for image in seedream_sources)
     if research_sources:
         entries.append("公开资料参考：以下页面仅补充出处，不自动作为统计数据、结论或引用依据。")

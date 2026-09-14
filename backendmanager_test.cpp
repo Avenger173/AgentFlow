@@ -1,7 +1,7 @@
 #include "backendmanager.h"
 
-#include <QSignalSpy>
 #include <QHostAddress>
+#include <QStringList>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
@@ -76,13 +76,17 @@ void BackendManagerTest::acceptsAgentFlowHealthResponse()
     QVERIFY(server.start());
 
     BackendManager manager(fixtureUrl(server));
-    QSignalSpy readySpy(&manager, &BackendManager::ready);
-    QSignalSpy unavailableSpy(&manager, &BackendManager::unavailable);
+    int readyCount = 0;
+    int unavailableCount = 0;
+    connect(&manager, &BackendManager::ready, &manager, [&readyCount](const QString &) { ++readyCount; });
+    connect(&manager, &BackendManager::unavailable, &manager, [&unavailableCount](const QString &) {
+        ++unavailableCount;
+    });
 
     manager.ensureStarted();
 
-    QTRY_COMPARE_WITH_TIMEOUT(readySpy.count(), 1, 4'000);
-    QCOMPARE(unavailableSpy.count(), 0);
+    QTRY_COMPARE_WITH_TIMEOUT(readyCount, 1, 4'000);
+    QCOMPARE(unavailableCount, 0);
     QVERIFY(manager.isReady());
     QVERIFY(!manager.ownsBackendProcess());
 }
@@ -93,17 +97,20 @@ void BackendManagerTest::rejectsForeignHttpServiceAndAllowsExplicitRetry()
     QVERIFY(server.start());
 
     BackendManager manager(fixtureUrl(server));
-    QSignalSpy unavailableSpy(&manager, &BackendManager::unavailable);
+    QStringList unavailableMessages;
+    connect(&manager, &BackendManager::unavailable, &manager, [&unavailableMessages](const QString &message) {
+        unavailableMessages.append(message);
+    });
 
     manager.ensureStarted();
-    QTRY_COMPARE_WITH_TIMEOUT(unavailableSpy.count(), 1, 4'000);
-    QVERIFY(unavailableSpy.at(0).at(0).toString().contains(QStringLiteral("已有服务")));
+    QTRY_COMPARE_WITH_TIMEOUT(unavailableMessages.size(), 1, 4'000);
+    QVERIFY(unavailableMessages.at(0).contains(QStringLiteral("已有服务")));
     QVERIFY(!manager.ownsBackendProcess());
 
     // 客户显式重试必须开启一条新的健康检查；非 AgentFlow 服务仍不可被误判为可复用后端。
     manager.retry();
-    QTRY_COMPARE_WITH_TIMEOUT(unavailableSpy.count(), 2, 4'000);
-    QVERIFY(unavailableSpy.at(1).at(0).toString().contains(QStringLiteral("已有服务")));
+    QTRY_COMPARE_WITH_TIMEOUT(unavailableMessages.size(), 2, 4'000);
+    QVERIFY(unavailableMessages.at(1).contains(QStringLiteral("已有服务")));
     QVERIFY(!manager.isReady());
     QVERIFY(!manager.ownsBackendProcess());
 }
@@ -119,11 +126,14 @@ void BackendManagerTest::directoryReleaseRequiresBundledBackend()
     qputenv("AGENTFLOW_BACKEND_DIR", releaseRoot.path().toUtf8());
 
     BackendManager manager(QUrl(QStringLiteral("http://127.0.0.1:1")));
-    QSignalSpy unavailableSpy(&manager, &BackendManager::unavailable);
+    QStringList unavailableMessages;
+    connect(&manager, &BackendManager::unavailable, &manager, [&unavailableMessages](const QString &message) {
+        unavailableMessages.append(message);
+    });
     manager.ensureStarted();
 
-    QTRY_COMPARE_WITH_TIMEOUT(unavailableSpy.count(), 1, 4'000);
-    QVERIFY(unavailableSpy.at(0).at(0).toString().contains(QStringLiteral("目录式发行包中未找到")));
+    QTRY_COMPARE_WITH_TIMEOUT(unavailableMessages.size(), 1, 4'000);
+    QVERIFY(unavailableMessages.at(0).contains(QStringLiteral("目录式发行包中未找到")));
     QVERIFY(!manager.ownsBackendProcess());
 
     qputenv("AGENTFLOW_RELEASE_MODE", previousMode);

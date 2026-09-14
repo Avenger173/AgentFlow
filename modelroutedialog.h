@@ -40,12 +40,14 @@ signals:
         const QString &provider,
         const QString &baseUrl,
         const QString &model,
-        const QString &thinking);
+        const QString &thinking,
+        const ModelGenerationParametersInfo &parameters);
 
 private:
     void populateRouteTable(const QString &preferredRouteId = QString());
     void updateEditor();
     void updateProviderEditor(bool preserveEdits = true);
+    void promoteToIndependentProfile();
     void updateActionState();
     void setStatus(const QString &message, const QString &kind = QStringLiteral("neutral"));
     const ModelRouteInfo *currentRoute() const;
@@ -54,6 +56,8 @@ private:
     QString availabilityLabel(const QString &availability) const;
     QString capabilityLabel(const QStringList &capabilities) const;
     QString resolvedModelLabel(const ModelRouteInfo &route) const;
+    ModelGenerationParametersInfo editorParameters() const;
+    void setEditorParameters(const ModelGenerationParametersInfo &parameters);
 
     Ui::ModelRouteDialog *ui;
     QList<ModelProviderInfo> providers;

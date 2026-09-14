@@ -12,13 +12,14 @@ import httpx
 
 from app.core.config import settings
 from app.schemas.agent import AgentDescriptor
-from app.schemas.model import ModelRouteAuditSnapshot, ModelRouteScope, ModelRouteSettings
+from app.schemas.model import ModelGenerationParameters, ModelRouteAuditSnapshot, ModelRouteScope, ModelRouteSettings
 from app.services.model_config_store import ModelConfigStoreError, StoredModelConfig, load_model_config
-from app.services.model_route_store import load_model_route_settings
+from app.services.model_route_store import load_model_route_settings, model_route_recommended_parameters
 from app.services.secret_store import SecretStoreError
 
 
-ModelTransport = Literal["openai_compatible", "anthropic"]
+ModelTransport = Literal["openai_compatible", "anthropic", "ark_image"]
+ModelKind = Literal["chat", "image"]
 ContextCacheMode = Literal[
     "automatic_observable",
     "explicit_request",
@@ -52,6 +53,23 @@ class ModelGatewayConnectionError(ModelGatewayError):
 
 
 @dataclass(frozen=True)
+class VisualModelRuntime:
+    """图像生成调用的最小运行时；不伪装成文本聊天模型。"""
+
+    provider: str
+    label: str
+    transport: ModelTransport
+    base_url: str
+    model: str
+    api_key: str
+    thinking: str = "disabled"
+
+    @property
+    def api_key_configured(self) -> bool:
+        return bool(self.api_key.strip())
+
+
+@dataclass(frozen=True)
 class ModelRouteResolution:
     """一次作用域模型路由的解析结果。
 
@@ -60,7 +78,7 @@ class ModelRouteResolution:
     """
 
     route: ModelRouteSettings
-    runtime: "ModelRuntime"
+    runtime: "ModelRuntime | VisualModelRuntime"
 
     def audit_snapshot(self, *, stage: str = "") -> ModelRouteAuditSnapshot:
         return ModelRouteAuditSnapshot(
@@ -72,6 +90,7 @@ class ModelRouteResolution:
             label=self.runtime.label,
             model=self.runtime.model,
             thinking=self.runtime.thinking if self.runtime.thinking in {"enabled", "disabled"} else "disabled",
+            parameters=_runtime_generation_parameters(self.runtime),
             compatibility="ready",
             note="继承全局配置" if self.route.mode == "inherit_global" else "使用显式模型 Profile",
         )
@@ -192,8 +211,10 @@ class ModelProviderProfile:
     provider: str
     label: str
     transport: ModelTransport
+    model_kind: ModelKind
     default_base_url: str
     default_model: str | None = None
+    recommended_models: tuple[str, ...] = ()
     supports_thinking: bool = False
     # 部分兼容接口接受 thinking，但不接受 OpenAI reasoning_effort；两项必须分开声明。
     sends_reasoning_effort: bool = False
@@ -201,8 +222,12 @@ class ModelProviderProfile:
     completion_tokens_field: Literal["max_tokens", "max_completion_tokens"] = "max_tokens"
     # Kimi K2.6 对 temperature 取值有限制，省略时采用供应商默认采样策略。
     sends_temperature: bool = True
+    sends_top_p: bool = True
+    sends_presence_penalty: bool = False
+    sends_frequency_penalty: bool = False
     supports_json_output: bool = True
     supports_tool_calls: bool = True
+    supports_visual_generation: bool = False
     # 同一供应商在组合任务中可安全占用的并行模型槽位。它不是账户 RPM 声明，而是
     # AgentFlow 已验证的组合调度上限；未知 Provider 保守允许两个槽位，后续以真实
     # 观测收紧或放宽。
@@ -229,12 +254,18 @@ class ModelRuntime:
     api_key: str
     thinking: str
     max_tokens: int
-    temperature: float
+    temperature: float | None
     timeout_seconds: float
+    top_p: float | None = None
+    presence_penalty: float | None = None
+    frequency_penalty: float | None = None
     supports_thinking: bool = False
     sends_reasoning_effort: bool = False
     completion_tokens_field: Literal["max_tokens", "max_completion_tokens"] = "max_tokens"
     sends_temperature: bool = True
+    sends_top_p: bool = True
+    sends_presence_penalty: bool = False
+    sends_frequency_penalty: bool = False
     supports_json_output: bool = True
     supports_tool_calls: bool = True
     composition_parallelism_limit: int = 2
@@ -296,7 +327,7 @@ class ModelRuntime:
         """
 
         bounded_tokens = max(128, min(int(maximum_tokens), self.max_tokens, 1024))
-        constrained_runtime = replace(self, max_tokens=bounded_tokens, temperature=0)
+        constrained_runtime = replace(self, max_tokens=bounded_tokens)
         turn = await constrained_runtime.tool_turn(
             system_prompt=system_prompt,
             messages=[ModelConversationMessage(role="user", content=user_message)],
@@ -454,8 +485,8 @@ class ModelRuntime:
                 }
             ],
             "max_tokens": self.max_tokens,
-            "temperature": self.temperature,
         }
+        _apply_anthropic_runtime_options(payload, self)
 
         data = await self._post_json(url=url, headers=headers, payload=payload)
         return ModelTextTurn(
@@ -543,8 +574,8 @@ class ModelRuntime:
             "system": system_prompt,
             "messages": _anthropic_tool_messages(messages),
             "max_tokens": self.max_tokens,
-            "temperature": self.temperature,
         }
+        _apply_anthropic_runtime_options(payload, self)
         if tools:
             payload["tools"] = [
                 {
@@ -612,10 +643,14 @@ _PROVIDER_PROFILES: dict[str, ModelProviderProfile] = {
         provider="deepseek",
         label="DeepSeek",
         transport="openai_compatible",
+        model_kind="chat",
         default_base_url="https://api.deepseek.com",
         default_model="deepseek-v4-flash",
+        recommended_models=("deepseek-v4-flash", "deepseek-v4-pro"),
         supports_thinking=True,
         sends_reasoning_effort=True,
+        sends_presence_penalty=True,
+        sends_frequency_penalty=True,
         context_cache_mode="automatic_observable",
         context_cache_note="DeepSeek 自动构建前缀缓存；仅以响应 usage 的命中/未命中 token 统计为准。",
         notes="DeepSeek OpenAI-compatible Chat Completions。",
@@ -624,11 +659,14 @@ _PROVIDER_PROFILES: dict[str, ModelProviderProfile] = {
         provider="kimi",
         label="Kimi / Moonshot",
         transport="openai_compatible",
+        model_kind="chat",
         default_base_url="https://api.moonshot.cn/v1",
         default_model="kimi-k2.6",
+        recommended_models=("kimi-k2.6",),
         supports_thinking=True,
         completion_tokens_field="max_completion_tokens",
         sends_temperature=False,
+        sends_top_p=False,
         # K3 与数据洞察同时走同一 Kimi 路由时曾出现请求层拒绝；在没有并发稳定性证据
         # 前，组合 Runtime 对同一 Provider 串行化，普通独立任务不受此策略影响。
         composition_parallelism_limit=1,
@@ -639,7 +677,12 @@ _PROVIDER_PROFILES: dict[str, ModelProviderProfile] = {
         provider="openai",
         label="OpenAI",
         transport="openai_compatible",
+        model_kind="chat",
         default_base_url="https://api.openai.com/v1",
+        default_model="gpt-5.2",
+        recommended_models=("gpt-5.2", "gpt-5-mini", "gpt-4.1"),
+        sends_presence_penalty=True,
+        sends_frequency_penalty=True,
         context_cache_mode="observable_if_returned",
         context_cache_note="Gateway 会读取响应中的 cached_tokens；是否启用及命中由具体模型、请求和响应决定。",
         notes="OpenAI Chat Completions / Responses 兼容入口先走 Chat Completions 最小闭环。",
@@ -648,7 +691,13 @@ _PROVIDER_PROFILES: dict[str, ModelProviderProfile] = {
         provider="anthropic",
         label="Anthropic Claude",
         transport="anthropic",
+        model_kind="chat",
         default_base_url="https://api.anthropic.com",
+        default_model="claude-sonnet-4-6",
+        recommended_models=("claude-sonnet-4-6", "claude-haiku-4-5-20251001"),
+        # Claude 4.7 及更新模型已弃用非默认采样参数；统一省略，避免模型切换后收到 400。
+        sends_temperature=False,
+        sends_top_p=False,
         context_cache_mode="explicit_request",
         context_cache_note="Anthropic 缓存需在请求内容中显式声明 cache_control；当前 Gateway 尚未发送该标记。",
         notes="Claude 走 Anthropic Messages API，和 OpenAI-compatible 分开适配。",
@@ -657,15 +706,39 @@ _PROVIDER_PROFILES: dict[str, ModelProviderProfile] = {
         provider="qwen",
         label="Qwen / DashScope",
         transport="openai_compatible",
+        model_kind="chat",
         default_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        default_model="qwen-plus",
+        recommended_models=("qwen-plus", "qwen-turbo", "qwen-max"),
+        sends_presence_penalty=True,
+        sends_frequency_penalty=True,
         context_cache_note="当前没有接入经核验的 DashScope 上下文缓存计量字段。",
         notes="通义千问可走 DashScope OpenAI-compatible 模式。",
+    ),
+    "seedream": ModelProviderProfile(
+        provider="seedream",
+        label="Seedream / 火山方舟",
+        transport="ark_image",
+        model_kind="image",
+        default_base_url="https://ark.cn-beijing.volces.com/api/v3",
+        default_model="doubao-seedream-5-0-260128",
+        recommended_models=("doubao-seedream-5-0-260128", "doubao-seedream-4-5-251128"),
+        sends_temperature=False,
+        sends_top_p=False,
+        supports_json_output=False,
+        supports_tool_calls=False,
+        supports_visual_generation=True,
+        context_cache_note="图像生成 Provider 不使用文本上下文缓存。",
+        notes="PPT 视觉素材通过火山方舟 Images Generations 接口生成。",
     ),
     "openai_compatible": ModelProviderProfile(
         provider="openai_compatible",
         label="自定义 OpenAI-compatible",
         transport="openai_compatible",
+        model_kind="chat",
         default_base_url="",
+        sends_presence_penalty=True,
+        sends_frequency_penalty=True,
         context_cache_note="自定义兼容网关的缓存协议未知；仅在响应实际提供标准计量字段时记录。",
         notes="用于 Moonshot、智谱、Gemini 兼容网关或私有模型代理等自定义入口。",
     ),
@@ -688,6 +761,7 @@ _PROVIDER_ENV_PREFIXES = {
     "anthropic": ("ANTHROPIC", "CLAUDE"),
     "qwen": ("QWEN", "DASHSCOPE"),
     "kimi": ("KIMI", "MOONSHOT"),
+    "seedream": ("AGENTFLOW_SEEDREAM", "SEEDREAM"),
     "openai_compatible": ("OPENAI_COMPATIBLE", "CUSTOM_LLM"),
 }
 
@@ -752,6 +826,57 @@ def any_model_api_key_configured() -> bool:
     return stored_config.any_api_key_configured or bool(settings.any_llm_api_key)
 
 
+def model_provider_api_key_source(
+    provider: str,
+    *,
+    stored_config: StoredModelConfig | None = None,
+) -> Literal["local_config", "environment", "none"]:
+    """返回某个 Provider 的脱敏 Key 来源，不为状态展示解密本地密钥。"""
+
+    normalized_provider = normalize_model_provider(provider)
+    config = stored_config or _load_stored_model_config()
+    if config.api_key_configured_for(normalized_provider):
+        return "local_config"
+
+    profile = _profile_for(normalized_provider)
+    if profile.model_kind == "image":
+        return "environment" if _visual_environment_api_key(normalized_provider) else "none"
+
+    value, source = _resolve_runtime_field_with_source(
+        normalized_provider,
+        "API_KEY",
+        settings_value=settings.llm_api_key,
+    )
+    return "environment" if value and source == "environment" else "none"
+
+
+def model_provider_connection_preview(
+    provider: str,
+    *,
+    stored_config: StoredModelConfig | None = None,
+) -> tuple[str, str]:
+    """解析可展示的 Base URL 与模型名，不解析或返回 API Key。"""
+
+    normalized_provider = normalize_model_provider(provider)
+    config = stored_config or _load_stored_model_config()
+    profile = _profile_for(normalized_provider)
+    base_url = _resolve_runtime_field(
+        normalized_provider,
+        "BASE_URL",
+        config_value=_stored_field(config, normalized_provider, "base_url"),
+        settings_value=settings.llm_base_url,
+        default=profile.default_base_url,
+    ).rstrip("/")
+    model = _resolve_runtime_field(
+        normalized_provider,
+        "MODEL",
+        config_value=_stored_field(config, normalized_provider, "model"),
+        settings_value=settings.llm_model,
+        default=profile.default_model or "",
+    )
+    return base_url, model
+
+
 def resolve_model_runtime(
     agent: AgentDescriptor | None = None,
     *,
@@ -771,6 +896,8 @@ def resolve_model_runtime(
     stored_config = _load_stored_model_config()
     provider = _effective_provider(agent, stored_config=stored_config)
     profile = _profile_for(provider)
+    if profile.model_kind != "chat":
+        raise ModelGatewayError(f"{profile.label} 是图像 Provider，不能设为全局聊天模型。")
     base_url = _resolve_runtime_field(
         provider,
         "BASE_URL",
@@ -792,6 +919,7 @@ def resolve_model_runtime(
         settings_value=settings.llm_thinking,
         default="disabled",
     ).lower()
+    parameters = _resolved_provider_parameters(stored_config, provider)
 
     runtime = ModelRuntime(
         provider=profile.provider,
@@ -801,13 +929,19 @@ def resolve_model_runtime(
         model=model,
         api_key=api_key,
         thinking=thinking,
-        max_tokens=settings.llm_max_tokens,
-        temperature=settings.llm_temperature,
+        max_tokens=parameters.max_tokens or settings.llm_max_tokens,
+        temperature=parameters.temperature,
+        top_p=parameters.top_p,
+        presence_penalty=parameters.presence_penalty,
+        frequency_penalty=parameters.frequency_penalty,
         timeout_seconds=settings.llm_timeout_seconds,
         supports_thinking=profile.supports_thinking,
         sends_reasoning_effort=profile.sends_reasoning_effort,
         completion_tokens_field=profile.completion_tokens_field,
         sends_temperature=profile.sends_temperature,
+        sends_top_p=profile.sends_top_p,
+        sends_presence_penalty=profile.sends_presence_penalty,
+        sends_frequency_penalty=profile.sends_frequency_penalty,
         supports_json_output=profile.supports_json_output,
         supports_tool_calls=profile.supports_tool_calls,
         composition_parallelism_limit=profile.composition_parallelism_limit,
@@ -833,8 +967,10 @@ def resolve_model_runtime_for_route(
     """
 
     route = load_model_route_settings(route_id)
+    if route_id == "visual_generation":
+        raise ModelGatewayError(f"模型路由 {route_id} 是图像生成作用域，不能解析为文本 Runtime。")
     if route.mode == "inherit_global":
-        runtime = resolve_model_runtime(validate=validate)
+        runtime = _apply_route_generation_parameters(resolve_model_runtime(validate=validate), route)
         resolution = ModelRouteResolution(route=route, runtime=runtime)
         return ModelRouteResolution(
             route=route,
@@ -845,6 +981,8 @@ def resolve_model_runtime_for_route(
         raise ModelGatewayError(f"模型路由 {route_id} 的显式 Profile 不完整，请重新保存配置。")
     provider = normalize_model_provider(route.provider)
     profile = _profile_for(provider)
+    if profile.model_kind != "chat":
+        raise ModelGatewayError(f"{profile.label} 不是文本模型，无法用于 {route_id}。")
     if route.thinking == "enabled" and not profile.supports_thinking:
         raise ModelGatewayError(f"{profile.label} 当前 Profile 不支持思考模式，无法用于 {route_id}。")
 
@@ -856,12 +994,17 @@ def resolve_model_runtime_for_route(
         model=route.model,
         thinking=route.thinking,
     )
+    provider_parameters = _resolved_provider_parameters(_load_stored_model_config(), provider)
     runtime = replace(
         runtime,
-        max_tokens=settings.llm_max_tokens,
-        temperature=settings.llm_temperature,
+        max_tokens=provider_parameters.max_tokens or settings.llm_max_tokens,
+        temperature=provider_parameters.temperature,
+        top_p=provider_parameters.top_p,
+        presence_penalty=provider_parameters.presence_penalty,
+        frequency_penalty=provider_parameters.frequency_penalty,
         timeout_seconds=settings.llm_timeout_seconds,
     )
+    runtime = _apply_route_generation_parameters(runtime, route)
     if validate:
         _validate_runtime(runtime)
     resolution = ModelRouteResolution(route=route, runtime=runtime)
@@ -869,6 +1012,136 @@ def resolve_model_runtime_for_route(
         route=route,
         runtime=replace(runtime, route_audit_snapshot=resolution.audit_snapshot()),
     )
+
+
+def resolve_visual_model_runtime_for_route(
+    route_id: ModelRouteScope = "visual_generation",
+    *,
+    validate: bool = True,
+) -> ModelRouteResolution:
+    """解析图像生成路由，并从同一份 Provider 安全存储取得 Key。"""
+
+    if route_id != "visual_generation":
+        raise ModelGatewayError(f"模型路由 {route_id} 不是图像生成作用域。")
+    route = load_model_route_settings(route_id)
+    stored_config = _load_stored_model_config()
+    provider = normalize_model_provider(route.provider) if route.mode == "configured" else "seedream"
+    profile = _profile_for(provider)
+    provider_base_url, provider_model = model_provider_connection_preview(
+        provider,
+        stored_config=stored_config,
+    )
+    base_url = (
+        route.base_url
+        if route.mode == "configured"
+        else provider_base_url
+    ).strip().rstrip("/")
+    model = (
+        route.model
+        if route.mode == "configured"
+        else provider_model
+    ).strip()
+    runtime = resolve_visual_model_runtime(
+        provider=provider,
+        base_url=base_url,
+        model=model,
+        validate=validate,
+    )
+    return ModelRouteResolution(route=route, runtime=runtime)
+
+
+def resolve_visual_model_runtime(
+    *,
+    provider: str = "seedream",
+    base_url: str | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
+    validate: bool = True,
+) -> VisualModelRuntime:
+    """解析一个明确的图像 Provider 配置，用于保存预检与实际生成。"""
+
+    normalized_provider = normalize_model_provider(provider)
+    profile = _profile_for(normalized_provider)
+    if profile.model_kind != "image" or not profile.supports_visual_generation:
+        raise ModelGatewayError(f"{profile.label} 不支持图像生成。")
+    stored_config = _load_stored_model_config()
+    provider_base_url, provider_model = model_provider_connection_preview(
+        normalized_provider,
+        stored_config=stored_config,
+    )
+    runtime = VisualModelRuntime(
+        provider=normalized_provider,
+        label=profile.label,
+        transport=profile.transport,
+        base_url=((base_url or "").strip() or provider_base_url).rstrip("/"),
+        model=(model or "").strip() or provider_model,
+        api_key=(api_key or "").strip()
+        or _stored_api_key(stored_config, normalized_provider)
+        or _visual_environment_api_key(normalized_provider),
+    )
+    if validate:
+        if not runtime.base_url:
+            raise ModelGatewayError(f"未配置 {runtime.label} Base URL。")
+        if not runtime.model:
+            raise ModelGatewayError(f"未配置 {runtime.label} 模型名。")
+        if not runtime.api_key_configured:
+            raise ModelGatewayError(f"未配置 {runtime.label} API Key。")
+    return runtime
+
+
+async def discover_model_catalog(
+    *,
+    provider: str,
+    base_url: str | None = None,
+    api_key: str | None = None,
+) -> tuple[list[str], Literal["remote", "recommended"], str]:
+    """优先读取 Provider 的模型目录，失败时返回经过维护的候选列表。"""
+
+    normalized_provider = normalize_model_provider(provider)
+    profile = _profile_for(normalized_provider)
+    stored_config = _load_stored_model_config()
+    provider_base_url, _provider_model = model_provider_connection_preview(
+        normalized_provider,
+        stored_config=stored_config,
+    )
+    resolved_base_url = (base_url or "").strip().rstrip("/")
+    if not resolved_base_url:
+        resolved_base_url = provider_base_url
+    resolved_key = (api_key or "").strip() or _stored_api_key(stored_config, normalized_provider)
+    if not resolved_key and profile.model_kind == "image":
+        resolved_key = _visual_environment_api_key(normalized_provider)
+    if not resolved_key and profile.model_kind == "chat":
+        resolved_key = _resolve_runtime_field(normalized_provider, "API_KEY")
+
+    recommended = list(profile.recommended_models)
+    if not resolved_base_url or not resolved_key:
+        return recommended, "recommended", "未配置可用的 Base URL 或 Key，已显示内置候选；仍可直接输入模型名。"
+
+    url = _provider_models_url(profile, resolved_base_url)
+    headers = {"Accept": "application/json"}
+    if profile.transport == "anthropic":
+        headers.update({"x-api-key": resolved_key, "anthropic-version": "2023-06-01"})
+    else:
+        headers["Authorization"] = f"Bearer {resolved_key}"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=5.0)) as client:
+            response = await client.get(url, headers=headers)
+        if response.status_code >= 400:
+            return recommended, "recommended", f"供应商模型目录返回 HTTP {response.status_code}，已显示内置候选。"
+        payload = response.json()
+        data = payload.get("data") if isinstance(payload, dict) else None
+        models = sorted(
+            {
+                str(item.get("id") or "").strip()
+                for item in data or []
+                if isinstance(item, dict) and 0 < len(str(item.get("id") or "").strip()) <= 200
+            }
+        )[:300]
+        if models:
+            return models, "remote", f"已从 {profile.label} 读取 {len(models)} 个当前账号可见模型。"
+    except (httpx.HTTPError, ValueError):
+        pass
+    return recommended, "recommended", "供应商模型目录暂不可用，已显示内置候选；仍可直接输入模型名。"
 
 
 def model_route_audit_snapshot_for_stage(
@@ -904,6 +1177,8 @@ def resolve_model_runtime_for_test(
 
     normalized_provider = normalize_model_provider(provider)
     profile = _profile_for(normalized_provider)
+    if profile.model_kind != "chat":
+        raise ModelGatewayError(f"{profile.label} 不是文本聊天 Provider，不能执行聊天连接测试。")
     stored_config = _load_stored_model_config()
 
     base_url_value = (base_url or "").strip().rstrip("/")
@@ -957,11 +1232,17 @@ def resolve_model_runtime_for_test(
         # 连接测试只需要一个很短的探测回复，限制 token/超时能减少等待和额度消耗。
         max_tokens=max(1, min(settings.llm_max_tokens, 64)),
         temperature=0.0,
+        top_p=None,
+        presence_penalty=None,
+        frequency_penalty=None,
         timeout_seconds=max(5.0, min(float(settings.llm_timeout_seconds), 30.0)),
         supports_thinking=profile.supports_thinking,
         sends_reasoning_effort=profile.sends_reasoning_effort,
         completion_tokens_field=profile.completion_tokens_field,
         sends_temperature=profile.sends_temperature,
+        sends_top_p=profile.sends_top_p,
+        sends_presence_penalty=profile.sends_presence_penalty,
+        sends_frequency_penalty=profile.sends_frequency_penalty,
         supports_json_output=profile.supports_json_output,
         supports_tool_calls=profile.supports_tool_calls,
         composition_parallelism_limit=profile.composition_parallelism_limit,
@@ -991,12 +1272,94 @@ def resolve_model_runtime_for_provider(
     # 测试连接构造器会有意把响应压到 64 tokens、30 秒；若直接复用，数据抽取 JSON 会被
     # 截断并被误判为“模型不会返回结构”。内部路由需要沿用同一套 provider/Key 解析，
     # 但必须恢复正式任务预算。请求级 thinking 仍由调用方显式限制，不写回用户配置。
+    parameters = _resolved_provider_parameters(_load_stored_model_config(), runtime.provider)
     return replace(
         runtime,
-        max_tokens=settings.llm_max_tokens,
-        temperature=settings.llm_temperature,
+        max_tokens=parameters.max_tokens or settings.llm_max_tokens,
+        temperature=parameters.temperature,
+        top_p=parameters.top_p,
+        presence_penalty=parameters.presence_penalty,
+        frequency_penalty=parameters.frequency_penalty,
         timeout_seconds=settings.llm_timeout_seconds,
     )
+
+
+def _resolved_provider_parameters(stored_config: StoredModelConfig, provider: str) -> ModelGenerationParameters:
+    configured = stored_config.provider_config_for(provider)
+    stored = configured.parameters if configured else ModelGenerationParameters()
+    return ModelGenerationParameters(
+        temperature=stored.temperature if stored.temperature is not None else settings.llm_temperature,
+        top_p=stored.top_p if stored.top_p is not None else settings.llm_top_p,
+        max_tokens=stored.max_tokens if stored.max_tokens is not None else settings.llm_max_tokens,
+        presence_penalty=(
+            stored.presence_penalty
+            if stored.presence_penalty is not None
+            else settings.llm_presence_penalty
+        ),
+        frequency_penalty=(
+            stored.frequency_penalty
+            if stored.frequency_penalty is not None
+            else settings.llm_frequency_penalty
+        ),
+    )
+
+
+def _apply_route_generation_parameters(runtime: ModelRuntime, route: ModelRouteSettings) -> ModelRuntime:
+    recommended = model_route_recommended_parameters(route.route_id)
+    configured = route.parameters
+
+    def choose(override: object, recommended_value: object, inherited: object) -> object:
+        if override is not None:
+            return override
+        if recommended_value is not None:
+            return recommended_value
+        return inherited
+
+    return replace(
+        runtime,
+        temperature=choose(configured.temperature, recommended.temperature, runtime.temperature),
+        top_p=choose(configured.top_p, recommended.top_p, runtime.top_p),
+        max_tokens=int(choose(configured.max_tokens, recommended.max_tokens, runtime.max_tokens)),
+        presence_penalty=choose(
+            configured.presence_penalty,
+            recommended.presence_penalty,
+            runtime.presence_penalty,
+        ),
+        frequency_penalty=choose(
+            configured.frequency_penalty,
+            recommended.frequency_penalty,
+            runtime.frequency_penalty,
+        ),
+    )
+
+
+def _runtime_generation_parameters(runtime: ModelRuntime | VisualModelRuntime) -> ModelGenerationParameters:
+    if not isinstance(runtime, ModelRuntime):
+        return ModelGenerationParameters()
+    return ModelGenerationParameters(
+        temperature=runtime.temperature if runtime.sends_temperature else None,
+        top_p=runtime.top_p if runtime.sends_top_p else None,
+        max_tokens=runtime.max_tokens,
+        presence_penalty=runtime.presence_penalty if runtime.sends_presence_penalty else None,
+        frequency_penalty=runtime.frequency_penalty if runtime.sends_frequency_penalty else None,
+    )
+
+
+def _visual_environment_api_key(provider: str) -> str:
+    if provider == "seedream":
+        return settings.seedream_api_key.strip()
+    for prefix in _PROVIDER_ENV_PREFIXES.get(provider, ()):
+        value = _usable_env_value(f"{prefix}_API_KEY")
+        if value:
+            return value
+    return ""
+
+
+def _provider_models_url(profile: ModelProviderProfile, base_url: str) -> str:
+    base = base_url.rstrip("/")
+    if profile.transport == "anthropic" and not base.endswith("/v1"):
+        return f"{base}/v1/models"
+    return f"{base}/models"
 
 
 def _effective_provider(
@@ -1074,14 +1437,22 @@ def _resolve_runtime_field_with_source(
         if value:
             return value, "environment"
 
-    value = _usable_env_value(f"AGENTFLOW_LLM_{field}")
-    if value:
-        return value, "environment"
+    # 通用环境变量只属于 AGENTFLOW_LLM_PROVIDER 指定的 Provider。用户在设置页查看或
+    # 测试另一家厂商时，绝不能把当前全局 Key 发送给新的 Base URL。
+    if normalize_model_provider(settings.llm_provider) == provider:
+        value = _usable_env_value(f"AGENTFLOW_LLM_{field}")
+        if value:
+            return value, "environment"
 
     # settings_value 目前只用于兼容早期 `DEEPSEEK_*` 变量。切到 OpenAI / Claude / Qwen
     # 时不能把残留的 DeepSeek Key 或模型名误当成新供应商配置；通用配置已经在上面的
     # `AGENTFLOW_LLM_*` 分支里处理过了。
-    if provider == "deepseek" and settings_value and settings_value.strip().lower() not in _PLACEHOLDER_VALUES:
+    if (
+        provider == "deepseek"
+        and normalize_model_provider(settings.llm_provider) == provider
+        and settings_value
+        and settings_value.strip().lower() not in _PLACEHOLDER_VALUES
+    ):
         return settings_value, "environment"
     return default, "default"
 
@@ -1094,10 +1465,10 @@ def _load_stored_model_config() -> StoredModelConfig:
 
 
 def _stored_field(stored_config: StoredModelConfig, provider: str, field: str) -> str:
-    if normalize_model_provider(stored_config.provider) != provider:
+    provider_config = stored_config.provider_config_for(provider)
+    if provider_config is None:
         return ""
-
-    value = getattr(stored_config, field, "")
+    value = getattr(provider_config, field, "")
     return value if isinstance(value, str) else ""
 
 
@@ -1164,10 +1535,26 @@ def _apply_openai_runtime_options(
     if runtime.supports_thinking and effective_thinking in {"enabled", "disabled"}:
         # 仅明确声明支持的 profile 才会收到私有 thinking 字段。
         payload["thinking"] = {"type": effective_thinking}
-    if runtime.sends_reasoning_effort and effective_thinking == "enabled":
+    reasoning_enabled = runtime.sends_reasoning_effort and effective_thinking == "enabled"
+    if reasoning_enabled:
         payload["reasoning_effort"] = "high"
-    elif runtime.sends_temperature:
+    elif runtime.sends_temperature and runtime.temperature is not None:
         payload["temperature"] = runtime.temperature
+    if not reasoning_enabled and runtime.sends_top_p and runtime.top_p is not None:
+        payload["top_p"] = runtime.top_p
+    if not reasoning_enabled and runtime.sends_presence_penalty and runtime.presence_penalty is not None:
+        payload["presence_penalty"] = runtime.presence_penalty
+    if not reasoning_enabled and runtime.sends_frequency_penalty and runtime.frequency_penalty is not None:
+        payload["frequency_penalty"] = runtime.frequency_penalty
+
+
+def _apply_anthropic_runtime_options(payload: dict[str, object], runtime: ModelRuntime) -> None:
+    """只发送该 Claude Profile 明确允许的采样参数。"""
+
+    if runtime.sends_temperature and runtime.temperature is not None:
+        payload["temperature"] = runtime.temperature
+    if runtime.sends_top_p and runtime.top_p is not None:
+        payload["top_p"] = runtime.top_p
 
 
 def _openai_tool_messages(
