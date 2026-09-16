@@ -1,8 +1,12 @@
 # AgentFlow 内置 Agent 方案确认
 
-最后更新：2026-07-31
+最后更新：2026-09-16
 
 本文档用于在正式实现每个 Agent 前先确认产品边界。Agent 可以协作，工具可以共用，但每个 Agent 的职责、权限、定价属性和验收标准必须独立讨论。
+
+## 多媒体助手规划入口
+
+2026-09-16 用户同意整合 GitHub 调研并编写专题计划。暂定一个 `media_agent`，按图片编辑、视频剪辑、翻译配音加载对应工具，复用 Native AgentRunner；分割、ASR、TTS、转码和音频分离归为工具/Provider，实时交互单列平台扩展。详细范围、首期交付、模型与权限、失败处理和分阶段顺序以 [开发计划](MULTIMEDIA_AGENT_DEVELOPMENT_PLAN.md) 为准，验收以 [评测与验证方案](MULTIMEDIA_AGENT_EVALUATION.md) 为准。当前是文档基线，未注册可执行 Agent，也未通过任何媒体能力门槛。
 
 ## 确认流程
 

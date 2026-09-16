@@ -327,6 +327,8 @@ ctest --test-dir build\dev -C Debug --output-on-failure
 - [Agent 与 Workflow 规格](docs/AGENT_SPECIFICATIONS.md)
 - [Agent 工程指南](docs/AGENT_ENGINEERING_GUIDE.md)
 - [记忆系统开发计划](docs/AGENT_MEMORY_DEVELOPMENT_PLAN.md)
+- [多媒体助手开发计划（规划中）](docs/MULTIMEDIA_AGENT_DEVELOPMENT_PLAN.md)
+- [多媒体助手评测与验证方案](docs/MULTIMEDIA_AGENT_EVALUATION.md)
 - [数据工作台产品规格](docs/DATA_WORKSPACE_PRODUCT_SPEC.md)
 - [知识库产品规格](docs/KNOWLEDGE_BASE_PRODUCT_SPEC.md)
 - [PPT 数据与研究设计](docs/PPT_RESEARCH_DATA_DESIGN.md)
