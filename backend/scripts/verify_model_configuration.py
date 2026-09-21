@@ -122,6 +122,46 @@ def _verify_http_and_runtime_configuration() -> None:
         assert seedream_save.json()["model_kind"] == "image"
         assert seedream_save.json()["api_key_source"] == "environment"
 
+        # Qwen 文本与 Qwen Image 使用同一把账号 Key，但 API Host/模型配置必须隔离：
+        # 前者不能因为选了图片模型而变成图片编辑调用，后者也不应要求用户重复保存 Key。
+        qwen_save = client.put(
+            "/api/models/config",
+            json={
+                "provider": "qwen",
+                "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "model": "qwen-plus",
+                "set_as_default": False,
+                "api_key": "fixture-qwen-key",
+            },
+        )
+        qwen_save.raise_for_status()
+
+        qwen_image_as_chat = client.put(
+            "/api/models/config",
+            json={
+                "provider": "qwen",
+                "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "model": "qwen-image-edit-plus",
+                "set_as_default": False,
+            },
+        )
+        assert qwen_image_as_chat.status_code == 400, qwen_image_as_chat.text
+        assert "图片模型" in qwen_image_as_chat.json()["detail"]
+
+        # 连接测试也必须在发出请求前拒绝错误协议，避免同一把 Key 被送到聊天端点。
+        qwen_image_chat_test = client.post(
+            "/api/models/test",
+            json={
+                "provider": "qwen",
+                "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "model": "qwen-image-edit-plus",
+                "api_key": "fixture-qwen-key",
+            },
+        )
+        qwen_image_chat_test.raise_for_status()
+        assert qwen_image_chat_test.json()["ok"] is False
+        assert "图片模型" in qwen_image_chat_test.json()["message"]
+
         current = client.get("/api/models/config")
         current.raise_for_status()
         assert current.json()["provider"] == "deepseek"
@@ -142,6 +182,7 @@ def _verify_http_and_runtime_configuration() -> None:
         assert routes["document_presentation"]["resolved"]["parameters"]["temperature"] == 0.7
         assert routes["visual_generation"]["availability"] == "ready"
         assert routes["visual_generation"]["resolved"]["model"] == "seedream-fixture"
+        assert routes["media_image_edit"]["availability"] == "reserved"
 
         route_save = client.put(
             "/api/models/routes/document_presentation",
@@ -185,11 +226,26 @@ def _verify_http_and_runtime_configuration() -> None:
         catalog.raise_for_status()
         assert catalog.json()["source"] == "recommended"
 
+        provider_list = client.get("/api/models/providers")
+        provider_list.raise_for_status()
+        qwen_image = {
+            item["provider"]: item for item in provider_list.json()["providers"]
+        }["qwen_image"]
+        assert qwen_image["model_kind"] == "image"
+        assert qwen_image["supports_image_edit"] is True
+        assert qwen_image["api_key_configured"] is True
+        assert qwen_image["configured_model"] is None
+
     kimi_runtime, _ = resolve_model_runtime_for_test(provider="kimi")
     kimi_payload: dict[str, object] = {}
     _apply_openai_runtime_options(kimi_payload, kimi_runtime)
     assert "temperature" not in kimi_payload
     assert "top_p" not in kimi_payload
+
+    qwen_image_runtime = resolve_visual_model_runtime_for_route("media_image_edit").runtime
+    assert qwen_image_runtime.provider == "qwen_image"
+    assert qwen_image_runtime.model == "qwen-image-3.0-pro"
+    assert qwen_image_runtime.api_key_configured
 
 
 def main() -> None:

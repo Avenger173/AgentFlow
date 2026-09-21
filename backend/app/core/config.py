@@ -210,6 +210,25 @@ class Settings:
         ).resolve()
 
     @property
+    def media_workspace_dir(self) -> Path:
+        """返回多媒体项目的受控副本目录。"""
+
+        return Path(
+            os.getenv("AGENTFLOW_MEDIA_WORKSPACE_DIR", self.data_dir / "media_workspace")
+        ).resolve()
+
+    @property
+    def media_export_output_dir(self) -> Path:
+        """返回多媒体图片交付物的固定输出目录。"""
+
+        return Path(
+            os.getenv(
+                "AGENTFLOW_MEDIA_EXPORT_OUTPUT_DIR",
+                self.output_dir / "media_exports",
+            )
+        ).resolve()
+
+    @property
     def data_analysis_output_dir(self) -> Path:
         """返回数据工作台正式 Excel 交付物的固定输出目录。
 

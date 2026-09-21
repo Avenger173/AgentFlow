@@ -1,0 +1,5 @@
+# 多媒体本地 worker 的可选依赖。它不属于默认 FastAPI 后端，也不会随桌面端启动自动下载权重。
+# MM-0 当前仅验证 BiRefNet Tiny ONNX 的 CPU 前景蒙版 POC；正式加入发行包前仍需通过 G0。
+onnxruntime==1.29.0
+numpy>=2.0.0,<3.0.0
+Pillow>=10.0.0,<13.0.0

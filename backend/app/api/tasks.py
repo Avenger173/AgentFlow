@@ -75,6 +75,8 @@ from app.services.data_transformation_delivery import (
     cancel_data_transformation_task,
     get_data_transformation_task_result,
 )
+from app.services.media_export_delivery import cancel_media_export_task
+from app.services.media_edit_delivery import cancel_media_edit_task
 from app.services.commander_memory_proposals import ensure_completed_task_memory_proposals
 from app.services.long_term_memory import (
     LongTermMemorySafetyError,
@@ -319,6 +321,13 @@ def _resolve_runtime_artifact_path(artifact: WorkflowArtifact) -> Path | None:
         if not artifact.uri.startswith("agentflow-output://data_transformations/"):
             return None
         outputs_root = settings.data_transformation_output_dir
+    elif output_scope == "media_exports":
+        # 图片工作台的正式导出会登记到同一任务历史，但实际文件仍必须位于独立的
+        # media_exports 根目录。PNG 预览字节继续由媒体工作台专用接口读取；这里仅为
+        # 任务历史的安全打开动作校验 Artifact、URI 和固定输出目录的一致性。
+        if not artifact.uri.startswith("agentflow-output://media_exports/"):
+            return None
+        outputs_root = settings.media_export_output_dir
     else:
         return None
     try:
@@ -969,7 +978,11 @@ async def cancel_task(task_id: str) -> TaskControlResponse:
     # 数据交付任务在统一历史中也使用 ``mode=runtime``，但它们有自己的协作式取消协议：
     # 导出线程不能被强杀，专用处理器需要先落 cancelled、清理未登记文件，再让后台线程安全返回。
     # 因此这里必须先尝试专用任务，不能让通用 Runtime 分支提前返回 ``running``。
-    response = await cancel_data_transformation_task(task_id)
+    response = await cancel_media_edit_task(task_id)
+    if response is None:
+        response = await cancel_media_export_task(task_id)
+    if response is None:
+        response = await cancel_data_transformation_task(task_id)
     if response is None:
         response = await cancel_data_chart_export_task(task_id)
     if response is None:

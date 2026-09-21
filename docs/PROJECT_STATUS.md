@@ -1,6 +1,6 @@
 # AgentFlow 项目状态
 
-最后更新：2026-09-16
+最后更新：2026-09-21
 
 ## 当前仓库状态
 
@@ -24,14 +24,14 @@
 - `docs/AGENT_MEMORY_DEVELOPMENT_PLAN.md`：记忆系统 MEM-0 至 MEM-7 的目标架构、数据契约、量化验收和回退门禁。
 - `docs/AGENT_SPECIFICATIONS.md`：记录每个内置 Agent 的方案确认表；正式实现 Agent 前必须先讨论并确认。
 - [多媒体助手开发计划](MULTIMEDIA_AGENT_DEVELOPMENT_PLAN.md)：整合 AI 修图、对话式剪辑、视频翻译配音及后续扩展，按 MM-0 至 MM-7 推进。
-- [多媒体助手评测与验证方案](MULTIMEDIA_AGENT_EVALUATION.md)：固定素材、真实口语任务、质量/恢复/性能指标与 G0-G7 准入证据；当前均未运行。
+- [多媒体助手评测与验证方案](MULTIMEDIA_AGENT_EVALUATION.md)：固定素材、真实口语任务、质量/恢复/性能指标与 G0-G7 准入证据；当前 G0（AI 模型准入）和 L1（本地图像工作区）均在进行中，尚未通过。
 - `docs/KNOWLEDGE_BASE_PRODUCT_SPEC.md`：记录已批准的本地知识库产品边界、Retrieval 架构、K0-K5 门槛和验收；知识库开发前必须阅读。
 - `docs/KNOWLEDGE_BASE_K0_ADR.md`：记录 K0 的固定夹具、Windows 技术试验、依赖取舍和未决风险；进入 K1 前必须阅读。
 - `docs/飞书文档.txt`：用户提供的原始参考资料，不作为每轮必读文档，也不在未确认前删除。
 
 ## 当前阶段
 
-> **2026-09-16 多媒体助手规划基线：**按用户要求建立开发计划与独立评测文档，主线为 AI 修图 -> 对话式视频剪辑 -> 视频翻译配音，声音分离、视频目标处理等七项保留为条件扩展。复用现有 Native Runtime、模型路由与产物管理，新增媒体工程/版本、画布、时间轴和后台工具。MM-0 至 MM-7 均未开始，G0-G7 均未运行；本轮只完成文档，不代表媒体 Agent 已注册或可执行。下一步为 MM-0 的依赖/许可、真实素材、模型与资源预算基线。
+> **2026-09-21 多媒体助手 MM-0/MM-1 阶段记录：**主线仍为 AI 修图 -> 对话式视频剪辑 -> 视频翻译配音，声音分离、视频目标处理等保留为条件扩展。MM-0 已完成 Qwen 图片编辑、Lite Matting、SAM 2.1 Tiny 的受控探针和失败语义记录；G0 仍缺独立质量复核及可关联的 Provider 用量/费用证据，未通过，不开放 AI 修图。MM-1 已实现本地图片项目、不可覆盖修订、确定性编辑、蒙版/图层、撤销重做、异步导出及恢复对账；后端回归和一条隔离 Qt 主路径已通过，但 L1 仍缺全量夹具、图层/蒙版 Qt 操作、跨重启及真实 Windows DPI 验收，未通过。视频、翻译配音和对外发布均未开始；当前不得把多媒体能力描述为正式客户功能。详情以 `docs/MULTIMEDIA_AGENT_DEVELOPMENT_PLAN.md` 和 `docs/MULTIMEDIA_AGENT_EVALUATION.md` 为准。
 
 > **2026-09-14 模型配置与任务参数治理：**模型配置升级为 v3，DeepSeek、Kimi、OpenAI、Anthropic、Qwen、Custom 和 Seedream 均按 Provider 独立保存 Base URL、模型、Thinking 与受支持参数，Key 继续使用 Provider 级 DPAPI 密文。关键 LLM 作用域可在继承全局模型时单独覆盖生成参数，分析/问答、规划/深度任务和 PPT 创作分别采用保守推荐温度；最终参数经 Provider 能力过滤后才进入请求，通用环境 Key 也不会跨 Provider 误用。Qt 模型页增加账号模型目录刷新、可编辑模型选择和常用参数，Seedream 作为独立图像 Provider 接入同一配置与视觉路由，不会替换默认聊天模型。离线专项、C6.5 路由、全量后端、PPT 工作室回归及 Qt Debug/Release 构建与 CTest 均通过；本轮未调用真实供应商，详情见 `docs/MODEL_CONFIGURATION_AND_ROUTING.md`。
 

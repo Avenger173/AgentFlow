@@ -5,6 +5,8 @@ __pycache__/
 venv/
 # K0 技术试验使用独立解释器与依赖，不能混入正式后端发行环境。
 backend/.k0_*/
+# MM-0 多媒体模型选型使用独立环境，不能混入正式 FastAPI 后端或发行包。
+backend/.mm0_*/
 
 # FastAPI / local runtime
 *.env

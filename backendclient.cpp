@@ -543,6 +543,140 @@ DataDatasetListResult readDataDatasetListResult(const QJsonObject &payload)
     return result;
 }
 
+MediaProjectInfo readMediaProjectInfo(const QJsonObject &payload)
+{
+    MediaProjectInfo project;
+    project.projectId = payload.value(QStringLiteral("project_id")).toString();
+    project.title = payload.value(QStringLiteral("title")).toString();
+    project.createdAt = payload.value(QStringLiteral("created_at")).toString();
+    project.updatedAt = payload.value(QStringLiteral("updated_at")).toString();
+    project.assetCount = payload.value(QStringLiteral("asset_count")).toInt();
+    return project;
+}
+
+MediaImageAssetInfo readMediaImageAssetInfo(const QJsonObject &payload)
+{
+    MediaImageAssetInfo asset;
+    asset.assetId = payload.value(QStringLiteral("asset_id")).toString();
+    asset.name = payload.value(QStringLiteral("name")).toString();
+    asset.sourceSha256 = payload.value(QStringLiteral("source_sha256")).toString();
+    asset.mimeType = payload.value(QStringLiteral("mime_type")).toString();
+    asset.width = payload.value(QStringLiteral("width")).toInt();
+    asset.height = payload.value(QStringLiteral("height")).toInt();
+    asset.sizeBytes = payload.value(QStringLiteral("size_bytes")).toInt();
+    asset.createdAt = payload.value(QStringLiteral("created_at")).toString();
+    asset.currentRevisionId = payload.value(QStringLiteral("current_revision_id")).toString();
+    asset.revisionCount = payload.value(QStringLiteral("revision_count")).toInt();
+    asset.undoAvailable = payload.value(QStringLiteral("undo_available")).toBool();
+    asset.redoAvailable = payload.value(QStringLiteral("redo_available")).toBool();
+    return asset;
+}
+
+MediaImageRevisionInfo readMediaImageRevisionInfo(const QJsonObject &payload)
+{
+    MediaImageRevisionInfo revision;
+    revision.revisionId = payload.value(QStringLiteral("revision_id")).toString();
+    revision.assetId = payload.value(QStringLiteral("asset_id")).toString();
+    revision.parentRevisionId = payload.value(QStringLiteral("parent_revision_id")).toString();
+    revision.operation = payload.value(QStringLiteral("operation")).toString();
+    revision.parameters = payload.value(QStringLiteral("parameters")).toObject();
+    revision.maskId = payload.value(QStringLiteral("mask_id")).toString();
+    revision.layerId = payload.value(QStringLiteral("layer_id")).toString();
+    revision.sha256 = payload.value(QStringLiteral("sha256")).toString();
+    revision.width = payload.value(QStringLiteral("width")).toInt();
+    revision.height = payload.value(QStringLiteral("height")).toInt();
+    revision.sizeBytes = payload.value(QStringLiteral("size_bytes")).toInt();
+    revision.createdAt = payload.value(QStringLiteral("created_at")).toString();
+    return revision;
+}
+
+MediaProjectListResult readMediaProjectListResult(const QJsonObject &payload)
+{
+    MediaProjectListResult result;
+    result.total = payload.value(QStringLiteral("total")).toInt();
+    const QJsonArray projects = payload.value(QStringLiteral("projects")).toArray();
+    result.projects.reserve(projects.size());
+    for (const QJsonValue &value : projects) {
+        if (value.isObject()) {
+            result.projects.append(readMediaProjectInfo(value.toObject()));
+        }
+    }
+    return result;
+}
+
+MediaProjectDetailResult readMediaProjectDetailResult(const QJsonObject &payload)
+{
+    MediaProjectDetailResult result;
+    result.project = readMediaProjectInfo(payload.value(QStringLiteral("project")).toObject());
+    const QJsonArray assets = payload.value(QStringLiteral("assets")).toArray();
+    result.assets.reserve(assets.size());
+    for (const QJsonValue &value : assets) {
+        if (value.isObject()) {
+            result.assets.append(readMediaImageAssetInfo(value.toObject()));
+        }
+    }
+    return result;
+}
+
+MediaAssetRevisionListResult readMediaAssetRevisionListResult(const QJsonObject &payload)
+{
+    MediaAssetRevisionListResult result;
+    result.asset = readMediaImageAssetInfo(payload.value(QStringLiteral("asset")).toObject());
+    const QJsonArray revisions = payload.value(QStringLiteral("revisions")).toArray();
+    result.revisions.reserve(revisions.size());
+    for (const QJsonValue &value : revisions) {
+        if (value.isObject()) {
+            result.revisions.append(readMediaImageRevisionInfo(value.toObject()));
+        }
+    }
+    return result;
+}
+
+MediaImageLayerStackResult readMediaImageLayerStackResult(const QJsonObject &payload)
+{
+    MediaImageLayerStackResult result;
+    result.assetId = payload.value(QStringLiteral("asset_id")).toString();
+    result.revisionId = payload.value(QStringLiteral("revision_id")).toString();
+    result.compositionRootRevisionId = payload.value(QStringLiteral("composition_root_revision_id")).toString();
+    result.editable = payload.value(QStringLiteral("editable")).toBool();
+    const QJsonArray layers = payload.value(QStringLiteral("layers")).toArray();
+    result.layers.reserve(layers.size());
+    for (const QJsonValue &value : layers) {
+        if (!value.isObject()) {
+            continue;
+        }
+        const QJsonObject layerPayload = value.toObject();
+        MediaImageLayerInfo layer;
+        layer.layerId = layerPayload.value(QStringLiteral("layer_id")).toString();
+        layer.sourceAssetId = layerPayload.value(QStringLiteral("source_asset_id")).toString();
+        layer.sourceName = layerPayload.value(QStringLiteral("source_name")).toString();
+        layer.visible = layerPayload.value(QStringLiteral("visible")).toBool(true);
+        layer.x = layerPayload.value(QStringLiteral("x")).toInt();
+        layer.y = layerPayload.value(QStringLiteral("y")).toInt();
+        layer.opacity = layerPayload.value(QStringLiteral("opacity")).toInt(100);
+        if (!layer.layerId.isEmpty() && !layer.sourceAssetId.isEmpty()) {
+            result.layers.append(layer);
+        }
+    }
+    return result;
+}
+
+MediaImageExportInfo readMediaImageExportInfo(const QJsonObject &payload)
+{
+    MediaImageExportInfo imageExport;
+    imageExport.exportId = payload.value(QStringLiteral("export_id")).toString();
+    imageExport.projectId = payload.value(QStringLiteral("project_id")).toString();
+    imageExport.assetId = payload.value(QStringLiteral("asset_id")).toString();
+    imageExport.revisionId = payload.value(QStringLiteral("revision_id")).toString();
+    imageExport.filename = payload.value(QStringLiteral("filename")).toString();
+    imageExport.sha256 = payload.value(QStringLiteral("sha256")).toString();
+    imageExport.width = payload.value(QStringLiteral("width")).toInt();
+    imageExport.height = payload.value(QStringLiteral("height")).toInt();
+    imageExport.sizeBytes = payload.value(QStringLiteral("size_bytes")).toInt();
+    imageExport.createdAt = payload.value(QStringLiteral("created_at")).toString();
+    return imageExport;
+}
+
 DocumentAgentRunResult readDocumentAgentRunResult(const QJsonObject &payload)
 {
     DocumentAgentRunResult result;
@@ -1291,6 +1425,7 @@ ModelProviderInfo readModelProviderInfo(const QJsonObject &payload)
     provider.supportsPresencePenalty = payload.value(QStringLiteral("supports_presence_penalty")).toBool();
     provider.supportsFrequencyPenalty = payload.value(QStringLiteral("supports_frequency_penalty")).toBool();
     provider.supportsVisualGeneration = payload.value(QStringLiteral("supports_visual_generation")).toBool();
+    provider.supportsImageEdit = payload.value(QStringLiteral("supports_image_edit")).toBool();
     provider.apiKeyConfigured = payload.value(QStringLiteral("api_key_configured")).toBool();
     provider.configuredBaseUrl = payload.value(QStringLiteral("configured_base_url")).toString();
     provider.configuredModel = payload.value(QStringLiteral("configured_model")).toString();
@@ -2557,6 +2692,424 @@ void BackendClient::requestDataTransformationExportResult(const QString &taskId)
         createRequest(buildDataAgentTransformationExportResultUrl(taskId.trimmed()), 10000));
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         handleDataTransformationExportResultReply(reply);
+    });
+}
+
+void BackendClient::requestMediaProjects()
+{
+    QNetworkReply *reply = networkManager_.get(createRequest(buildMediaAgentProjectsUrl(), 10000));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        if (reply->error() != QNetworkReply::NoError) {
+            const QString message = replyErrorMessage(reply);
+            reply->deleteLater();
+            emit mediaAgentFailed(QStringLiteral("list_projects"), message);
+            return;
+        }
+        const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+        reply->deleteLater();
+        if (!document.isObject()) {
+            emit mediaAgentFailed(QStringLiteral("list_projects"), QStringLiteral("图片项目列表响应无效。"));
+            return;
+        }
+        emit mediaProjectsReceived(readMediaProjectListResult(document.object()));
+    });
+}
+
+void BackendClient::createMediaProject(const QString &title)
+{
+    const QString normalizedTitle = title.trimmed();
+    if (normalizedTitle.isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("create_project"), QStringLiteral("请输入项目名称。"));
+        return;
+    }
+    QJsonObject payload;
+    payload.insert(QStringLiteral("title"), normalizedTitle);
+    QNetworkReply *reply = networkManager_.post(
+        createRequest(buildMediaAgentProjectsUrl(), 10000),
+        QJsonDocument(payload).toJson(QJsonDocument::Compact));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        if (reply->error() != QNetworkReply::NoError) {
+            const QString message = replyErrorMessage(reply);
+            reply->deleteLater();
+            emit mediaAgentFailed(QStringLiteral("create_project"), message);
+            return;
+        }
+        const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+        reply->deleteLater();
+        if (!document.isObject()) {
+            emit mediaAgentFailed(QStringLiteral("create_project"), QStringLiteral("创建图片项目响应无效。"));
+            return;
+        }
+        const MediaProjectInfo project = readMediaProjectInfo(document.object());
+        if (project.projectId.isEmpty()) {
+            emit mediaAgentFailed(QStringLiteral("create_project"), QStringLiteral("创建图片项目响应缺少项目 ID。"));
+            return;
+        }
+        emit mediaProjectCreated(project);
+    });
+}
+
+void BackendClient::requestMediaProject(const QString &projectId)
+{
+    if (projectId.trimmed().isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("get_project"), QStringLiteral("图片项目 ID 为空。"));
+        return;
+    }
+    QNetworkReply *reply = networkManager_.get(
+        createRequest(buildMediaAgentProjectUrl(projectId.trimmed()), 10000));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        if (reply->error() != QNetworkReply::NoError) {
+            const QString message = replyErrorMessage(reply);
+            reply->deleteLater();
+            emit mediaAgentFailed(QStringLiteral("get_project"), message);
+            return;
+        }
+        const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+        reply->deleteLater();
+        if (!document.isObject()) {
+            emit mediaAgentFailed(QStringLiteral("get_project"), QStringLiteral("图片项目响应无效。"));
+            return;
+        }
+        const MediaProjectDetailResult result = readMediaProjectDetailResult(document.object());
+        if (result.project.projectId.isEmpty()) {
+            emit mediaAgentFailed(QStringLiteral("get_project"), QStringLiteral("图片项目响应缺少项目 ID。"));
+            return;
+        }
+        emit mediaProjectReceived(result);
+    });
+}
+
+void BackendClient::importMediaImage(
+    const QString &projectId,
+    const QString &filename,
+    const QByteArray &content)
+{
+    if (projectId.trimmed().isEmpty() || filename.trimmed().isEmpty() || content.isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("import_image"), QStringLiteral("导入图片缺少项目、文件名或文件内容。"));
+        return;
+    }
+    QJsonObject payload;
+    payload.insert(QStringLiteral("filename"), filename.trimmed());
+    payload.insert(QStringLiteral("content_base64"), QString::fromLatin1(content.toBase64()));
+    QNetworkReply *reply = networkManager_.post(
+        createRequest(buildMediaAgentImagesUrl(projectId.trimmed()), 60000),
+        QJsonDocument(payload).toJson(QJsonDocument::Compact));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        if (reply->error() != QNetworkReply::NoError) {
+            const QString message = replyErrorMessage(reply);
+            reply->deleteLater();
+            emit mediaAgentFailed(QStringLiteral("import_image"), message);
+            return;
+        }
+        const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+        reply->deleteLater();
+        if (!document.isObject()) {
+            emit mediaAgentFailed(QStringLiteral("import_image"), QStringLiteral("导入图片响应无效。"));
+            return;
+        }
+        const MediaImageAssetInfo asset = readMediaImageAssetInfo(document.object());
+        if (asset.assetId.isEmpty() || asset.currentRevisionId.isEmpty()) {
+            emit mediaAgentFailed(QStringLiteral("import_image"), QStringLiteral("导入图片响应缺少素材版本信息。"));
+            return;
+        }
+        emit mediaImageImported(asset);
+    });
+}
+
+void BackendClient::requestMediaAssetRevisions(const QString &projectId, const QString &assetId)
+{
+    if (projectId.trimmed().isEmpty() || assetId.trimmed().isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("list_revisions"), QStringLiteral("读取图片版本缺少项目或素材 ID。"));
+        return;
+    }
+    QNetworkReply *reply = networkManager_.get(
+        createRequest(buildMediaAgentAssetRevisionsUrl(projectId.trimmed(), assetId.trimmed()), 10000));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        if (reply->error() != QNetworkReply::NoError) {
+            const QString message = replyErrorMessage(reply);
+            reply->deleteLater();
+            emit mediaAgentFailed(QStringLiteral("list_revisions"), message);
+            return;
+        }
+        const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+        reply->deleteLater();
+        if (!document.isObject()) {
+            emit mediaAgentFailed(QStringLiteral("list_revisions"), QStringLiteral("图片版本响应无效。"));
+            return;
+        }
+        const MediaAssetRevisionListResult result = readMediaAssetRevisionListResult(document.object());
+        if (result.asset.assetId.isEmpty() || result.revisions.isEmpty()) {
+            emit mediaAgentFailed(QStringLiteral("list_revisions"), QStringLiteral("图片版本响应不完整。"));
+            return;
+        }
+        emit mediaAssetRevisionsReceived(result);
+    });
+}
+
+void BackendClient::requestMediaImageLayerStack(
+    const QString &projectId,
+    const QString &assetId,
+    const QString &revisionId)
+{
+    if (projectId.trimmed().isEmpty() || assetId.trimmed().isEmpty() || revisionId.trimmed().isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("list_layers"), QStringLiteral("读取图层缺少项目、素材或版本 ID。"));
+        return;
+    }
+    QNetworkReply *reply = networkManager_.get(createRequest(
+        buildMediaAgentRevisionLayerStackUrl(projectId.trimmed(), assetId.trimmed(), revisionId.trimmed()), 10000));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        if (reply->error() != QNetworkReply::NoError) {
+            const QString message = replyErrorMessage(reply);
+            reply->deleteLater();
+            emit mediaAgentFailed(QStringLiteral("list_layers"), message);
+            return;
+        }
+        const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+        reply->deleteLater();
+        if (!document.isObject()) {
+            emit mediaAgentFailed(QStringLiteral("list_layers"), QStringLiteral("图片图层响应无效。"));
+            return;
+        }
+        const MediaImageLayerStackResult result = readMediaImageLayerStackResult(document.object());
+        if (result.assetId.isEmpty() || result.revisionId.isEmpty()) {
+            emit mediaAgentFailed(QStringLiteral("list_layers"), QStringLiteral("图片图层响应不完整。"));
+            return;
+        }
+        emit mediaImageLayerStackReceived(result);
+    });
+}
+
+void BackendClient::createMediaImageRevision(
+    const QString &projectId,
+    const QString &assetId,
+    const QString &operation,
+    const QString &baseRevisionId,
+    const QJsonObject &parameters)
+{
+    if (projectId.trimmed().isEmpty() || assetId.trimmed().isEmpty() || operation.trimmed().isEmpty()
+        || baseRevisionId.trimmed().isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("create_revision"), QStringLiteral("创建图片版本缺少必要参数。"));
+        return;
+    }
+    QJsonObject payload = parameters;
+    payload.insert(QStringLiteral("operation"), operation.trimmed());
+    payload.insert(QStringLiteral("base_revision_id"), baseRevisionId.trimmed());
+    QNetworkReply *reply = networkManager_.post(
+        createRequest(buildMediaAgentAssetRevisionsUrl(projectId.trimmed(), assetId.trimmed()), 30000),
+        QJsonDocument(payload).toJson(QJsonDocument::Compact));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        if (reply->error() != QNetworkReply::NoError) {
+            const QString message = replyErrorMessage(reply);
+            reply->deleteLater();
+            emit mediaAgentFailed(QStringLiteral("create_revision"), message);
+            return;
+        }
+        const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+        reply->deleteLater();
+        if (!document.isObject()) {
+            emit mediaAgentFailed(QStringLiteral("create_revision"), QStringLiteral("创建图片版本响应无效。"));
+            return;
+        }
+        const MediaImageRevisionInfo revision = readMediaImageRevisionInfo(document.object());
+        if (revision.revisionId.isEmpty() || revision.assetId.isEmpty()) {
+            emit mediaAgentFailed(QStringLiteral("create_revision"), QStringLiteral("创建图片版本响应不完整。"));
+            return;
+        }
+        emit mediaImageRevisionCreated(revision);
+    });
+}
+
+void BackendClient::startMediaImageRevisionTask(
+    const QString &projectId,
+    const QString &assetId,
+    const QString &operation,
+    const QString &baseRevisionId,
+    const QJsonObject &parameters)
+{
+    if (projectId.trimmed().isEmpty() || assetId.trimmed().isEmpty() || operation.trimmed().isEmpty()
+        || baseRevisionId.trimmed().isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("start_revision_task"), QStringLiteral("创建图片版本任务缺少必要参数。"));
+        return;
+    }
+    QJsonObject payload = parameters;
+    payload.insert(QStringLiteral("operation"), operation.trimmed());
+    payload.insert(QStringLiteral("base_revision_id"), baseRevisionId.trimmed());
+    QNetworkReply *reply = networkManager_.post(
+        createRequest(buildMediaAgentAssetRevisionStartUrl(projectId.trimmed(), assetId.trimmed()), 10000),
+        QJsonDocument(payload).toJson(QJsonDocument::Compact));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        handleMediaImageRevisionTaskStartReply(reply);
+    });
+}
+
+void BackendClient::requestMediaImageRevisionTaskResult(const QString &taskId)
+{
+    if (taskId.trimmed().isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("revision_task_result"), QStringLiteral("图片编辑任务 ID 为空。"));
+        return;
+    }
+    QNetworkReply *reply = networkManager_.get(
+        createRequest(buildMediaAgentEditTaskResultUrl(taskId.trimmed()), 10000));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        handleMediaImageRevisionTaskResultReply(reply);
+    });
+}
+
+void BackendClient::navigateMediaImageHistory(
+    const QString &projectId,
+    const QString &assetId,
+    const QString &action,
+    const QString &baseRevisionId)
+{
+    const QString normalizedAction = action.trimmed();
+    if (projectId.trimmed().isEmpty() || assetId.trimmed().isEmpty()
+        || baseRevisionId.trimmed().isEmpty()
+        || (normalizedAction != QStringLiteral("undo") && normalizedAction != QStringLiteral("redo"))) {
+        emit mediaAgentFailed(QStringLiteral("navigate_history"), QStringLiteral("图片历史操作缺少必要参数。"));
+        return;
+    }
+    QJsonObject payload;
+    payload.insert(QStringLiteral("base_revision_id"), baseRevisionId.trimmed());
+    QNetworkReply *reply = networkManager_.post(
+        createRequest(buildMediaAgentAssetHistoryUrl(projectId.trimmed(), assetId.trimmed(), normalizedAction), 30000),
+        QJsonDocument(payload).toJson(QJsonDocument::Compact));
+    connect(reply, &QNetworkReply::finished, this, [this, reply, normalizedAction]() {
+        if (reply->error() != QNetworkReply::NoError) {
+            const QString message = replyErrorMessage(reply);
+            reply->deleteLater();
+            emit mediaAgentFailed(QStringLiteral("navigate_history"), message);
+            return;
+        }
+        const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+        reply->deleteLater();
+        if (!document.isObject()) {
+            emit mediaAgentFailed(QStringLiteral("navigate_history"), QStringLiteral("图片历史操作响应无效。"));
+            return;
+        }
+        const MediaAssetRevisionListResult result = readMediaAssetRevisionListResult(document.object());
+        if (result.asset.assetId.isEmpty() || result.asset.currentRevisionId.isEmpty() || result.revisions.isEmpty()) {
+            emit mediaAgentFailed(QStringLiteral("navigate_history"), QStringLiteral("图片历史操作响应不完整。"));
+            return;
+        }
+        emit mediaImageHistoryNavigated(normalizedAction, result);
+    });
+}
+
+void BackendClient::requestMediaRevisionPreview(const QString &projectId, const QString &revisionId)
+{
+    if (projectId.trimmed().isEmpty() || revisionId.trimmed().isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("preview_revision"), QStringLiteral("读取图片预览缺少项目或版本 ID。"));
+        return;
+    }
+    QNetworkReply *reply = networkManager_.get(
+        createRequest(buildMediaAgentRevisionPreviewUrl(projectId.trimmed(), revisionId.trimmed()), 30000));
+    connect(reply, &QNetworkReply::finished, this, [this, reply, projectId, revisionId]() {
+        if (reply->error() != QNetworkReply::NoError) {
+            const QString message = replyErrorMessage(reply);
+            reply->deleteLater();
+            emit mediaAgentFailed(QStringLiteral("preview_revision"), message);
+            return;
+        }
+        const QByteArray imageBytes = reply->readAll();
+        reply->deleteLater();
+        if (imageBytes.isEmpty()) {
+            emit mediaAgentFailed(QStringLiteral("preview_revision"), QStringLiteral("图片预览响应为空。"));
+            return;
+        }
+        emit mediaRevisionPreviewReceived(projectId, revisionId, imageBytes);
+    });
+}
+
+void BackendClient::startMediaImageExportTask(
+    const QString &projectId,
+    const QString &revisionId,
+    const QString &filename)
+{
+    if (projectId.trimmed().isEmpty() || revisionId.trimmed().isEmpty() || filename.trimmed().isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("start_export_task"), QStringLiteral("导出图片缺少项目、版本或文件名。"));
+        return;
+    }
+    QJsonObject payload;
+    payload.insert(QStringLiteral("filename"), filename.trimmed());
+    QNetworkReply *reply = networkManager_.post(
+        createRequest(buildMediaAgentRevisionExportStartUrl(projectId.trimmed(), revisionId.trimmed()), 10000),
+        QJsonDocument(payload).toJson(QJsonDocument::Compact));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        handleMediaImageExportTaskStartReply(reply);
+    });
+}
+
+void BackendClient::requestMediaImageExportTaskResult(const QString &taskId)
+{
+    if (taskId.trimmed().isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("export_task_result"), QStringLiteral("图片导出任务 ID 为空。"));
+        return;
+    }
+    QNetworkReply *reply = networkManager_.get(
+        createRequest(buildMediaAgentExportTaskResultUrl(taskId.trimmed()), 10000));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        handleMediaImageExportTaskResultReply(reply);
+    });
+}
+
+void BackendClient::exportMediaImageRevision(
+    const QString &projectId,
+    const QString &revisionId,
+    const QString &filename)
+{
+    if (projectId.trimmed().isEmpty() || revisionId.trimmed().isEmpty() || filename.trimmed().isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("export_revision"), QStringLiteral("导出图片缺少项目、版本或文件名。"));
+        return;
+    }
+    QJsonObject payload;
+    payload.insert(QStringLiteral("filename"), filename.trimmed());
+    QNetworkReply *reply = networkManager_.post(
+        createRequest(buildMediaAgentRevisionExportUrl(projectId.trimmed(), revisionId.trimmed()), 30000),
+        QJsonDocument(payload).toJson(QJsonDocument::Compact));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        if (reply->error() != QNetworkReply::NoError) {
+            const QString message = replyErrorMessage(reply);
+            reply->deleteLater();
+            emit mediaAgentFailed(QStringLiteral("export_revision"), message);
+            return;
+        }
+        const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+        reply->deleteLater();
+        if (!document.isObject()) {
+            emit mediaAgentFailed(QStringLiteral("export_revision"), QStringLiteral("导出图片响应无效。"));
+            return;
+        }
+        const MediaImageExportInfo imageExport = readMediaImageExportInfo(document.object());
+        if (imageExport.exportId.isEmpty() || imageExport.projectId.isEmpty()) {
+            emit mediaAgentFailed(QStringLiteral("export_revision"), QStringLiteral("导出图片响应缺少导出信息。"));
+            return;
+        }
+        emit mediaImageExported(imageExport);
+    });
+}
+
+void BackendClient::requestMediaExportDownload(const QString &projectId, const QString &exportId)
+{
+    if (projectId.trimmed().isEmpty() || exportId.trimmed().isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("download_export"), QStringLiteral("下载图片缺少项目或导出 ID。"));
+        return;
+    }
+    QNetworkReply *reply = networkManager_.get(
+        createRequest(buildMediaAgentExportDownloadUrl(projectId.trimmed(), exportId.trimmed()), 60000));
+    connect(reply, &QNetworkReply::finished, this, [this, reply, projectId, exportId]() {
+        if (reply->error() != QNetworkReply::NoError) {
+            const QString message = replyErrorMessage(reply);
+            reply->deleteLater();
+            emit mediaAgentFailed(QStringLiteral("download_export"), message);
+            return;
+        }
+        const QByteArray content = reply->readAll();
+        reply->deleteLater();
+        if (content.isEmpty()) {
+            emit mediaAgentFailed(QStringLiteral("download_export"), QStringLiteral("导出图片下载内容为空。"));
+            return;
+        }
+        emit mediaExportDownloaded(projectId, exportId, content);
     });
 }
 
@@ -4321,6 +4874,137 @@ QUrl BackendClient::buildDataAgentTransformationExportResultUrl(const QString &t
     return url;
 }
 
+QUrl BackendClient::buildMediaAgentProjectsUrl() const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/agents/media_agent/projects"));
+    return url;
+}
+
+QUrl BackendClient::buildMediaAgentProjectUrl(const QString &projectId) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/agents/media_agent/projects/%1")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(projectId))));
+    return url;
+}
+
+QUrl BackendClient::buildMediaAgentImagesUrl(const QString &projectId) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/agents/media_agent/projects/%1/images")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(projectId))));
+    return url;
+}
+
+QUrl BackendClient::buildMediaAgentAssetRevisionsUrl(
+    const QString &projectId,
+    const QString &assetId) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/agents/media_agent/projects/%1/images/%2/revisions")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(projectId)),
+                         QString::fromUtf8(QUrl::toPercentEncoding(assetId))));
+    return url;
+}
+
+QUrl BackendClient::buildMediaAgentRevisionLayerStackUrl(
+    const QString &projectId,
+    const QString &assetId,
+    const QString &revisionId) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/agents/media_agent/projects/%1/images/%2/revisions/%3/layers")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(projectId)),
+                         QString::fromUtf8(QUrl::toPercentEncoding(assetId)),
+                         QString::fromUtf8(QUrl::toPercentEncoding(revisionId))));
+    return url;
+}
+
+QUrl BackendClient::buildMediaAgentAssetRevisionStartUrl(
+    const QString &projectId,
+    const QString &assetId) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/agents/media_agent/projects/%1/images/%2/revisions/start")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(projectId)),
+                         QString::fromUtf8(QUrl::toPercentEncoding(assetId))));
+    return url;
+}
+
+QUrl BackendClient::buildMediaAgentEditTaskResultUrl(const QString &taskId) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/agents/media_agent/edits/%1/result")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(taskId))));
+    return url;
+}
+
+QUrl BackendClient::buildMediaAgentAssetHistoryUrl(
+    const QString &projectId,
+    const QString &assetId,
+    const QString &action) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/agents/media_agent/projects/%1/images/%2/history/%3")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(projectId)),
+                         QString::fromUtf8(QUrl::toPercentEncoding(assetId)),
+                         QString::fromUtf8(QUrl::toPercentEncoding(action))));
+    return url;
+}
+
+QUrl BackendClient::buildMediaAgentRevisionPreviewUrl(
+    const QString &projectId,
+    const QString &revisionId) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/agents/media_agent/projects/%1/revisions/%2/preview")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(projectId)),
+                         QString::fromUtf8(QUrl::toPercentEncoding(revisionId))));
+    return url;
+}
+
+QUrl BackendClient::buildMediaAgentRevisionExportUrl(
+    const QString &projectId,
+    const QString &revisionId) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/agents/media_agent/projects/%1/revisions/%2/export")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(projectId)),
+                         QString::fromUtf8(QUrl::toPercentEncoding(revisionId))));
+    return url;
+}
+
+QUrl BackendClient::buildMediaAgentRevisionExportStartUrl(
+    const QString &projectId,
+    const QString &revisionId) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/agents/media_agent/projects/%1/revisions/%2/export/start")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(projectId)),
+                         QString::fromUtf8(QUrl::toPercentEncoding(revisionId))));
+    return url;
+}
+
+QUrl BackendClient::buildMediaAgentExportTaskResultUrl(const QString &taskId) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/agents/media_agent/exports/%1/result")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(taskId))));
+    return url;
+}
+
+QUrl BackendClient::buildMediaAgentExportDownloadUrl(
+    const QString &projectId,
+    const QString &exportId) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/agents/media_agent/projects/%1/exports/%2/download")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(projectId)),
+                         QString::fromUtf8(QUrl::toPercentEncoding(exportId))));
+    return url;
+}
+
 QUrl BackendClient::buildDocumentAgentStartUrl() const
 {
     QUrl url(baseUrl_);
@@ -5580,6 +6264,125 @@ void BackendClient::handleDataTransformationExportResultReply(QNetworkReply *rep
     }
     emit dataTransformationExportFailed(payload.value(QStringLiteral("message")).toString(
         QStringLiteral("字段加工未完成，请在任务历史中查看原因。")));
+}
+
+void BackendClient::handleMediaImageRevisionTaskStartReply(QNetworkReply *reply)
+{
+    reply->deleteLater();
+    if (reply->error() != QNetworkReply::NoError) {
+        emit mediaAgentFailed(QStringLiteral("start_revision_task"), replyErrorMessage(reply));
+        return;
+    }
+    const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+    const QJsonObject payload = document.object();
+    const QString taskId = payload.value(QStringLiteral("task_id")).toString().trimmed();
+    if (!document.isObject() || taskId.isEmpty()
+        || payload.value(QStringLiteral("status")).toString() != QStringLiteral("queued")) {
+        emit mediaAgentFailed(QStringLiteral("start_revision_task"), QStringLiteral("图片编辑任务未返回有效受理状态。"));
+        return;
+    }
+    emit mediaImageRevisionTaskStarted(taskId);
+}
+
+void BackendClient::handleMediaImageRevisionTaskResultReply(QNetworkReply *reply)
+{
+    reply->deleteLater();
+    if (reply->error() != QNetworkReply::NoError) {
+        emit mediaAgentFailed(QStringLiteral("revision_task_result"), replyErrorMessage(reply));
+        return;
+    }
+    const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+    if (!document.isObject()) {
+        emit mediaAgentFailed(QStringLiteral("revision_task_result"), QStringLiteral("图片编辑结果响应格式无效。"));
+        return;
+    }
+    const QJsonObject payload = document.object();
+    const QString taskId = payload.value(QStringLiteral("task_id")).toString().trimmed();
+    const QString status = payload.value(QStringLiteral("status")).toString();
+    if (taskId.isEmpty() || status.isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("revision_task_result"), QStringLiteral("图片编辑结果缺少任务状态。"));
+        return;
+    }
+    if (status == QStringLiteral("queued") || status == QStringLiteral("pending") || status == QStringLiteral("running")) {
+        emit mediaImageRevisionStillRunning(taskId, status);
+        return;
+    }
+    if (status == QStringLiteral("cancelled")) {
+        emit mediaImageRevisionCancelled(payload.value(QStringLiteral("message")).toString(
+            QStringLiteral("图片编辑已取消，未创建新的修订版本。")));
+        return;
+    }
+    if (status == QStringLiteral("completed") && payload.value(QStringLiteral("revision")).isObject()) {
+        const MediaImageRevisionInfo revision = readMediaImageRevisionInfo(
+            payload.value(QStringLiteral("revision")).toObject());
+        if (!revision.revisionId.isEmpty() && !revision.assetId.isEmpty()) {
+            emit mediaImageRevisionCreated(revision);
+            return;
+        }
+    }
+    const QString message = payload.value(QStringLiteral("message")).toString(
+        QStringLiteral("图片编辑未完成，请在任务历史中查看原因。"));
+    emit mediaAgentFailed(
+        QStringLiteral("create_revision"),
+        payload.value(QStringLiteral("conflict")).toBool() ? QStringLiteral("HTTP 409 · %1").arg(message) : message);
+}
+
+void BackendClient::handleMediaImageExportTaskStartReply(QNetworkReply *reply)
+{
+    reply->deleteLater();
+    if (reply->error() != QNetworkReply::NoError) {
+        emit mediaAgentFailed(QStringLiteral("start_export_task"), replyErrorMessage(reply));
+        return;
+    }
+    const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+    const QJsonObject payload = document.object();
+    const QString taskId = payload.value(QStringLiteral("task_id")).toString().trimmed();
+    if (!document.isObject() || taskId.isEmpty()
+        || payload.value(QStringLiteral("status")).toString() != QStringLiteral("queued")) {
+        emit mediaAgentFailed(QStringLiteral("start_export_task"), QStringLiteral("图片导出任务未返回有效受理状态。"));
+        return;
+    }
+    emit mediaImageExportTaskStarted(taskId);
+}
+
+void BackendClient::handleMediaImageExportTaskResultReply(QNetworkReply *reply)
+{
+    reply->deleteLater();
+    if (reply->error() != QNetworkReply::NoError) {
+        emit mediaAgentFailed(QStringLiteral("export_task_result"), replyErrorMessage(reply));
+        return;
+    }
+    const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+    if (!document.isObject()) {
+        emit mediaAgentFailed(QStringLiteral("export_task_result"), QStringLiteral("图片导出结果响应格式无效。"));
+        return;
+    }
+    const QJsonObject payload = document.object();
+    const QString taskId = payload.value(QStringLiteral("task_id")).toString().trimmed();
+    const QString status = payload.value(QStringLiteral("status")).toString();
+    if (taskId.isEmpty() || status.isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("export_task_result"), QStringLiteral("图片导出结果缺少任务状态。"));
+        return;
+    }
+    if (status == QStringLiteral("queued") || status == QStringLiteral("pending") || status == QStringLiteral("running")) {
+        emit mediaImageExportStillRunning(taskId, status);
+        return;
+    }
+    if (status == QStringLiteral("cancelled")) {
+        emit mediaImageExportCancelled(payload.value(QStringLiteral("message")).toString(
+            QStringLiteral("图片 PNG 导出已取消，未登记新的交付文件。")));
+        return;
+    }
+    if (status == QStringLiteral("completed") && payload.value(QStringLiteral("export")).isObject()) {
+        const MediaImageExportInfo imageExport = readMediaImageExportInfo(
+            payload.value(QStringLiteral("export")).toObject());
+        if (!imageExport.exportId.isEmpty() && !imageExport.projectId.isEmpty()) {
+            emit mediaImageExported(imageExport);
+            return;
+        }
+    }
+    emit mediaAgentFailed(QStringLiteral("export_task_result"), payload.value(QStringLiteral("message")).toString(
+        QStringLiteral("图片导出未完成，请在任务历史中查看原因。")));
 }
 
 void BackendClient::handleDocumentAgentStartReply(QNetworkReply *reply)

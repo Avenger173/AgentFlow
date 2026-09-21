@@ -18,7 +18,7 @@ from app.services.model_route_store import load_model_route_settings, model_rout
 from app.services.secret_store import SecretStoreError
 
 
-ModelTransport = Literal["openai_compatible", "anthropic", "ark_image"]
+ModelTransport = Literal["openai_compatible", "anthropic", "ark_image", "dashscope_multimodal"]
 ModelKind = Literal["chat", "image"]
 ContextCacheMode = Literal[
     "automatic_observable",
@@ -228,6 +228,12 @@ class ModelProviderProfile:
     supports_json_output: bool = True
     supports_tool_calls: bool = True
     supports_visual_generation: bool = False
+    # ``visual_generation`` 是文生图，``image_edit`` 要求 Provider 接收现有图片并返回编辑结果。
+    # 两者不能互相推断，避免再次把“能生图”当作“能修图”。
+    supports_image_edit: bool = False
+    # 某些同厂商能力使用同一把 Key，但 API Host 与模型配置独立保存。只允许在这里显式
+    # 声明共享关系，不能让任意 Provider 猜测并读取其它 Provider 的密钥。
+    credential_provider: str = ""
     # 同一供应商在组合任务中可安全占用的并行模型槽位。它不是账户 RPM 声明，而是
     # AgentFlow 已验证的组合调度上限；未知 Provider 保守允许两个槽位，后续以真实
     # 观测收紧或放宽。
@@ -715,6 +721,39 @@ _PROVIDER_PROFILES: dict[str, ModelProviderProfile] = {
         context_cache_note="当前没有接入经核验的 DashScope 上下文缓存计量字段。",
         notes="通义千问可走 DashScope OpenAI-compatible 模式。",
     ),
+    "qwen_image": ModelProviderProfile(
+        provider="qwen_image",
+        label="Qwen Image / DashScope",
+        transport="dashscope_multimodal",
+        model_kind="image",
+        # 图像编辑走 DashScope 多模态生成 API，不是 qwen 文本兼容模式的 /chat/completions。
+        # 业务空间专属 Host 可在设置页覆盖；不能从 qwen 文本 Provider 借用其 Base URL。
+        default_base_url="https://dashscope.aliyuncs.com/api/v1",
+        # MM-0 的固定公开夹具上，3.0 Pro 是当前唯一完成三类各三例
+        # 开发者初检的候选；正式开放仍受独立复核和 G0 门槛约束。
+        default_model="qwen-image-3.0-pro",
+        recommended_models=(
+            "qwen-image-3.0-pro",
+            "qwen-image-3.0",
+            "qwen-image-2.0-pro",
+            "qwen-image-2.0",
+            "qwen-image-edit-max",
+            "qwen-image-edit-plus",
+            "qwen-image-edit",
+        ),
+        sends_temperature=False,
+        sends_top_p=False,
+        supports_json_output=False,
+        supports_tool_calls=False,
+        supports_visual_generation=True,
+        supports_image_edit=True,
+        credential_provider="qwen",
+        context_cache_note="图像编辑请求不使用文本上下文缓存。",
+        notes=(
+            "Qwen Image 通过 DashScope 多模态生成 API 接收原图与编辑指令。"
+            "可使用已保存的 Qwen Key；北京业务空间建议配置专属 API Host。"
+        ),
+    ),
     "seedream": ModelProviderProfile(
         provider="seedream",
         label="Seedream / 火山方舟",
@@ -760,6 +799,7 @@ _PROVIDER_ENV_PREFIXES = {
     "openai": ("OPENAI",),
     "anthropic": ("ANTHROPIC", "CLAUDE"),
     "qwen": ("QWEN", "DASHSCOPE"),
+    "qwen_image": ("QWEN", "DASHSCOPE"),
     "kimi": ("KIMI", "MOONSHOT"),
     "seedream": ("AGENTFLOW_SEEDREAM", "SEEDREAM"),
     "openai_compatible": ("OPENAI_COMPATIBLE", "CUSTOM_LLM"),
@@ -785,6 +825,29 @@ def get_model_provider_profile(provider: str) -> ModelProviderProfile:
     """按标准 provider id 返回 profile，供 API 层做写入校验。"""
 
     return _profile_for(normalize_model_provider(provider))
+
+
+def validate_model_profile_model(provider: str, model: str) -> None:
+    """阻止已知图片模型被误填进文本 Provider，或反向混入图片编辑链路。
+
+    DashScope 的文本兼容接口与图片编辑多模态接口并不共享请求协议。仅按“同一个
+    Key 能访问”放开任意模型名，会让用户在保存后才在实际任务中看到难以理解的
+    400。因此只对本项目已接入的 Qwen 图片模型族做明确的边界校验；其它第三方
+    自定义兼容 Provider 仍由用户自行负责其网关能力。
+    """
+
+    normalized_provider = normalize_model_provider(provider)
+    value = model.strip().casefold()
+    if not value:
+        return
+    if normalized_provider == "qwen" and value.startswith("qwen-image"):
+        raise ModelGatewayError(
+            "Qwen 图片模型不能配置到 Qwen 文本 Provider。请在 “Qwen Image / DashScope” 中配置图片模型。"
+        )
+    if normalized_provider == "qwen_image" and not value.startswith("qwen-image"):
+        raise ModelGatewayError(
+            "Qwen Image / DashScope 当前仅接入 qwen-image-* 图片模型；Wan 等其它模型需完成独立适配后再添加。"
+        )
 
 
 def get_verified_model_context_window_tokens(runtime: ModelRuntime | None) -> int | None:
@@ -835,7 +898,7 @@ def model_provider_api_key_source(
 
     normalized_provider = normalize_model_provider(provider)
     config = stored_config or _load_stored_model_config()
-    if config.api_key_configured_for(normalized_provider):
+    if _stored_api_key_configured_for_provider(config, normalized_provider):
         return "local_config"
 
     profile = _profile_for(normalized_provider)
@@ -906,6 +969,7 @@ def resolve_model_runtime(
         default=profile.default_base_url,
     ).rstrip("/")
     model = _effective_model(agent, provider=provider, profile=profile, stored_config=stored_config)
+    validate_model_profile_model(provider, model)
     api_key = _resolve_runtime_field(
         provider,
         "API_KEY",
@@ -1021,12 +1085,21 @@ def resolve_visual_model_runtime_for_route(
 ) -> ModelRouteResolution:
     """解析图像生成路由，并从同一份 Provider 安全存储取得 Key。"""
 
-    if route_id != "visual_generation":
-        raise ModelGatewayError(f"模型路由 {route_id} 不是图像生成作用域。")
+    default_providers = {
+        "visual_generation": "seedream",
+        "media_image_edit": "qwen_image",
+    }
+    try:
+        default_provider = default_providers[route_id]
+    except KeyError as exc:
+        raise ModelGatewayError(f"模型路由 {route_id} 不是图像能力作用域。") from exc
     route = load_model_route_settings(route_id)
     stored_config = _load_stored_model_config()
-    provider = normalize_model_provider(route.provider) if route.mode == "configured" else "seedream"
+    provider = normalize_model_provider(route.provider) if route.mode == "configured" else default_provider
     profile = _profile_for(provider)
+    required_capability = "image_edit" if route_id == "media_image_edit" else "visual_generation"
+    if profile.model_kind != "image" or not bool(getattr(profile, f"supports_{required_capability}", False)):
+        raise ModelGatewayError(f"{profile.label} 不支持 {required_capability}，无法用于 {route_id}。")
     provider_base_url, provider_model = model_provider_connection_preview(
         provider,
         stored_config=stored_config,
@@ -1041,6 +1114,7 @@ def resolve_visual_model_runtime_for_route(
         if route.mode == "configured"
         else provider_model
     ).strip()
+    validate_model_profile_model(provider, model)
     runtime = resolve_visual_model_runtime(
         provider=provider,
         base_url=base_url,
@@ -1062,8 +1136,8 @@ def resolve_visual_model_runtime(
 
     normalized_provider = normalize_model_provider(provider)
     profile = _profile_for(normalized_provider)
-    if profile.model_kind != "image" or not profile.supports_visual_generation:
-        raise ModelGatewayError(f"{profile.label} 不支持图像生成。")
+    if profile.model_kind != "image" or not (profile.supports_visual_generation or profile.supports_image_edit):
+        raise ModelGatewayError(f"{profile.label} 不支持已接入的图像能力。")
     stored_config = _load_stored_model_config()
     provider_base_url, provider_model = model_provider_connection_preview(
         normalized_provider,
@@ -1076,9 +1150,10 @@ def resolve_visual_model_runtime(
         base_url=((base_url or "").strip() or provider_base_url).rstrip("/"),
         model=(model or "").strip() or provider_model,
         api_key=(api_key or "").strip()
-        or _stored_api_key(stored_config, normalized_provider)
+        or _stored_api_key_for_provider(stored_config, normalized_provider)
         or _visual_environment_api_key(normalized_provider),
     )
+    validate_model_profile_model(normalized_provider, runtime.model)
     if validate:
         if not runtime.base_url:
             raise ModelGatewayError(f"未配置 {runtime.label} Base URL。")
@@ -1107,7 +1182,7 @@ async def discover_model_catalog(
     resolved_base_url = (base_url or "").strip().rstrip("/")
     if not resolved_base_url:
         resolved_base_url = provider_base_url
-    resolved_key = (api_key or "").strip() or _stored_api_key(stored_config, normalized_provider)
+    resolved_key = (api_key or "").strip() or _stored_api_key_for_provider(stored_config, normalized_provider)
     if not resolved_key and profile.model_kind == "image":
         resolved_key = _visual_environment_api_key(normalized_provider)
     if not resolved_key and profile.model_kind == "chat":
@@ -1200,6 +1275,7 @@ def resolve_model_runtime_for_test(
             settings_value=settings.llm_model,
             default=profile.default_model or "",
         )
+    validate_model_profile_model(normalized_provider, model_value)
 
     api_key_value = (api_key or "").strip()
     api_key_source: Literal["request", "local_config", "environment", "none"] = "request"
@@ -1480,6 +1556,27 @@ def _stored_api_key(stored_config: StoredModelConfig, provider: str) -> str:
         return stored_config.decrypt_api_key(provider)
     except SecretStoreError as exc:
         raise ModelGatewayError(f"本地模型 API Key 解密失败：{exc}") from exc
+
+
+def _stored_api_key_configured_for_provider(stored_config: StoredModelConfig, provider: str) -> bool:
+    """只判断指定 Provider 或其显式凭据所有者是否已保存 Key，不触发解密。"""
+
+    if stored_config.api_key_configured_for(provider):
+        return True
+    credential_provider = _profile_for(provider).credential_provider.strip()
+    return bool(credential_provider) and stored_config.api_key_configured_for(credential_provider)
+
+
+def _stored_api_key_for_provider(stored_config: StoredModelConfig, provider: str) -> str:
+    """解析本 Provider 的 Key；仅允许静态 Profile 声明的同厂商凭据复用。"""
+
+    direct_key = _stored_api_key(stored_config, provider)
+    if direct_key:
+        return direct_key
+    credential_provider = _profile_for(provider).credential_provider.strip()
+    if credential_provider:
+        return _stored_api_key(stored_config, credential_provider)
+    return ""
 
 
 def _usable_env_value(name: str) -> str:

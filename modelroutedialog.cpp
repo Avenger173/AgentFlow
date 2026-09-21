@@ -254,7 +254,8 @@ void ModelRouteDialog::updateEditor()
     const int modeIndex = ui->routeModeCombo->findData(route->mode);
     ui->routeModeCombo->setCurrentIndex(modeIndex >= 0 ? modeIndex : 0);
     const QString provider = route->mode == QStringLiteral("configured") ? route->provider : route->resolvedProvider;
-    const bool visualRoute = route->requiredCapabilities.contains(QStringLiteral("visual_generation"));
+    const bool visualRoute = route->requiredCapabilities.contains(QStringLiteral("visual_generation"))
+        || route->requiredCapabilities.contains(QStringLiteral("image_edit"));
     ui->providerCombo->clear();
     for (const ModelProviderInfo &item : providers) {
         if ((visualRoute && item.modelKind == QStringLiteral("image"))
@@ -445,6 +446,8 @@ QString ModelRouteDialog::capabilityLabel(const QStringList &capabilities) const
             labels.append(QStringLiteral("需要 Tool Calls"));
         } else if (capability == QStringLiteral("visual_generation")) {
             labels.append(QStringLiteral("需要视觉生成"));
+        } else if (capability == QStringLiteral("image_edit")) {
+            labels.append(QStringLiteral("需要图片编辑"));
         }
     }
     return labels.isEmpty() ? QStringLiteral("能力要求由后端校验") : labels.join(QStringLiteral(" · "));

@@ -1,7 +1,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 
-from app.api import agents, chat, data_agent, document_agent, harness, health, knowledge, mcp, memories, models, pdf_processing, preferences, tasks, websocket, workflow, workspace
+from app.api import agents, chat, data_agent, document_agent, harness, health, knowledge, mcp, media_agent, memories, models, pdf_processing, preferences, tasks, websocket, workflow, workspace
 from app.core.config import settings
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,18 +9,26 @@ from app.workflow.runtime_jobs import recover_interrupted_runtime_jobs
 from app.database.knowledge_repository import recover_pending_knowledge_base_deletions
 from app.services.knowledge_keyword_index import recover_interrupted_knowledge_index_jobs
 from app.services.conversation_lifecycle import run_configured_conversation_retention
+from app.services.media_export_delivery import recover_interrupted_media_export_tasks
+from app.services.media_edit_delivery import recover_interrupted_media_edit_tasks
 
 
 @asynccontextmanager
 async def _agentflow_lifespan(app: FastAPI):
     """在路由开始接收请求前收束上一进程遗留的 Runtime 检查点。"""
 
+    # 轻量媒体导出不携带 WorkflowPlan，不能由通用 Runtime 恢复器识别；先按其冻结的
+    # manifest task_id 对账，避免服务重启后将已经回读成功的 PNG 永久留在 running。
+    recovered_media_export_task_ids = await asyncio.to_thread(recover_interrupted_media_export_tasks)
+    recovered_media_edit_task_ids = await asyncio.to_thread(recover_interrupted_media_edit_tasks)
     recovered_task_ids = await asyncio.to_thread(recover_interrupted_runtime_jobs)
     recovered_knowledge_job_ids = await asyncio.to_thread(recover_interrupted_knowledge_index_jobs)
     recovered_knowledge_deletion_ids = await asyncio.to_thread(recover_pending_knowledge_base_deletions)
     retention_maintenance = await asyncio.to_thread(run_configured_conversation_retention)
     # 仅保存数量供本进程诊断；客户仍通过任务历史读取每条真实审计事件。
     app.state.recovered_runtime_task_count = len(recovered_task_ids)
+    app.state.recovered_media_export_task_count = len(recovered_media_export_task_ids)
+    app.state.recovered_media_edit_task_count = len(recovered_media_edit_task_ids)
     # 知识库索引同样不能在重启后盲目续跑。K1 先收束为失败并等待显式重试，避免磁盘上半写
     # FTS 或未来 Chroma 目录被误当成已验证 generation。
     app.state.recovered_knowledge_index_job_count = len(recovered_knowledge_job_ids)
@@ -55,6 +63,7 @@ def create_app() -> FastAPI:
     app.include_router(harness.router)
     app.include_router(agents.router)
     app.include_router(data_agent.router)
+    app.include_router(media_agent.router)
     app.include_router(document_agent.router)
     app.include_router(pdf_processing.router)
     app.include_router(models.router)

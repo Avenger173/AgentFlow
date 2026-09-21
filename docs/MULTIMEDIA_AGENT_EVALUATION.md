@@ -1,8 +1,8 @@
 # AgentFlow 多媒体助手评测与验证方案
 
-> 版本：v0.1 | 建立日期：2026-09-16
+> 版本：v1.5 | 建立日期：2026-09-16 | 最近更新：2026-09-21
 >
-> 状态：评测设计已建立；尚未制作本方案的固定夹具、实现专项脚本、运行媒体测试或获得任何通过数据。
+> 状态：G0（AI 模型准入）进行中，L1（本地图像工作区）已完成一条隔离 Qt 主路径验收，仍待全量本地夹具与真实 Windows DPI 验收。`qwen-image-3.0-pro`、Lite Matting 和 SAM 均已把固定公开夹具的真实输出整理为含卡片哈希的 v2 离线独立评审包；Qwen 2.0 与 Edit Max 的对照失败也已保留。Lite/SAM 具备每类 3 样本的运行证据及单样本进程生命周期记录。真实云端超时未知结果、调用方取消，以及成功响应的 request ID/usage 已留证；但三份评审 CSV 仍为空，历史九例仍缺逐例 usage，实际费用仍待供应商延迟监控核对，G0 未通过。G0 不阻断 L1，本地编辑也不因 L1 通过而开放 AI 修图。
 >
 > 配套文件：[开发计划](MULTIMEDIA_AGENT_DEVELOPMENT_PLAN.md)。以下数值是拟定准入目标，不是当前成绩。
 
@@ -37,6 +37,147 @@ E0/E1 通过不代替 E2/E3。某一 Provider 通过不代替其他模型和运�
 
 MM-0 先建 IMAGE/INTENT 图像部分/MEDIA-EDGE 图像部分；MM-4 再补 VIDEO 和对应边界材料；MM-6 补 LOCALIZE。后续集合未建立时不得将对应门槛标为通过。
 
+### 2.1.1 模型 Profile 选型探针
+
+模型 Provider 返回 HTTP 200、能生成一张图片或能输出一段文本都不构成准入。每个候选 Profile 都要建立独立记录，包含模型/权重版本、Provider/端点、许可、输入输出限制、设备或实际费用、超时/重试策略和固定参数。`media_planning`、`media_image_edit`、`media_matting`、`media_segmentation` 在 G0 前必须各有真实探针；`media_transcription`/`media_vision` 在 G4 前补齐；`media_translation`/`media_speech` 在 G6 前补齐。
+
+| 探针编号 | Profile | 最低通过证据 | 失败时的结论 |
+| --- | --- | --- | --- |
+| MODEL-01 | `media_planning` | 20 条冻结图像意图中记录完整计划正确数、schema 失败、错误工具选择和修正次数；工具选择、目标对象、局部/全局范围均正确才算样本通过 | 调整提示/模型或淘汰候选；不得用人工改写后的计划充当模型成绩 |
+| MODEL-02 | `media_image_edit` | 局部消除、换背景、中文文字编辑各至少 3 个真实样本；每次保留源图、蒙版、请求参数、结果图、耗时、费用和失败原文 | 缺少图片输入、结果图、局部控制或可查询失败状态，候选不进入正式开发 |
+| MODEL-03 | `media_matting` / `media_segmentation` | 人像发丝、商品边缘、透明/细小物体、复杂背景均有结果；记录 alpha/蒙版、人工修正次数、设备与峰值资源。通用前景蒙版只可作为技术基线，不能替代任意对象选区或精细抠图成绩 | 质量或资源不适配则更换权重/设备路线，不能把人工画出的最终蒙版记为模型成功 |
+| MODEL-04 | 本地或云端图片路线 | 冷启动、暖运行、取消、缺权重/显存不足；云端另测超时、限流、结果未知查询与用量记录 | 失败路径不准确或可能重复收费时，阻断该 Profile 准入 |
+| MODEL-05 | ASR、VLM、翻译、TTS | 在 G4/G6 按阶段增加时间戳、视觉输入、术语保留、可懂度和时长探针；每项绑定实际模型 ID | 不把另一模型、另一语言或演示页面的宣传迁移为本项目能力 |
+
+### 2.1.2 当前 Qwen Image 探针记录
+
+2026-09-18 已对 `Qwen Image / DashScope · qwen-image-2.0-pro` 执行一次受控真实请求。探针只构造了本地 `1024 x 768` 几何图，并要求“将中心红色圆形改为绿色，其他内容不变”。请求返回 1 张同尺寸 PNG，下载后可由 Pillow 成功回读，中心 RGB 采样由 `(228, 83, 76)` 变为 `(32, 149, 77)`，用时约 18 秒。输入、结果与不含临时签名 URL 的 manifest 存在本机忽略目录 `data/media_evaluations/qwen_image_probe_20260918T020938Z/`。
+
+这只证明模型端点、认证、源图输入、中文编辑指令、结果下载和文件回读能构成闭环，不是 `MODEL-02` 通过。用中心圆外 `180 px` 区域诊断，平均绝对像素差为 `4.499`，单通道差异大于 16 的像素比例约 `1.99%`。因此提示词不能替代有效蒙版，HARD-05 所需的像素级保护尚无证据；局部消除、换背景、中文文字编辑的各 3 个真实样本、失败/未知结果、费用及质量复核均未完成。
+
+### 2.1.3 当前 media_planning 探针记录
+
+`Qwen / DashScope · qwen-plus` 以温度 `0`、最大输出 `640 tokens` 在 20 条冻结中文图片编辑意图上运行。题目覆盖整体提亮/裁剪/旋转/调色、去水印/改字/换背景/抠图/局部修补/打码，以及“修得高级一点”这一必须澄清的模糊请求。判定要求同时满足：Pydantic 契约可解析、scope 正确、要求的工具存在且顺序正确、禁止工具没有出现。
+
+首轮记录 `data/media_evaluations/media_planning_20260918T022215Z/` 为 `19/20`（`95%`）：MP-18 的 scope 与澄清问题正确，但 `clarify.instruction` 为空，按契约失败处理。该失败保留后，提示词增加“澄清步骤 instruction 必须非空”的明确规则；第二轮记录 `data/media_evaluations/media_planning_20260918T022601Z/` 为 `20/20`（`100%`），总耗时约 130 秒。第二轮 manifest 对每条保留测试请求、原始模型 JSON、解析计划、工具判定与耗时；无客户图片或个人材料参与。
+
+`MODEL-01` 在当前冻结集和当前提示词版本下通过，但这只是模型规划 Profile 的准入证据。它不替代 `MODEL-02` 的真实图片编辑、`MODEL-03` 的抠图/分割，或 `MODEL-04` 的超时、限流、取消与未知结果验证。
+
+### 2.1.4 当前 BiRefNet Tiny CPU 前景蒙版探针记录
+
+2026-09-18 从 BiRefNet 官方 GitHub Release `v1` 获取 `BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx`。本机缓存文件为 `224,005,088` bytes，SHA-256 为 `5600024376F572A557870A5EB0AFB1E5961636BEF4E1E22132025467D0F03333`；权重位于忽略目录 `data/media_model_cache/`，不写入 Git，也不会被应用自动下载。运行依赖独立登记在 `backend/requirements-media-worker.txt`，主后端通过可选导入和就绪检查保持可启动。
+
+当前机器只检测到 2GB 显存的 NVIDIA GeForce GT 730，因此没有把完整 BiRefNet 或 SAM 2.1 装入桌面端或主后端。Tiny ONNX 在 `CPUExecutionProvider` 下可加载固定 `1x3x1024x1024` 输入和 `1x1x1024x1024` 输出；程序生成 `960x640` 几何诊断图后得到同尺寸、可由 Pillow 回读的 `L` alpha PNG，实际推理 `13,377 ms`。证据目录为 `data/media_evaluations/birefnet_foreground_mask_20260918T025138Z/`。
+
+随后使用 `prepare_media_evaluation_fixtures.py --execute` 从固定 Wikimedia Commons 文件页建立公开夹具集：CC0 发丝人像、CC BY-SA 4.0 商品场景和公共领域透明玻璃饮料图。每张保存文件来源页、许可证、作者/署名元数据和 SHA-256；`probe_birefnet_public_fixtures.py --execute` 在该集合上输出相同尺寸 alpha，耗时分别为 `13,053 / 11,157 / 11,303 ms`，证据为 `data/media_evaluations/birefnet_public_fixtures_20260918T030044Z/`。
+
+人工复核发现：人像外轮廓可以作为粗前景建议；商品场景只覆盖显著碗/饮料，无法根据用户选择区分多个商品；玻璃和液体区域被近似为不透明，并出现孔洞。基于这一真实夹具筛选，`BiRefNet-general-bb_swin_v1_tiny` 不通过 `media_matting` 或 `media_segmentation` 的候选准入，不注册到模型列表。它仍可保留为离线研究参考，但不能在产品中描述为抠图或选区能力；`MODEL-03`、`MODEL-04` 和 G0 仍未通过。
+
+### 2.1.5 当前 BiRefNet Lite Matting CPU 探针
+
+2026-09-18 从 BiRefNet 官方 GitHub Release `v1` 获取 `BiRefNet_lite-matting-epoch_110.pth`。缓存文件为 `88,931,642` bytes，SHA-256 为 `30D504B91664E42387F8980E5EFC6927C26E67733C0E7278D03E91C5C65182C3`；权重、官方源码 tag `v1` 与 CPU PyTorch 环境均置于忽略目录，应用启动不会下载权重，也没有把 PyTorch 加入 FastAPI 默认依赖。
+
+探针以源码的 `swin_v1_t` 轻量骨干加载该权重。加载前核对 586 个参数键，结果为缺失 `0`、多余 `0`、形状不一致 `0`；在本机 CPU 以固定 `1024 x 1024` 输入，对同一组来源和 SHA-256 均已固定的三张公开夹具执行。输出 alpha PNG 和 RGBA 抠图均由 Pillow 回读，证据目录为 `data/media_evaluations/birefnet_lite_matting_20260918T063431Z/`。
+
+| 夹具 | 本机推理耗时 | 人工复核 |
+| --- | ---: | --- |
+| CC0 发丝人像 | `18,408.586 ms` | 发丝和外轮廓保留明显优于通用 Tiny，适合作为自动抠图候选 |
+| CC BY-SA 4.0 商品场景 | `19,676.908 ms` | 能保留碗、饮料和餐具的边缘，但会同时选择多个显著对象，不能理解“只选其中一个” |
+| 公共领域透明玻璃饮料 | `20,711.838 ms` | 杯壁、液体与细节产生连续 alpha，显著优于 Tiny 的近似不透明和孔洞结果 |
+
+扩展探针使用 v2 公开夹具（人像、商品、透明物体各 3 张），9 张均完成来源哈希校验、alpha/RGBA 输出回读，耗时如下：
+
+| 类别 | 样本数 | 单张范围 | 均值 | 证据 |
+| --- | ---: | ---: | ---: | --- |
+| 人像 | 3 | `19,429.817–22,503.610 ms` | `21,293.776 ms` | `birefnet_lite_matting_20260918T072222Z/` |
+| 商品 | 3 | `22,215.777–23,350.958 ms` | `22,850.577 ms` | 同上 |
+| 透明物体 | 3 | `21,523.459–23,383.036 ms` | `22,315.679 ms` | 同上 |
+
+该 manifest 将全部样本标为 `pending_human_review`，因此这些数据只证明可重复运行、完整输出和样本覆盖，不构成视觉质量成绩。该候选仍缺两名评审中的至少一名非实现者的独立复核，以及冷启动/暖运行、取消、缺权重和资源上限探针。约 19–23 秒的 CPU 单图耗时也意味着未来只能作为显式提交的后台 worker，不能充当界面拖动时的实时选区。它只保留为 `media_matting` 候选，不得登记为任意对象 `media_segmentation` 或用户可选模型，`MODEL-03` 尚未通过。
+
+`prepare_local_mask_review_packet.py --execute` 已逐项核验 v2 夹具哈希、Lite Matting 模型 ID、九个 alpha 文件及尺寸，并生成 `data/media_evaluations/lite_matting_review_packet_20260920T034155Z/`。每张卡并排展示原图、真实 alpha 与棋盘背景边缘预览，manifest 冻结每张卡、源图和 alpha 的 SHA-256，`review.csv` 预留非实现者的 `reviewer_id`、`accept/reject/needs_revision` 和原因。该包的透明物体卡能直接查看玻璃、液体及高光连续性；`verify_media_review_packet.py` 已验证其卡片未被替换、CSV 与九个冻结案例一致，但九行均未填写，状态为 `incomplete`。在独立结论填写前不改变 `MODEL-03` 状态。
+
+### 2.1.6 当前 SAM 2.1 Tiny CPU 选区探针
+
+2026-09-18 从官方 `facebookresearch/sam2` 仓库 commit `2b90b9f5ceec907a1c18123530e92e794ad901a4` 建立隔离探针。仓库许可为 Apache-2.0；`sam2.1_hiera_tiny.pt` 权重为 `156,008,466` bytes，SHA-256 `7402E0D864FA82708A20FBD15BC84245C2F26DFF0EB43A4B5B93452DEB34BE69`。当前 Windows CPU 可加载 `38,962,498` 参数模型，加载约 `1.1 s`；没有将其加入 Qt 或 FastAPI 默认进程。
+
+`probe_sam2_hiera_tiny.py --execute` 对同一公开夹具集使用预冻结的框与正点，保存提示坐标、模型内部预测分数、二值蒙版和 RGBA 预览，并回读全部输出。最新证据为 `data/media_evaluations/sam2_hiera_tiny_20260918T065101Z/`。
+
+| 夹具 | 首次图像编码 | 同图框选/正点解码 | 人工复核 |
+| --- | ---: | ---: | --- |
+| CC0 发丝人像 | `1,982.665 ms` | `126.134 ms` | 主体轮廓可选，但不是发丝级 Alpha |
+| CC BY-SA 4.0 商品场景 | `2,057.251 ms` | `80.564 ms` | 预冻结提示能单独选中饮料，而非整张商品场景 |
+| 公共领域透明玻璃饮料 | `1,888.422 ms` | `96.649 ms` | 玻璃杯和饮料整体被选中，但输出是二值蒙版，不能表示透明度 |
+
+扩展探针使用相同 v2 夹具和预冻结的“框选 + 正点”提示，9 张均完成来源哈希校验、二值蒙版/RGBA 预览回读：
+
+| 类别 | 样本数 | 首次编码范围 / 均值 | 单次提示范围 / 均值 | 说明 |
+| --- | ---: | ---: | ---: | --- |
+| 人像 | 3 | `2,002.162–2,110.112 / 2,050.290 ms` | `75.912–138.784 / 106.278 ms` | 二值选区，不代表发丝 alpha |
+| 商品 | 3 | `1,824.777–2,082.335 / 1,960.981 ms` | `79.819–95.217 / 88.270 ms` | 固定提示下可形成对象候选 |
+| 透明物体 | 3 | `1,830.468–1,946.675 / 1,905.085 ms` | `86.095–96.630 / 92.867 ms` | 二值选区不表示透明度；细薄结构需进一步复核 |
+
+证据目录为 `data/media_evaluations/sam2_hiera_tiny_20260918T072639Z/`。模型给出的 `best_iou_score` 范围为 `0.8769–0.9776`，它只是内部预测分数，不能作为人工 IoU 或产品质量指标。样本覆盖已完成，但只验证了单次正向提示；复杂背景、视频传播和质量独立复核仍未完成。因此它只保留为 `media_segmentation` 候选，不能单独宣布 `MODEL-03` 通过，也不能替代 Lite Matting 的连续 alpha。
+
+`probe_sam2_interaction.py --execute` 在同一 v2 夹具的 `MM0-PRODUCT-02` 上执行冻结的两轮交互：首轮为框 `[180, 140, 1150, 900]` 与正点 `[700, 500]`，第二轮追加白色背景负点 `[1050, 850]`，并将首轮的低分辨率 logits 作为 `mask_input` 复用。图像只编码一次（`3,467.403 ms`）；首轮/第二轮提示为 `178.855 / 141.870 ms`，两个结果均完成尺寸和 PNG 回读，蒙版有 `10,765` 个像素变化。证据目录为 `data/media_evaluations/sam2_interaction_20260920T021753Z/`。
+
+该负点在初始和修正后的 mask 中均不属于已选区域，说明它不是“用负点删掉一块已误选前景”的成功案例；它仅证明同一编码上的多轮提示及 logits 复用路径可执行。物体边界是否更准确、用户需要多少次修正、透明细节和其它类别的负点行为，仍必须由独立质量复核决定。
+
+为避免将无效负点当成用户修正，`probe_sam2_negative_point_matrix.py --execute` 对人像 `MM0-PERSON-01`、商品 `MM0-PRODUCT-01`、透明物体 `MM0-TRANSPARENT-01` 各执行一组冻结的“框选 + 正点 -> 选区内部负点”流程。三例图像均只编码一次，负点初始均在选区内，追加负点并复用首轮 logits 后均不再被选中；蒙版变化像素分别为 `73,050 / 28,795 / 868,601`，首轮编码为 `3,075.005 / 1,899.595 / 1,804.182 ms`，二次提示为 `70.087 / 75.732 / 69.839 ms`。原始 mask、RGBA 预览和 manifest 位于 `data/media_evaluations/sam2_negative_point_matrix_20260920T031920Z/`。
+
+这证明三类样本上的有效负点可以在同一图像编码内改变二值选区；它不证明变化边界符合人的意图，也不证明发丝 alpha、透明边缘或任意对象选择质量。因此 `MODEL-03` 与 G0 仍必须等待独立视觉复核，不能因“点被取消选择”标记通过。
+
+同一脚本也为 SAM v2 九例逐项核验来源、模型 ID、二值 mask 和尺寸，生成 `data/media_evaluations/sam2_selection_review_packet_20260920T034156Z/`。卡片展示原图、真实二值 mask 与棋盘背景预览，manifest 同样冻结卡片、源图和 mask 哈希。商品样本中“只选中饮料杯而非整个场景”等现象会直接呈现给评审者，而不会被内部 `best_iou_score` 遮蔽；校验器确认卡片和 CSV 完整性，但九行均未填结论，不构成 `MODEL-03` 通过。
+
+### 2.1.7 当前 Qwen Image 公开夹具质量与失败探针
+
+首轮 `qwen-image-2.0-pro` 在冻结公开夹具上完成换背景、移除玻璃杯和中文价格数字改字各一例。三个请求均返回同尺寸 PNG，耗时约 `28.8 s`、`22.8 s` 和 `23.8 s`；原始输入、模型返回、本地蒙版、合成输出、请求 ID 摘要及复核模板均在 `data/media_evaluations/qwen_image_quality_20260918T061023Z/`，不含带签名的临时 URL。
+
+人工复核结论如下：
+
+- 换背景：背景目标完成，但模型把原灰度人物改为彩色，直接交付失败；使用人像 alpha 将结果只合成到背景后能保留人物，说明保护架构成立，但该 alpha 模型未通过通用抠图准入。
+- 移除玻璃杯：原始结果移除目标成功，但硬保护区 `934,855` 像素中有 `934,791` 像素变化，说明提示词不能保证局部性。以人工固定选区合成后，硬保护区为 `0` 像素变化；`14 px` 羽化降低了拼接边界。该结果只有 1 个公开样本，不能外推为产品成功率。
+- 中文数字改字：原始结果将 `99` 改为 `129`，但仍改变画面其它区域；局部合成后标签文字和画面视觉可接受，且硬保护区为 `0` 像素变化。它是“受控局部文字改图”可行性的 1 个样本，不是文字编辑功能验收通过。
+
+`probe_qwen_image_failure.py --execute` 使用程序生成图片和不存在的模型 ID，得到 `HTTP 400`、`InvalidParameter`、`Model not exist`。错误被安全分类为 `QwenImageEditProviderError`，没有生成图片；证据位于 `data/media_evaluations/qwen_image_failure_20260918T061713Z/`。这只覆盖一种确定的 Provider 4xx，超时、限流、取消和未知结果查询仍是 `MODEL-04` 的未完成项。
+
+随后固定为 9 个 v2 公开样本：换背景、局部移除、中文数字改字各 3 例。`qwen-image-2.0-pro` 首次运行只完成 4 例，5 例返回 `HTTP 429 / Throttling.RateQuota`；使用 `--case-id` 和 `35 s` 请求起点间隔只恢复失败项后完成 9 例。开发者复核认为其换背景和中文改字可作为对照，但 3 个移除结果存在残留或不自然补全，故不选择为默认候选。证据为 `data/media_evaluations/qwen_image_quality_20260918T073802Z/` 与 `data/media_evaluations/qwen_image_quality_20260918T074143Z/`。
+
+`qwen-image-edit-max` 在 3 个移除样本上的对照也被保留。玻璃杯移除可接受；最初两例贴纸结果的红边残留最终定位为本地合成蒙版未覆盖羽化边缘，而不是可直接归因于模型。探针为贴纸选区加入 `24 px` 预扩张，并通过 `--recompose-provider-run` 在不再请求 Provider 的情况下验证修复；其中一例仍因模型补全背景与原图不连续而不通过开发者初检。该模型不设为默认候选，证据为 `data/media_evaluations/qwen_image_quality_20260918T074743Z/`、`qwen_image_quality_20260918T075129Z/` 和 `qwen_image_recompose_20260918T075754Z/`。
+
+`qwen-image-3.0-pro` 使用相同 9 个 v2 样本完成 9 次真实调用，其中第 6 例证据为 `data/media_evaluations/qwen_image_quality_20260918T080123Z/`，其余 8 例为 `data/media_evaluations/qwen_image_quality_20260918T080307Z/`。全部返回同尺寸 PNG，端到端耗时 `21.023–33.507 s`，均值 `25.776 s`；每例均保存输入哈希、原始 Provider 输出、蒙版、局部合成结果和请求 ID 摘要。9 例合成后的硬保护区均为 `0` 个变更像素。开发者初检确认 3 例局部移除和 3 例中文数字改字均完成目标；3 例换背景完成背景替换。第二个人像样本的硬保护区仅 `7,021` 像素，原因是自动 alpha 未达到 255 的边缘不属于硬保护区，因此该检查不能声称整个人物逐像素未改。
+
+据此，代码中 `media_image_edit` 的默认候选改为 `qwen-image-3.0-pro`，但所有记录仍是 `completed_pending_review`。`MODEL-02` 还需要至少一名非实现者按相同复核项独立评分；`MODEL-04` 还需要云端超时、取消、未知结果查询、用量/费用记录等失败路径证据。因此模型路线仍不能向用户开放，G0 未通过。
+
+为避免独立复核变成阅读 JSON 或相信开发者口述，`prepare_qwen_image_review_packet.py --execute` 已从上述两批 Qwen 3.0 Pro 原始运行记录生成 9 张并排评审卡：每张固定展示源图、实际局部合成结果与编辑范围，并在 `review.csv` 中预留 `reviewer_id`、`accept/reject/needs_revision`、`note`。v2 证据目录为 `data/media_evaluations/qwen_image_review_packet_20260920T034154Z/`；manifest 冻结每张评审卡的 SHA-256 和对应输入哈希。校验器已确认卡片未替换、CSV 精确对应九个案例，当前九行均为空，故状态为 `incomplete`。评审者必须不是实现者，未填前不改变 `MODEL-02` 或 G0 状态。
+
+`verify_media_review_packet.py` 是只读校验器：只接受 v2 包，回读每张 RGB PNG、核验 manifest 中的卡片哈希、检查 CSV 案例集合、判定词及拒绝/待修项说明；`--require-complete` 会在任何一行未填写时以非零退出。即使全部为 `accept`，它也只输出 `quality_gate_candidate=true`，不能验证评审者身份、更不能自动宣布 G0 通过；费用核对和最终验收仍须单独完成。
+
+为使真实失败测试接入前的行为可预测，`verify_qwen_image_edit_provider.py` 以 MockTransport 覆盖了明确拒绝 `400`、限流 `429`、服务端 `503`、提交超时、连接中断和调用方取消：明确 4xx 的结果状态为 `rejected`；429 提供受控等待提示；提交超时、连接中断和 5xx 的结果状态为 `unknown`，适配器禁止自动重发；取消必须原样抛回调用方。该离线契约防止后续 Runtime 把不确定结果当作“安全失败”，但不替代真实 Provider 的超时、取消和未知结果查询验收。
+
+`probe_qwen_image_unknown_outcome.py --execute` 已执行一次真实云端超时探针：内存中生成 `512x512` PNG，固定 `qwen-image-3.0-pro`，客户端总等待阈值 `1.0 s`。调用约 `3,289.228 ms` 后得到 `QwenImageEditOutcomeUnknownError / request_timeout`；记录为 `outcome=unknown`、`safe_to_retry_automatically=false`，不下载结果 URL、不重发、不落盘输入图。证据目录为 `data/media_evaluations/qwen_image_unknown_outcome_20260920T030712Z/`。
+
+该记录证明真实网络超时会进入“未知结果”而非自动重试路径，却不能证明 Provider 未执行请求。同步端点未返回可查询的提交 ID，探针也不能读取账号账单，因此费用状态明确为 unknown。
+
+适配器此前只识别旧协议的 `image_count/width/height`，会遗漏 Qwen 3.0 的 `input_image_count`、`output_image_count`、`input_image_type`、`output_image_type`、`output_width`、`output_height`，现已兼容两种返回形式，并在正文缺少 ID 时回退读取 `x-request-id` 响应头。离线契约覆盖这两类字段后，`probe_qwen_image_edit.py --execute` 发起一次 `1024x768` 合成图编辑真实请求，返回 `request_id=82783279-a589-917e-812c-e9e013453ffb`、输入/输出各 1 张、`qima_input_1k/qima_output_1k`、输出 `1024x768`，图片下载和回读成功；证据位于 `data/media_evaluations/qwen_image_probe_20260920T032540Z/`。
+
+该成功请求的 manifest 将 Provider usage 与 request ID 一起存档，但金额明确标为 unknown：官方说明监控指标在调用完成约一小时后按 Provider 侧聚合可见，API 响应并不返回逐请求账单金额。历史九例因旧适配器遗漏 Qwen 3.0 usage，不能回填或伪造费用；后续应按相同 request ID、模型、输出档位和时间窗在供应商侧监控中核对，或在有正式账单导出能力时做账户级 reconciliation。故这一步补齐遥测链路，不改变 `MODEL-02`、`MODEL-04` 或 G0 状态。
+
+同一脚本以 `--mode cancel --execute` 又提交一次独立的合成 `512x512` 图请求，并在 `1.0 s` 后取消本地等待；约 `2,673.235 ms` 后调用方收到 `asyncio.CancelledError`，记录为 `caller_status=cancelled`、`safe_to_retry_automatically=false`，同样没有下载结果或重发。证据目录为 `data/media_evaluations/qwen_image_unknown_outcome_20260920T030953Z/`。这证明本地任务可以停止继续等待，但远端是否执行和费用依然为 unknown。真实 Provider 侧用量/费用关联记录仍未完成，`MODEL-04` 不通过。
+
+### 2.1.8 本地 Matting / Segmentation worker 生命周期探针
+
+`probe_local_media_worker_resilience.py --execute` 从主后端虚拟环境启动已有的隔离 PyTorch worker，主进程只用 `psutil` 采样子进程树 RSS，不导入 Torch、SAM 或 BiRefNet。固定使用 v2 夹具 `MM0-PERSON-01`，同一模型进程执行两次推理以分别记录加载、首次和同进程重复推理耗时；另对不存在权重路径和“结果已在内存、尚未写入任何 artifact”的暂停点执行失败/终止测试。
+
+| Worker | 模型加载 | 首次 / 同进程重复推理 | 峰值 RSS | 缺权重 | 提交前终止 |
+| --- | ---: | ---: | ---: | --- | --- |
+| Lite Matting | `37,394.204 ms` | `12,259.163 / 14,905.433 ms` | `2,835,820,544 bytes`，约 `2.64 GiB` | `534.713 ms` 非零退出，未创建输出目录 | 在 `result_ready_before_commit` 终止，峰值约 `2.63 GiB`，无 PNG/manifest |
+| SAM 2.1 Tiny | `6,528.623 ms` | `2,821.432 / 1,808.383 ms` | `1,092,730,880 bytes`，约 `1.02 GiB` | `291.489 ms` 非零退出，未创建输出目录 | 在 `result_ready_before_commit` 终止，峰值约 `0.95 GiB`，无 PNG/manifest |
+
+完整 manifest 位于 `data/media_evaluations/local_media_worker_resilience_20260920T020649Z/`。两条测试均在监督完成后确认没有残留 Python 进程。该样本表明两种候选均必须单独运行并限制并发，尤其 Lite Matting 的 `2.64 GiB` RSS 不适合驻留 FastAPI 或 Qt。Lite 的第二次推理反而慢于第一次，不能宣传暖运行会加速。
+
+这不是正式 worker 的协作取消成绩：父进程是在测试钩子处强制终止子进程，以确认尚未提交的内存结果不会变成半成品 artifact。推理执行期间的协作取消、任务 checkpoint、用户可见状态和并发队列仍属于 MM-3。它也不改变 Lite/SAM 的 `pending_human_review` 状态，不替代 SAM 负点/多轮修正与透明细节质量验收。
+
 ### 2.2 每个用例的清单字段
 
 | 字段 | 含义 |
@@ -49,7 +190,7 @@ MM-0 先建 IMAGE/INTENT 图像部分/MEDIA-EDGE 图像部分；MM-4 再补 VIDE
 | checks / tier / applicable_profiles | 检查编号、E0-E3 层级、适用 CPU/GPU/Provider 档案 |
 | limits | 最大调用次数、生成次数、任务超时、预算及允许修正次数 |
 
-拟维护位置为 `backend/tests/fixtures/media/manifest.json` 和对应小型非敏感夹具；真实照片/视频在测试专用目录，通过环境变量指定，不直接提交 Git。该目录和 manifest 当前尚未创建。报告中只保留 case_id、指标和测试产物引用，脱敏后才能对外发布。
+公开图片夹具当前由 `prepare_media_evaluation_fixtures.py --execute` 生成至忽略目录 `data/media_evaluation_fixtures/<run_id>/`，其中 manifest 记录文件页、许可证、作者/署名元数据和哈希；真实客户照片/视频仍仅允许在测试专用目录通过显式路径或环境变量指定，不直接提交 Git。报告中只保留 case_id、指标和测试产物引用，脱敏后才能对外发布。
 
 ## 3. 自然口语用例与可观察结果
 
@@ -187,11 +328,19 @@ CER/WER 使用编辑距离定义，报告替换、删除、插入及参考长度
 
 ## 8. 阶段门槛映射
 
+### 8.0 门槛依赖修正（2026-09-21）
+
+原先把 G0 写成 G1 的正式前置，会让云模型质量、独立评审和供应商费用核对阻断完全不调用模型的本地图像工程。这是错误依赖，现调整为两条独立轨道：
+
+- `G0`：AI 模型准入，只决定是否能把图片、蒙版和提示发送给模型并对用户开放 AI 修图。
+- `L1`：本地图像工作区准入，只验证受控导入、不可覆盖修订、图层/蒙版、历史、导出、恢复和 Qt 用户流程；它不调用云模型，也不要求模型质量或费用证据。
+- `G2` 及之后的 AI 图片能力必须同时满足 `G0 + L1`。此前的 `G1` 编号停止使用，避免把本地工程和模型准入混为一个门槛。
+
 | 门槛 | 对应阶段 | required 检查与证据 | 不通过时 |
 | --- | --- | --- | --- |
-| G0 | MM-0 | IMAGE 清单和拆分冻结；依赖/模型许可与版本记录；选定图片 profile 和硬件/费用上限；少量真实编辑可行性证据 | 调整候选，不进入正式图片工具开发 |
-| G1 | MM-1 | E0/E1 图片适用 HARD-01 至 HARD-08、HARD-13/15；保存再打开、蒙版与撤销真实图像夹具 | 修复图片工程，不能用 AI 生成掩盖底层错误 |
-| G2 | MM-2 | 图像全部适用 HARD；QUAL-01/02/03；真实 Provider 多轮、选区、版本冲突证据 | 能力保持实验，保留失败用例，不开启正式路由 |
+| G0（AI 模型准入） | MM-0 | IMAGE 清单和拆分冻结；依赖/模型许可与版本记录；`MODEL-01` 至 `MODEL-04` 的原始证据；选定图片 profile 和硬件/费用上限；少量真实编辑可行性证据 | 调整候选；不开放 AI 修图，不阻断 L1 本地工程验收 |
+| L1（本地工作区准入） | MM-1 | E0/E1 图片适用 HARD-01 至 HARD-08、HARD-13/15；保存再打开、蒙版/图层/撤销真实图像夹具；真实 Qt 全流程和 DPI 证据 | 修复图片工程，不能用 AI 生成掩盖底层错误 |
+| G2 | MM-2 | 前置 `G0 + L1`；图像全部适用 HARD；QUAL-01/02/03；真实 Provider 多轮、选区、版本冲突证据 | 能力保持实验，保留失败用例，不开启正式路由 |
 | G3 | MM-3 | G2 保持；图片 E3、FAIL 适用项、PERF 全部适用项、人工对照价值目标、原功能回归 | 图片不能标正式交付；视频功能尚不开放 |
 | G4 | MM-4 | VIDEO/LOCALIZE 计划与视频边界夹具；视频 profile 冻结；HARD-06/16、QUAL-06/07 的基础验证 | 不进入自然语言自动剪辑 |
 | G5 | MM-5 | 视频全部适用 HARD；QUAL-01/04/05/06/07；VID 客户流程、性能、价值对照与恢复 | 剪辑保持实验；不把简单切片工具描述为智能剪辑 |
@@ -247,10 +396,35 @@ required 的 skip/not_run 均阻断通过。某项确实不适用时，必须在
 
 | 阶段门槛 | 当前结果 | 原因 |
 | --- | --- | --- |
-| G0 | 未运行 | 仅建立规划与评测文件，尚未冻结实际模型/素材/预算 |
-| G1-G3 | 未运行 | 图片工程和真实 AI 编辑尚未实现 |
+| G0（AI 模型准入） | 进行中，未通过 | `MODEL-01` 已通过当前 20 条冻结意图集；Qwen 3.0 Pro 已完成三类各 3 个公开样本，合成后的硬保护均通过，且 Qwen 2.0 的限流与 Edit Max 的对照失败均已留证。Lite Matting 与 SAM 2.1 Tiny 均已完成三类各 3 张运行/产物回读和单样本进程生命周期证据；SAM 另完成 1 例同编码正/负点交互记录，但所有视觉质量仍待独立复核。`MODEL-02` 缺独立复核；`MODEL-04` 已有真实限流、超时未知结果和调用方取消，但仍缺可关联请求的用量费用证据 |
+| L1（本地工作区准入） | 进行中，不受 G0 阻断 | 图片工作区已具备项目内副本、不可覆盖 PNG 修订、调色/裁剪/缩放/蒙版、持久化撤销重做和导出回读；裁剪与蒙版可在 Qt 画布拖拽框选并回写原图像素参数。manifest v7 为每个修订保存不可变的图层栈快照和组合根版本；图层可见性与顺序调整会通过 `recompose_raster_layers` 生成下一份 PNG 修订，旧版本不会被改写。修订与导出各自记录 Runtime task_id；确定性编辑和 PNG 导出均写入 WorkflowRun、事件、步骤和工具调用，编辑修订或导出文件只有通过哈希与 PNG 回读后才能在重启时对账完成，无有效结果则失败且不自动重跑。API 回归覆盖图层读取、异步重组、编辑任务完成、冲突、取消、导出任务和任务详情；Qt 已完成隔离真实主路径、Debug 构建和 CTest。剩余项是 L1 全量夹具、真实 Windows DPI 流程与人工边界复核，不需要模型质量或费用证据。 |
+| G2-G3 | 未运行 | 真实 AI 编辑闭环仍需 `G0 + L1`，图片发布准入尚未实现 |
 | G4-G5 | 未运行 | 视频基础与对话式剪辑尚未实现 |
 | G6 | 未运行 | 视频翻译配音尚未实现 |
 | G7/GX | 未运行 | 主线整合和可选扩展尚未实施 |
 
-本轮文档检查仅覆盖链接、编号对应、编码、Markdown 结构与改动范围，不等于媒体功能测试。下一步先执行 MM-0/G0，建立真实而可重复的基线。
+### 10.1 MM-1 并行基础记录（2026-09-21）
+
+为避免独立评审和供应商账单核对阻塞不依赖模型的工程工作，本轮只并行实现了图片工作区的最小后端底座：
+
+- `backend/app/services/media_workspace.py` 与 `backend/app/database/media_workspace_repository.py`：项目内原件副本、不可覆盖的 PNG 修订版本、旋转/镜像/灰度和参数化调色/裁剪/缩放白名单操作、矩形透明蒙版、栅格图层叠加和导出文件原子写入与 Pillow 回读校验。蒙版是版本绑定的 `L` 模式 PNG，保存选区参数、父修订、文件哈希和尺寸；应用时与当前 Alpha 相乘，选区外透明而不会抹掉已有透明度。栅格图层固定来源素材/修订、位置与不透明度；manifest v7 在每个组合修订中保存底图和完整图层栈快照。勾选可见性或重排图层时，从冻结底图和冻结来源版本重渲染下一份 PNG，旧修订的像素与图层状态都保持不变。每个修订保存父版本、规范化参数、尺寸和 SHA-256；调色保留 alpha，裁剪检查当前图像边界，缩放限制目标像素总量。项目、素材、修订、蒙版、图层、导出和历史事件元数据作为一个校验过的 SQLite 快照保存，二进制文件始终在受控目录；旧 v1-v6 JSON manifest 首次读取时验证、迁入 SQLite 后改名留档。创建编辑及历史导航均在项目写锁内校验调用方提交的 `base_revision_id`，当前版本已变化则拒绝提交。
+- `backend/app/api/media_agent.py`、`backend/app/services/media_edit_delivery.py` 与 `backend/app/services/media_export_delivery.py`：项目、导入、版本、撤销/重做、预览、导出和下载接口；确定性编辑和 PNG 导出均通过异步受理/结果接口复用 `WorkflowRun`、事件流、步骤与工具调用，而不是单独维护媒体任务表。修订或复制完成后先以 Pillow 回读验证；编辑任务以 revision task_id 对账，导出任务再登记受控 `media_exports` Artifact。编辑仅能在工具开始前取消，避免“已写入修订却显示已取消”的矛盾。请求只接收 Base64 字节和文件名，拒绝本机路径输入或路径穿越。Pydantic 为每种编辑操作校验参数组合，非法空调色、缺失裁剪参数和超限尺寸返回 `422`；操作缺少或携带错误版本不再静默套用后端最新版本，过期版本由服务层返回 HTTP `409`。
+- `backend/scripts/verify_media_workspace.py`：验证新项目不产生活动 JSON manifest、v1 JSON 工作区迁入 SQLite v6 并留档、源图哈希不变、调色 -> 缩放 -> 裁剪 -> 旋转 -> 灰度的版本链、alpha 保留、参数审计、撤销/重做、分支后清空重做、导出文件回读、路径边界和项目重开；矩形蒙版夹具检查二值 PNG 尺寸和像素、修订引用以及选区外透明/选区内 Alpha 不变，并覆盖蒙版撤销重做。栅格图层夹具检查来源修订冻结、目标区域像素合成和来源后续修改不回写旧成品。另注入 SQLite 写入失败，确认新项目目录、未登记导入、未登记修订和未登记导出都会被回收。该夹具只覆盖可捕获异常后的补偿，进程崩溃窗口仍待 HARD-08 验证。
+- `backend/scripts/verify_media_workspace_api.py`：通过 FastAPI 验证项目创建、导入、参数化修订、矩形蒙版和栅格图层预览、撤销/重做、导出、下载及非法参数的 `422` 状态码；异步编辑会验证统一任务终态、步骤输出、工具调用、冲突和入队后取消不生成修订，异步 PNG 导出还会验证隐藏绝对路径的 Artifact、工具调用以及取消清理。
+- `backend/scripts/verify_media_edit_recovery.py` 与 `backend/scripts/verify_media_export_recovery.py`：分别模拟修订或导出文件/manifest 已提交、但 Runtime 终态尚未落库的进程中断；启动对账只能在 SHA-256 和 PNG 回读有效时补齐完成态，没有验证结果的 pending 任务收束为失败而不自动重跑。
+- `mediaworkspacedialog.{h,cpp}`、`mediaimagecanvas.{h,cpp}`、`backendclient.{h,cpp}` 与 `mainwindow.cpp`：从“视觉工作室”进入独立 Qt 工作区；通过本机 HTTP API 完成项目/素材/修订/历史导航/预览/导出，客户端不提交绝对路径。裁剪和蒙版用画布拖拽矩形，按实际图片显示区域换算为原图像素，并与可见步进控件双向同步；确定性编辑和 PNG 导出都会先创建 Runtime 任务、轮询已验证终态，再刷新修订链或以 `QSaveFile` 原子落盘。编辑运行期间锁定项目、素材和版本选择，避免异步结果落入已经切换的界面上下文。撤销/重做是带提示的图标按钮，历史版本只允许预览/导出，避免其被错误编辑为后端当前版本。收到版本冲突的 HTTP `409` 后，客户端自动重新拉取项目与修订链，选中最新版本并提示用户重试。
+- Qt Debug 构建和 CTest：`cmake --build build/codex-debug --parallel 4`、`ctest --test-dir build/codex-debug --output-on-failure` 在 MSVC x64 开发环境通过；正常 Windows 平台下应用稳定运行 5 秒，结束后端口 `8765` 无遗留监听。
+
+四份后端脚本均已在隔离临时目录通过；`verify_media_workspace.py` 用同一 `base_revision_id` 并发提交两次编辑，断言恰有一次成功、一次冲突，`verify_media_workspace_api.py` 覆盖异步编辑的任务终态/冲突/取消、图层读取与重组以及 PNG 导出 Artifact，`verify_media_edit_recovery.py`、`verify_media_export_recovery.py` 分别覆盖已提交修订/输出的启动对账与无结果时不重跑。Qt 当前只有构建和基本启动证据，尚未形成真实素材的窗口操作、导出回读和 DPI 截图证据。它们只覆盖 E0/E1 的局部工程约束，不评定主观质量、不调用云模型，也不替代 L1 所需的 Qt 流程和回归证据，更不替代 G0 的模型质量与费用证据。
+
+本轮文档检查仅覆盖链接、编号对应、编码、Markdown 结构与改动范围，不等于媒体功能测试。MM-0/G0 继续收集真实而可重复的模型基线；MM-1 的纯本地工程项可并行推进，但不能提前改变发布状态。
+
+### 10.2 L1 隔离 Qt 主路径记录（2026-09-21）
+
+本次使用 `AGENTFLOW_DATA_DIR=data/media_evaluations/l1_gui_20260921T162348/` 启动独立桌面实例，不读取或修改用户工作目录。为使桌面验收可复现，客户端仅在设置 `AGENTFLOW_TEST_FORCE_QT_FILE_DIALOGS=1` 时使用 Qt 自身的文件对话框；该变量未设置时仍保持 Windows 原生文件选择框。该开关只改变对话框实现，不改变导入、编辑、历史或导出的业务接口。
+
+固定输入为已有的 `qwen_image_probe_20260920T032540Z/input.png`（`1024 x 768`）。通过实际 Qt 界面创建项目、导入图片、执行“右转”、撤销、重做并导出 PNG。修订列表接口返回 `import -> rotate_right`，当前修订尺寸从 `1024 x 768` 变为 `768 x 1024`；撤销后当前修订回到原图且 `redo_available=true`，重做后回到右转修订且 `undo_available=true`。界面导出的 `artifacts/l1-ui-export.png` 实际落盘为 `6,143 bytes`，Pillow 回读为 `PNG / RGB / 768 x 1024`。导入、编辑和导出后的窗口截图分别保存在同一隔离目录的 `artifacts/` 下，截图可见素材、修订链、预览以及“已导出 PNG”状态。
+
+这条记录证明桌面主路径完成了真实后端调用和文件交付，不把 API 单测或截图当成功结论。它仍只有一个确定性夹具和当前默认缩放：L1 不得标记通过，直到完成本地图像全量夹具、图层/蒙版的真实 Qt 操作、跨重启恢复，以及实际 Windows `100% / 150% / 200%` DPI 的完整窗口流程与截图复核。
+
+同日使用 `QT_SCALE_FACTOR=1.5` 和 `2.0` 做布局诊断时，发现原始 `1160 x 740` 初始化会在高缩放下挤入任务栏区域。工作区现按屏幕可用尺寸初始化，紧凑高度下收窄间距、允许左侧素材/版本面板独立滚动，并降低预览画布的最小尺寸；探针中关键项目、导入、编辑和导出控件均可见且无重叠。该环境下 Qt 对显式缩放变量与 Windows 任务栏工作区的几何报告不一致，因此这组结果只用于发现并修复响应式问题，不能替代真实系统缩放的 L1 通过证据。

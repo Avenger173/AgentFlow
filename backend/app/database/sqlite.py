@@ -1429,6 +1429,26 @@ def _apply_langgraph_composition_trial_authorizations_v1(connection: sqlite3.Con
         ON langgraph_composition_trial_authorizations(status, updated_at DESC, runtime_task_id DESC);
         """
     )
+def _apply_media_workspace_projects_v1(connection: sqlite3.Connection) -> None:
+    """Persist controlled image-project metadata without storing image bytes in SQLite."""
+
+    connection.executescript(
+        """
+        CREATE TABLE media_workspace_projects (
+            project_id TEXT PRIMARY KEY,
+            schema_version INTEGER NOT NULL CHECK (schema_version >= 1),
+            title TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            manifest_json TEXT NOT NULL
+        );
+
+        CREATE INDEX idx_media_workspace_projects_updated
+        ON media_workspace_projects(updated_at DESC, created_at DESC, project_id DESC);
+        """
+    )
+
+
 _SCHEMA_MIGRATIONS: tuple[_SchemaMigration, ...] = (
     _SchemaMigration(
         migration_id="20260821_knowledge_foundation_v1",
@@ -1587,5 +1607,13 @@ _SCHEMA_MIGRATIONS: tuple[_SchemaMigration, ...] = (
             "no_customer_body_title_filename_path_credential_or_embedding"
         ),
         apply=_apply_memory_lifecycle_observability_v1,
+    ),
+    _SchemaMigration(
+        migration_id="20260920_media_workspace_projects_v1",
+        signature=(
+            "media_workspace_projects:v1;canonical_manifest_json_metadata_only;"
+            "media_files_remain_in_controlled_storage"
+        ),
+        apply=_apply_media_workspace_projects_v1,
     ),
 )

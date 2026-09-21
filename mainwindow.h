@@ -42,6 +42,7 @@ class QWidget;
 class ModelRouteDialog;
 class DispatchMaterialDialog;
 class PresentationStudioDialog;
+class MediaWorkspaceDialog;
 
 class MainWindow : public QMainWindow
 {
@@ -186,6 +187,8 @@ private:
     void handleKnowledgeBaseDeletionRequested(const KnowledgeBaseInfo &knowledgeBase);
     void handleKnowledgeBaseDeletionFailed(const QString &message);
     void setupDataWorkspace();
+    void setupMediaWorkspace();
+    void openMediaWorkspace();
     void importDataDatasetFromFile();
     void refreshDataDatasets();
     void requestSelectedDataDatasetProfile();
@@ -865,6 +868,7 @@ private:
     QPointer<QPushButton> dispatchDeliveryDialogOpenButton;
     QPointer<QPushButton> dispatchDeliveryDialogHistoryButton;
     QPointer<PresentationStudioDialog> dispatchPresentationDialog;
+    QPointer<MediaWorkspaceDialog> mediaWorkspaceDialog;
     QString currentDispatchKnowledgeAnswerChildTaskId;
     // 暂存请求同时冻结本轮显式路由偏好，避免后端启动期间客户编辑输入后改变已排队任务。
     QJsonArray pendingDispatchAgentHints;

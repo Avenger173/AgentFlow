@@ -6,6 +6,7 @@
 #include "datatransformationdialog.h"
 #include "knowledgeanswerdialog.h"
 #include "knowledgedeeptaskdialog.h"
+#include "mediaworkspacedialog.h"
 #include "presentationstudiodialog.h"
 #include "spinboxarrowstyle.h"
 #include "taskactivityindicator.h"
@@ -958,6 +959,7 @@ MainWindow::MainWindow(QWidget *parent)
     setupDispatchChat();
     setupDocumentAgent();
     setupDataWorkspace();
+    setupMediaWorkspace();
     setupKnowledgeBase();
     setupCodeWorkshop();
     setupModelPage();
@@ -3844,6 +3846,45 @@ void MainWindow::handleKnowledgeBaseDeletionFailed(const QString &message)
     ui->knowledgeIndexStatus->setText(QStringLiteral("无法删除资料库：%1").arg(message.left(140)));
     ui->knowledgeIndexBadge->setText(QStringLiteral("删除失败"));
     polishBadge(ui->knowledgeIndexBadge, QStringLiteral("badgeOrange"));
+}
+
+void MainWindow::setupMediaWorkspace()
+{
+    // 视觉页面保留为轻入口，较宽的版本链和预览放进独立工作区，避免主窗口在窄尺寸下挤压编辑控件。
+    ui->visionSub->setText(QStringLiteral("项目化图片处理与版本交付。"));
+    ui->visionInput->setVisible(false);
+
+    auto *openButton = new QPushButton(QStringLiteral("打开图片工作区"), ui->visionMainCard);
+    openButton->setObjectName(QStringLiteral("primaryButton"));
+    openButton->setMinimumHeight(40);
+    openButton->setToolTip(QStringLiteral("管理图片项目、版本和 PNG 导出"));
+    const int inputIndex = ui->visionMainLayout->indexOf(ui->visionInput);
+    ui->visionMainLayout->insertWidget(qMax(0, inputIndex), openButton);
+    openButton->style()->unpolish(openButton);
+    openButton->style()->polish(openButton);
+    connect(openButton, &QPushButton::clicked, this, &MainWindow::openMediaWorkspace);
+}
+
+void MainWindow::openMediaWorkspace()
+{
+    if (!backendClient || !backendManager || !backendManager->isReady()) {
+        QMessageBox::information(
+            this,
+            QStringLiteral("图片工作区"),
+            QStringLiteral("本地服务正在启动，请在服务就绪后再打开图片工作区。"));
+        if (backendManager) {
+            backendManager->ensureStarted();
+        }
+        return;
+    }
+    if (!mediaWorkspaceDialog) {
+        auto *dialog = new MediaWorkspaceDialog(backendClient, this);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        mediaWorkspaceDialog = dialog;
+    }
+    mediaWorkspaceDialog->show();
+    mediaWorkspaceDialog->raise();
+    mediaWorkspaceDialog->activateWindow();
 }
 
 void MainWindow::setupDataWorkspace()
@@ -14566,6 +14607,9 @@ QString MainWindow::modelTransportText(const QString &transport) const
     if (transport == QStringLiteral("ark_image")) {
         return QStringLiteral("方舟图像生成");
     }
+    if (transport == QStringLiteral("dashscope_multimodal")) {
+        return QStringLiteral("百炼多模态生成");
+    }
     return transport.isEmpty() ? QStringLiteral("未知") : transport;
 }
 
@@ -14581,6 +14625,9 @@ QString MainWindow::modelProviderBadgeObjectName(const QString &providerId) cons
         return QStringLiteral("badgePurple");
     }
     if (providerId == QStringLiteral("qwen")) {
+        return QStringLiteral("badgeOrange");
+    }
+    if (providerId == QStringLiteral("qwen_image")) {
         return QStringLiteral("badgeOrange");
     }
     if (providerId == QStringLiteral("kimi")) {
@@ -14616,22 +14663,25 @@ QString MainWindow::formatModelProviderDetailHtml(const ModelProviderInfo &provi
         }
     }
 
+    const QString capabilitySummary = QStringLiteral("思考 %1 · JSON %2 · Tool Calls %3 · 图像生成 %4 · 图片编辑 %5")
+                                        .arg(capabilityText(provider.supportsThinking),
+                                             capabilityText(provider.supportsJsonOutput),
+                                             capabilityText(provider.supportsToolCalls),
+                                             capabilityText(provider.supportsVisualGeneration),
+                                             capabilityText(provider.supportsImageEdit));
     QString html = QStringLiteral(
         "<div style=\"line-height:1.35;\">"
         "<p><b>Provider Profile</b><br/>"
         "%1 · %2 · %3</p>"
         "<p><b>默认入口：</b>%4<br/>"
         "<b>默认模型：</b>%5</p>"
-        "<p><b>能力：</b>思考 %6 · JSON %7 · Tool Calls %8 · 图像生成 %9</p>")
+        "<p><b>能力：</b>%6</p>")
         .arg(provider.provider.toHtmlEscaped(),
              provider.label.toHtmlEscaped(),
              modelTransportText(provider.transport).toHtmlEscaped(),
              provider.defaultBaseUrl.toHtmlEscaped(),
              (provider.defaultModel.isEmpty() ? QStringLiteral("未设置") : provider.defaultModel).toHtmlEscaped(),
-             capabilityText(provider.supportsThinking),
-             capabilityText(provider.supportsJsonOutput),
-             capabilityText(provider.supportsToolCalls),
-             capabilityText(provider.supportsVisualGeneration));
+             capabilitySummary.toHtmlEscaped());
 
     if (!provider.notes.isEmpty()) {
         html += QStringLiteral("<p style=\"color:#64748B;\"><b>说明：</b>%1</p>")
@@ -14663,10 +14713,13 @@ QString MainWindow::formatModelProviderDetailHtml(const ModelProviderInfo &provi
                         .arg(currentModelStatus.notes.toHtmlEscaped());
         }
     } else if (provider.modelKind == QStringLiteral("image")) {
+        const QString imageCapability = provider.supportsImageEdit
+                                            ? QStringLiteral("图像生成与图片编辑")
+                                            : QStringLiteral("图像生成");
         html += QStringLiteral(
-            "<p style=\"color:#64748B;\">%1 是独立图像 Provider；保存后由视觉生成路由使用，"
-            "不会替换当前文本模型 %2。</p>")
-                    .arg(provider.label.toHtmlEscaped(), runtimeProvider.toHtmlEscaped());
+            "<p style=\"color:#64748B;\">%1 是独立%2 Provider；保存后由对应任务路由使用，"
+            "不会替换当前文本模型 %3。</p>")
+                    .arg(provider.label.toHtmlEscaped(), imageCapability.toHtmlEscaped(), runtimeProvider.toHtmlEscaped());
     } else {
         html += QStringLiteral(
             "<p style=\"color:#64748B;\">当前运行时是 %1；选中的 %2 只是已支持的 profile，"

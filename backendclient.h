@@ -430,6 +430,100 @@ struct DataDatasetListResult
     QList<DataDatasetInfo> datasets;
 };
 
+// 图片工作区只向 Qt 返回用户可见的项目与版本元数据；项目内文件路径始终留在后端。
+struct MediaProjectInfo
+{
+    QString projectId;
+    QString title;
+    QString createdAt;
+    QString updatedAt;
+    int assetCount = 0;
+};
+
+struct MediaProjectListResult
+{
+    int total = 0;
+    QList<MediaProjectInfo> projects;
+};
+
+struct MediaImageAssetInfo
+{
+    QString assetId;
+    QString name;
+    QString sourceSha256;
+    QString mimeType;
+    int width = 0;
+    int height = 0;
+    int sizeBytes = 0;
+    QString createdAt;
+    QString currentRevisionId;
+    int revisionCount = 0;
+    bool undoAvailable = false;
+    bool redoAvailable = false;
+};
+
+struct MediaImageRevisionInfo
+{
+    QString revisionId;
+    QString assetId;
+    QString parentRevisionId;
+    QString operation;
+    QJsonObject parameters;
+    QString maskId;
+    QString layerId;
+    QString sha256;
+    int width = 0;
+    int height = 0;
+    int sizeBytes = 0;
+    QString createdAt;
+};
+
+struct MediaAssetRevisionListResult
+{
+    MediaImageAssetInfo asset;
+    QList<MediaImageRevisionInfo> revisions;
+};
+
+struct MediaImageLayerInfo
+{
+    QString layerId;
+    QString sourceAssetId;
+    QString sourceName;
+    bool visible = true;
+    int x = 0;
+    int y = 0;
+    int opacity = 100;
+};
+
+struct MediaImageLayerStackResult
+{
+    QString assetId;
+    QString revisionId;
+    QString compositionRootRevisionId;
+    bool editable = false;
+    QList<MediaImageLayerInfo> layers;
+};
+
+struct MediaProjectDetailResult
+{
+    MediaProjectInfo project;
+    QList<MediaImageAssetInfo> assets;
+};
+
+struct MediaImageExportInfo
+{
+    QString exportId;
+    QString projectId;
+    QString assetId;
+    QString revisionId;
+    QString filename;
+    QString sha256;
+    int width = 0;
+    int height = 0;
+    int sizeBytes = 0;
+    QString createdAt;
+};
+
 // 文档助手运行结果。documentContext 保留后端稳定 JSON 契约，Qt 只挑选面向客户的字段渲染；
 // 后续增加新分类时无需为了展示协议频繁改动 C++ 结构体。
 struct DocumentAgentRunResult
@@ -919,6 +1013,7 @@ struct ModelProviderInfo
     bool supportsPresencePenalty = false;
     bool supportsFrequencyPenalty = false;
     bool supportsVisualGeneration = false;
+    bool supportsImageEdit = false;
     bool apiKeyConfigured = false;
     QString configuredBaseUrl;
     QString configuredModel;
@@ -1300,6 +1395,41 @@ public:
     void requestDataTransformationPreview(const QJsonObject &request);
     void requestDataTransformationExport(const QJsonObject &request);
     void requestDataTransformationExportResult(const QString &taskId);
+    // 图片工作区不接受客户端路径：导入仅传文件名和本机已读取的字节，所有项目文件由后端受控保存。
+    void requestMediaProjects();
+    void createMediaProject(const QString &title);
+    void requestMediaProject(const QString &projectId);
+    void importMediaImage(const QString &projectId, const QString &filename, const QByteArray &content);
+    void requestMediaAssetRevisions(const QString &projectId, const QString &assetId);
+    void requestMediaImageLayerStack(
+        const QString &projectId,
+        const QString &assetId,
+        const QString &revisionId);
+    void createMediaImageRevision(
+        const QString &projectId,
+        const QString &assetId,
+        const QString &operation,
+        const QString &baseRevisionId,
+        const QJsonObject &parameters = {});
+    void startMediaImageRevisionTask(
+        const QString &projectId,
+        const QString &assetId,
+        const QString &operation,
+        const QString &baseRevisionId,
+        const QJsonObject &parameters = {});
+    void requestMediaImageRevisionTaskResult(const QString &taskId);
+    void navigateMediaImageHistory(
+        const QString &projectId,
+        const QString &assetId,
+        const QString &action,
+        const QString &baseRevisionId);
+    void requestMediaRevisionPreview(const QString &projectId, const QString &revisionId);
+    // PNG 导出先受理为统一 Runtime 任务，再查询经过文件回读验证的终态；旧同步接口保留给
+    // 已发布调用方兼容，图片工作区新流程不再绕过任务历史。
+    void startMediaImageExportTask(const QString &projectId, const QString &revisionId, const QString &filename);
+    void requestMediaImageExportTaskResult(const QString &taskId);
+    void exportMediaImageRevision(const QString &projectId, const QString &revisionId, const QString &filename);
+    void requestMediaExportDownload(const QString &projectId, const QString &exportId);
     // 受理首个正式只读 Agent。后端会立即返回 task_id，再由 WebSocket 推送真实阶段事件。
     void runDocumentAgent(
         const QString &taskGoal,
@@ -1651,6 +1781,24 @@ signals:
     void dataTransformationExportStillRunning(const QString &taskId, const QString &status);
     void dataTransformationExportCancelled(const QString &message);
     void dataTransformationExportFailed(const QString &message);
+    void mediaProjectsReceived(const MediaProjectListResult &result);
+    void mediaProjectCreated(const MediaProjectInfo &project);
+    void mediaProjectReceived(const MediaProjectDetailResult &result);
+    void mediaImageImported(const MediaImageAssetInfo &asset);
+    void mediaAssetRevisionsReceived(const MediaAssetRevisionListResult &result);
+    void mediaImageLayerStackReceived(const MediaImageLayerStackResult &result);
+    void mediaImageRevisionCreated(const MediaImageRevisionInfo &revision);
+    void mediaImageRevisionTaskStarted(const QString &taskId);
+    void mediaImageRevisionStillRunning(const QString &taskId, const QString &status);
+    void mediaImageRevisionCancelled(const QString &message);
+    void mediaImageHistoryNavigated(const QString &action, const MediaAssetRevisionListResult &result);
+    void mediaRevisionPreviewReceived(const QString &projectId, const QString &revisionId, const QByteArray &content);
+    void mediaImageExportTaskStarted(const QString &taskId);
+    void mediaImageExportStillRunning(const QString &taskId, const QString &status);
+    void mediaImageExportCancelled(const QString &message);
+    void mediaImageExported(const MediaImageExportInfo &result);
+    void mediaExportDownloaded(const QString &projectId, const QString &exportId, const QByteArray &content);
+    void mediaAgentFailed(const QString &operation, const QString &message);
     void documentAgentStarted(const DocumentAgentTaskStartResult &result);
     void documentAgentCompleted(const DocumentAgentRunResult &result);
     void documentAgentStillRunning(const QString &taskId, const QString &status);
@@ -1738,6 +1886,25 @@ private:
     QUrl buildDataAgentTransformationPreviewUrl() const;
     QUrl buildDataAgentTransformationExportStartUrl() const;
     QUrl buildDataAgentTransformationExportResultUrl(const QString &taskId) const;
+    QUrl buildMediaAgentProjectsUrl() const;
+    QUrl buildMediaAgentProjectUrl(const QString &projectId) const;
+    QUrl buildMediaAgentImagesUrl(const QString &projectId) const;
+    QUrl buildMediaAgentAssetRevisionsUrl(const QString &projectId, const QString &assetId) const;
+    QUrl buildMediaAgentRevisionLayerStackUrl(
+        const QString &projectId,
+        const QString &assetId,
+        const QString &revisionId) const;
+    QUrl buildMediaAgentAssetRevisionStartUrl(const QString &projectId, const QString &assetId) const;
+    QUrl buildMediaAgentEditTaskResultUrl(const QString &taskId) const;
+    QUrl buildMediaAgentAssetHistoryUrl(
+        const QString &projectId,
+        const QString &assetId,
+        const QString &action) const;
+    QUrl buildMediaAgentRevisionPreviewUrl(const QString &projectId, const QString &revisionId) const;
+    QUrl buildMediaAgentRevisionExportStartUrl(const QString &projectId, const QString &revisionId) const;
+    QUrl buildMediaAgentExportTaskResultUrl(const QString &taskId) const;
+    QUrl buildMediaAgentRevisionExportUrl(const QString &projectId, const QString &revisionId) const;
+    QUrl buildMediaAgentExportDownloadUrl(const QString &projectId, const QString &exportId) const;
     QUrl buildDocumentAgentStartUrl() const;
     QUrl buildDocumentAgentResultUrl(const QString &taskId) const;
     QUrl buildPdfProcessingStartUrl() const;
@@ -1837,6 +2004,10 @@ private:
     void handleDataTransformationPreviewReply(QNetworkReply *reply);
     void handleDataTransformationExportStartReply(QNetworkReply *reply);
     void handleDataTransformationExportResultReply(QNetworkReply *reply);
+    void handleMediaImageRevisionTaskStartReply(QNetworkReply *reply);
+    void handleMediaImageRevisionTaskResultReply(QNetworkReply *reply);
+    void handleMediaImageExportTaskStartReply(QNetworkReply *reply);
+    void handleMediaImageExportTaskResultReply(QNetworkReply *reply);
     void handleDocumentAgentStartReply(QNetworkReply *reply);
     void handleDocumentAgentResultReply(QNetworkReply *reply);
     void handlePdfProcessingStartReply(QNetworkReply *reply);

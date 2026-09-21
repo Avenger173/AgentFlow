@@ -41,6 +41,7 @@ from app.services.model_gateway import (
     resolve_model_runtime_for_test,
     resolve_visual_model_runtime,
     resolve_visual_model_runtime_for_route,
+    validate_model_profile_model,
 )
 from app.services.model_route_store import (
     MODEL_ROUTE_DEFINITIONS,
@@ -94,6 +95,7 @@ def list_model_providers() -> ModelProviderListResponse:
             supports_presence_penalty=profile.sends_presence_penalty,
             supports_frequency_penalty=profile.sends_frequency_penalty,
             supports_visual_generation=profile.supports_visual_generation,
+            supports_image_edit=profile.supports_image_edit,
             context_cache_mode=profile.context_cache_mode,
             context_cache_note=profile.context_cache_note,
             api_key_configured=api_key_source != "none",
@@ -172,7 +174,7 @@ def list_model_routes() -> ModelRouteListResponse:
         try:
             resolution = (
                 resolve_visual_model_runtime_for_route(route_id, validate=True)
-                if "visual_generation" in capabilities
+                if _route_uses_image_runtime(capabilities)
                 else resolve_model_runtime_for_route(route_id, validate=True)
             )  # type: ignore[arg-type]
         except (ModelGatewayError, ModelRouteStoreError) as exc:
@@ -229,6 +231,7 @@ def update_model_route(route_id: ModelRouteScope, request: ModelRouteUpdateReque
             supports_tool_calls=profile.supports_tool_calls,
             supports_thinking=profile.supports_thinking,
             supports_visual_generation=profile.supports_visual_generation,
+            supports_image_edit=profile.supports_image_edit,
             thinking=request.thinking,
         )
         _validate_parameter_capabilities(profile, request.parameters)
@@ -236,6 +239,10 @@ def update_model_route(route_id: ModelRouteScope, request: ModelRouteUpdateReque
         model = (request.model or profile.default_model or "").strip()
         if not base_url or not model:
             raise HTTPException(status_code=400, detail=f"{label} 的显式 Profile 需要完整 Base URL 和模型名称。")
+        try:
+            validate_model_profile_model(provider, model)
+        except ModelGatewayError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         settings_value = ModelRouteSettings(
             route_id=route_id,
             mode="configured",
@@ -250,7 +257,7 @@ def update_model_route(route_id: ModelRouteScope, request: ModelRouteUpdateReque
         # 在写入前先证明候选 Profile 能解析到自己的 Key。显式配置不能先落下一个无效路由，
         # 再由后续任务悄悄继承全局默认模型。
         if settings_value.mode == "inherit_global":
-            if "visual_generation" in capabilities:
+            if _route_uses_image_runtime(capabilities):
                 inherited_visual = resolve_visual_model_runtime_for_route(route_id, validate=True)
                 _validate_parameter_capabilities(
                     get_model_provider_profile(inherited_visual.runtime.provider),
@@ -263,7 +270,7 @@ def update_model_route(route_id: ModelRouteScope, request: ModelRouteUpdateReque
                     settings_value.parameters,
                 )
         else:
-            if "visual_generation" in capabilities:
+            if _route_uses_image_runtime(capabilities):
                 resolve_visual_model_runtime(
                     provider=settings_value.provider,
                     base_url=settings_value.base_url,
@@ -280,7 +287,7 @@ def update_model_route(route_id: ModelRouteScope, request: ModelRouteUpdateReque
         save_model_route_settings(settings_value)
         resolution = (
             resolve_visual_model_runtime_for_route(route_id, validate=True)
-            if "visual_generation" in capabilities
+            if _route_uses_image_runtime(capabilities)
             else resolve_model_runtime_for_route(route_id, validate=True)
         )
     except (ModelGatewayError, ModelRouteStoreError) as exc:
@@ -382,6 +389,10 @@ def update_model_config(request: ModelConfigUpdateRequest) -> ModelConfigRespons
         raise HTTPException(status_code=400, detail=f"{profile.label} Base URL 不能为空。")
     if not model:
         raise HTTPException(status_code=400, detail=f"{profile.label} 模型名称不能为空。")
+    try:
+        validate_model_profile_model(provider, model)
+    except ModelGatewayError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     _validate_parameter_capabilities(profile, request.parameters)
 
     api_key = request.api_key.strip() if request.api_key is not None else None
@@ -417,6 +428,7 @@ def _validate_route_capabilities(
     supports_tool_calls: bool,
     supports_thinking: bool,
     supports_visual_generation: bool,
+    supports_image_edit: bool,
     thinking: str,
 ) -> None:
     """拒绝能力不匹配的显式 Profile，不能把它降级为全局模型。"""
@@ -428,6 +440,8 @@ def _validate_route_capabilities(
         unavailable.append("Tool Calls")
     if "visual_generation" in required_capabilities and not supports_visual_generation:
         unavailable.append("视觉生成")
+    if "image_edit" in required_capabilities and not supports_image_edit:
+        unavailable.append("图片编辑")
     if thinking == "enabled" and not supports_thinking:
         unavailable.append("思考模式")
     if unavailable:
@@ -456,6 +470,12 @@ def _validate_parameter_capabilities(profile: object, parameters: ModelGeneratio
             status_code=400,
             detail=f"{provider_label} 当前适配不发送这些参数：{'、'.join(unsupported)}。请留空使用供应商默认值。",
         )
+
+
+def _route_uses_image_runtime(required_capabilities: tuple[str, ...]) -> bool:
+    """根据显式能力而非 route 名判断是否应解析专用图像运行时。"""
+
+    return "visual_generation" in required_capabilities or "image_edit" in required_capabilities
 
 
 def _unavailable_route_snapshot(
@@ -545,6 +565,10 @@ def _build_provider_config_response(provider: str) -> ModelConfigResponse:
         stored_config=stored_config,
     )
     secret = stored_config.api_key_secret_for(provider)
+    if secret is None:
+        credential_provider = profile.credential_provider.strip()
+        if credential_provider:
+            secret = stored_config.api_key_secret_for(credential_provider)
     return ModelConfigResponse(
         provider=provider,
         label=profile.label,

@@ -30,6 +30,10 @@ qt_add_executable(AgentFlow
     knowledgedeeptaskdialog.cpp
     knowledgedeeptaskdialog.h
     knowledgedeeptaskdialog.ui
+    mediaimagecanvas.cpp
+    mediaimagecanvas.h
+    mediaworkspacedialog.cpp
+    mediaworkspacedialog.h
     main.cpp
     mainwindow.cpp
     mainwindow.h
@@ -95,6 +99,15 @@ if(BUILD_TESTING)
         target_compile_options(BackendManagerTests PRIVATE /utf-8)
     endif()
     add_test(NAME BackendManagerTests COMMAND BackendManagerTests)
+    qt_add_executable(SpinBoxArrowStyleTests
+        spinboxarrowstyle_test.cpp
+        spinboxarrowstyle.h
+    )
+    target_link_libraries(SpinBoxArrowStyleTests PRIVATE Qt::Core Qt::Test Qt::Widgets)
+    if(MSVC)
+        target_compile_options(SpinBoxArrowStyleTests PRIVATE /utf-8)
+    endif()
+    add_test(NAME SpinBoxArrowStyleTests COMMAND SpinBoxArrowStyleTests)
     # CTest 从开发终端外启动时不会自动继承 Qt Creator 的 Kit PATH。显式把实际 Qt Core
     # DLL 所在目录前置，避免 Windows 把“缺 DLL”误报成测试失败；发布程序不使用此设置。
     if(WIN32)
@@ -103,7 +116,7 @@ if(BUILD_TESTING)
             get_target_property(qtCoreDebugLocation Qt6::Core IMPORTED_LOCATION)
         endif()
         get_filename_component(qtRuntimeDirectory "${qtCoreDebugLocation}" DIRECTORY)
-        set_tests_properties(BackendManagerTests PROPERTIES
+        set_tests_properties(BackendManagerTests SpinBoxArrowStyleTests PROPERTIES
             ENVIRONMENT "PATH=${qtRuntimeDirectory};$ENV{PATH}")
     endif()
 endif()

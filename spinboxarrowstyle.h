@@ -4,6 +4,7 @@
 #include <QAbstractSpinBox>
 #include <QPainter>
 #include <QProxyStyle>
+#include <QStyleFactory>
 #include <QStyleOptionSpinBox>
 
 class SpinBoxArrowStyle final : public QProxyStyle
@@ -74,7 +75,17 @@ inline void installSpinBoxArrowStyle(QAbstractSpinBox *spinBox)
     if (!spinBox) {
         return;
     }
-    auto *style = new SpinBoxArrowStyle(spinBox->style());
+
+    // QProxyStyle owns its base style.  Never hand it QApplication's shared
+    // style returned by spinBox->style(), otherwise destroying a temporary
+    // dialog can also destroy the application's active style.
+    const QString styleKey = spinBox->style() ? spinBox->style()->objectName() : QString();
+    QStyle *baseStyle = styleKey.isEmpty() ? nullptr : QStyleFactory::create(styleKey);
+    if (!baseStyle) {
+        baseStyle = QStyleFactory::create(QStringLiteral("Fusion"));
+    }
+
+    auto *style = new SpinBoxArrowStyle(baseStyle);
     style->setParent(spinBox);
     spinBox->setStyle(style);
 }
