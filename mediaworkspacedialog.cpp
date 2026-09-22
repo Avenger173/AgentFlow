@@ -7,6 +7,7 @@
 #include <QAbstractItemView>
 #include <QComboBox>
 #include <QDateTime>
+#include <QDialogButtonBox>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -15,7 +16,6 @@
 #include <QGridLayout>
 #include <QGuiApplication>
 #include <QHBoxLayout>
-#include <QInputDialog>
 #include <QJsonArray>
 #include <QLabel>
 #include <QLineEdit>
@@ -176,6 +176,8 @@ MediaWorkspaceDialog::MediaWorkspaceDialog(BackendClient *backendClient, QWidget
 
 void MediaWorkspaceDialog::buildUi()
 {
+    setObjectName(QStringLiteral("mediaWorkspaceDialog"));
+    setAccessibleName(QStringLiteral("mediaWorkspaceDialog"));
     setWindowTitle(QStringLiteral("图片工作区"));
     const QScreen *targetScreen = screen();
     if (!targetScreen) {
@@ -924,19 +926,32 @@ void MediaWorkspaceDialog::createProject()
 {
     const QString suggestedTitle = QStringLiteral("图片项目 %1")
                                        .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd")));
-    bool accepted = false;
-    const QString title = QInputDialog::getText(
-        this,
-        QStringLiteral("新建图片项目"),
-        QStringLiteral("项目名称"),
-        QLineEdit::Normal,
-        suggestedTitle,
-        &accepted);
-    if (!accepted || title.trimmed().isEmpty()) {
+    QDialog dialog(this);
+    dialog.setObjectName(QStringLiteral("mediaWorkspaceNewProjectDialog"));
+    dialog.setAccessibleName(QStringLiteral("mediaWorkspaceNewProjectDialog"));
+    dialog.setWindowTitle(QStringLiteral("新建图片项目"));
+
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *nameLabel = new QLabel(QStringLiteral("项目名称"), &dialog);
+    auto *nameInput = new QLineEdit(suggestedTitle, &dialog);
+    nameInput->setObjectName(QStringLiteral("mediaWorkspaceProjectNameInput"));
+    nameInput->setAccessibleName(QStringLiteral("mediaWorkspaceProjectNameInput"));
+    nameInput->selectAll();
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, &dialog);
+    auto *confirmButton = buttons->addButton(QStringLiteral("创建"), QDialogButtonBox::AcceptRole);
+    confirmButton->setObjectName(QStringLiteral("mediaWorkspaceCreateProjectConfirmButton"));
+    confirmButton->setAccessibleName(QStringLiteral("mediaWorkspaceCreateProjectConfirmButton"));
+    layout->addWidget(nameLabel);
+    layout->addWidget(nameInput);
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    connect(confirmButton, &QPushButton::clicked, &dialog, &QDialog::accept);
+
+    if (dialog.exec() != QDialog::Accepted || nameInput->text().trimmed().isEmpty()) {
         return;
     }
     setStatus(QStringLiteral("正在创建图片项目..."));
-    backendClient->createMediaProject(title);
+    backendClient->createMediaProject(nameInput->text());
 }
 
 void MediaWorkspaceDialog::selectProject(int index)

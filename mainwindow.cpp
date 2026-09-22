@@ -3856,6 +3856,7 @@ void MainWindow::setupMediaWorkspace()
 
     auto *openButton = new QPushButton(QStringLiteral("打开图片工作区"), ui->visionMainCard);
     openButton->setObjectName(QStringLiteral("primaryButton"));
+    openButton->setAccessibleName(QStringLiteral("mediaWorkspaceOpenButton"));
     openButton->setMinimumHeight(40);
     openButton->setToolTip(QStringLiteral("管理图片项目、版本和 PNG 导出"));
     const int inputIndex = ui->visionMainLayout->indexOf(ui->visionInput);
