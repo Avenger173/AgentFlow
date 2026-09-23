@@ -33,6 +33,8 @@
 
 > **2026-09-23 多媒体助手 MM-2 最小入口与真实闭环：**图片工作区已新增“AI 修图”页，客户端只提交当前 revision 与自然语言指令，异步轮询后复用既有预览、版本、撤销和 PNG 导出，不新增平行编辑器。`media.ai_edit_image` 和 `task_media_ai_edit_*` 检查点仍只以受控内存字节提交 Qwen Image；临时 URL 必须下载、解码、同尺寸检查、PNG 回读和 SQLite 原子登记后才成为可撤销新版本。离线回归覆盖明确拒绝、限流、未知结果、下载失败、迟到版本、执行前取消和服务重启，未知结果不自动重放。`verify_live_media_ai_edit.py --live` 已用程序生成的 `1024 x 768` 夹具完成一次 `qwen-image-3.0-pro` 调用：约 49 秒后写入并回读同尺寸 PNG revision，Provider usage 为输入/输出各 1，逐请求金额为 unknown。Qt 编译、现有 CTest 和图片工作区的 AI 修图入口 Windows GUI 冒烟均已通过；独立质量复核、费用核对、完整 GUI/DPI 流程及 G2/G3 仍未通过，故不得描述为正式客户功能。
 
+> **2026-09-23 多媒体助手 G2 首轮真实质量运行：**已用 12 个公开来源冻结开发/留出集 `8/4`，每来源构造换背景、移除合成贴纸、中文价格改字各一项，共 36 项；固定 `media_image_edit -> qwen_image / qwen-image-3.0-pro`，每项最多一次且无自动重试。36/36 均返回、下载并回读为同尺寸 PNG，无限流、拒绝、未知或下载失败；脱敏证据、原始结果和无模型名盲评卡位于忽略目录 `data/media_evaluations/g2_qwen_image_20260923T114626/`。两份 36 行评审 CSV 仍为空，故 G2 保持未通过，不得将 API 成功率或开发者抽查写成质量结论；下一步是两位独立评审完成盲评。
+
 > **2026-09-23 多媒体助手路线纠偏：**主线仍为 AI 修图 -> 对话式视频剪辑 -> 视频翻译配音，但统一改为“模型理解/生成 + Pillow/OpenCV/FFmpeg 精确执行 + AgentFlow 调度交付”，不建设完整图片或视频编辑器。Qwen 图片编辑、规划、失败语义和 usage 字段已经满足 `G0-DEV`；现有图片项目、revision、撤销、导出、Runtime/Artifact 和 Qt 主路径满足 `L1-DEV`。图片工作区从现在起冻结功能范围，Lite Matting/SAM 作为 optional，不再阻塞主线。MM-2 最小入口和一次受控真实 revision 闭环已经完成；下一步固定为 G2 的真实质量集与独立复核。费用核对、完整 DPI 和客户端流程保留到 G2/G3，当前仍不得把 AI 修图描述为正式客户功能。
 
 > **2026-09-14 模型配置与任务参数治理：**模型配置升级为 v3，DeepSeek、Kimi、OpenAI、Anthropic、Qwen、Custom 和 Seedream 均按 Provider 独立保存 Base URL、模型、Thinking 与受支持参数，Key 继续使用 Provider 级 DPAPI 密文。关键 LLM 作用域可在继承全局模型时单独覆盖生成参数，分析/问答、规划/深度任务和 PPT 创作分别采用保守推荐温度；最终参数经 Provider 能力过滤后才进入请求，通用环境 Key 也不会跨 Provider 误用。Qt 模型页增加账号模型目录刷新、可编辑模型选择和常用参数，Seedream 作为独立图像 Provider 接入同一配置与视觉路由，不会替换默认聊天模型。离线专项、C6.5 路由、全量后端、PPT 工作室回归及 Qt Debug/Release 构建与 CTest 均通过；本轮未调用真实供应商，详情见 `docs/MODEL_CONFIGURATION_AND_ROUTING.md`。

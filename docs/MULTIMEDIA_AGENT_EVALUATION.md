@@ -12,6 +12,8 @@
 
 `backend/scripts/verify_live_media_ai_edit.py --live` 已在用户授权下补做一次受控 E2 连通性探针：程序生成的 `1024 x 768` 几何图片经 `media_image_edit` 路由提交给 `qwen_image / qwen-image-3.0-pro`，用时 `49,242.851 ms`；Provider 报告输入/输出各 1 张、`qima_input_1k/qima_output_1k`，结果同尺寸 PNG 已下载、回读并登记为新的 `ai_image_edit` revision。请求标识已进入本地任务审计，脱敏 manifest 仅保留其 SHA-256，路径为忽略目录 `data/media_evaluations/live_media_ai_edit_20260923T025239Z/`；逐请求金额未由 API 返回，明确记为 `unknown`。
 
+2026-09-23 已冻结 `12` 个公开 Commons 来源，其中开发集 `8` 个、留出集 `4` 个；每个来源对应换背景、移除合成贴纸、中文价格改字各一项，共 `36` 项。`probe_qwen_image_g2_quality.py` 使用固定 `media_image_edit -> qwen_image / qwen-image-3.0-pro` 路由，每项最多 1 次、未自动重试；36 项均返回同尺寸 PNG 并进入 `completed_pending_review`，无拒绝、限流、未知结果或下载失败。脱敏运行证据位于忽略目录 `data/media_evaluations/g2_qwen_image_20260923T114626/`：每项保留输入/输出哈希、request ID 哈希、用量字段、耗时和错误分类，逐请求金额一律如实记为 `unknown`。生成的 36 张左右对照盲评卡与两份评审 CSV 已通过完整性校验，但两份表尚未填写，故不能形成质量通过结论。
+
 该证据只证明模型到受控 revision 的一次端到端连通性，不包含真实图片内容质量、局部保护、费用核对或 Qt 完整流程。`media_image_edit` 路由现为可配置的 Qwen 图像编辑路由；模型临时 URL 不落 SQLite/项目 metadata，未知结果不自动重发。下一步冻结 G2 的真实授权图片开发集/留出集，并以独立复核执行固定任务；不得以这次合成夹具调用宣布 G2 或 G3 通过。
 
 ## 1. 如何判定任务完成
@@ -411,7 +413,7 @@ CER/WER 使用编辑距离定义，报告替换、删除、插入及参考长度
 | --- | --- | --- |
 | G0-DEV（模型开发准入） | 已满足 | `MODEL-01` 的 20 条冻结意图集已通过；Qwen 3.0 Pro 已完成三类各 3 个公开样本，并留有真实限流、超时未知结果、调用方取消、request ID 与 usage 字段证据。独立复核和费用结算仍保留给 G2/G3，不妨碍内部接入 |
 | L1-DEV（底座开发准入） | 已满足并冻结 | 图片工作区已经具备项目内副本、不可覆盖 revision、撤销重做、回读导出、Runtime/Artifact、恢复对账、API 回归和一条真实 Qt 主路径。现有蒙版/图层能力属于额外底座，不再继续扩建；完整 DPI 和人工边界复核移至 G3 |
-| G2（AI 修图质量准入） | 未通过 | 最小 Qt 提交入口与一次合成夹具的真实 Provider 闭环已经成立，但尚未具备 12 个来源隔离样本、36 个固定任务、独立盲评与分项质量结论，不能以连通性证据替代质量准入 |
+| G2（AI 修图质量准入） | 未通过 | 12 个来源隔离样本、36 个固定任务及一轮真实 Provider 结果已经具备，但两位独立盲评者尚未填写三项评分，分项质量与留出集结论仍为空，不能以连通性或开发者抽查替代质量准入 |
 | G3（图片发布准入） | 未通过 | G2 尚未通过；完整 Qt 导入-提交-轮询-预览-撤销-导出流程、真实 Windows DPI、费用核对、权限和发布回归仍待验证 |
 | G4-G5 | 未运行 | 视频基础与对话式剪辑尚未实现 |
 | G6 | 未运行 | 视频翻译配音尚未实现 |
@@ -460,3 +462,11 @@ CER/WER 使用编辑距离定义，报告替换、删除、插入及参考长度
 新增离线校验器 `backend/scripts/verify_media_g2_quality_suite.py`。实际质量集冻结为 `suite.json` 后，校验器要求 12 个具有 `HTTPS` 来源页、许可证链接、SHA-256 和人工权利确认的来源图片；来源级切分固定为开发集 8 张、留出集 4 张。每张图片必须对应换背景、局部消除、中文文字编辑各 1 项，总计 36 项，三类在开发/留出集分别固定为 `8/4`，从数据结构上杜绝同一来源跨 split 复用。
 
 每个任务还必须冻结自然语言指令、目标、保护要求、预期结果及 `max_provider_calls=1`；评审协议固定为 2 位盲评者，其中至少 1 位非实现者，对指令遵循、目标保护和边缘自然度使用 `1-5` 分并以 `4` 分为通过线，分差达到 2 分必须复核。准备真实公开或已授权素材后，在其忽略目录执行 `backend/.venv/Scripts/python.exe backend/scripts/verify_media_g2_quality_suite.py --suite suite.json --verify-files`。`--self-test` 只用临时合成字节验证校验器本身，不产生 Provider 调用，也不构成 G2 通过证据。
+
+### 10.6 G2 首轮真实运行（2026-09-23）
+
+本轮使用 `prepare_media_g2_fixtures.py` 复用既有 9 个公开 Commons 样本并补充 3 个公开来源，固定为 `agentflow-mm2-g2-public-image-fixtures-v1`。来源集包含 HTTPS 来源页、许可证证据、SHA-256、文件回读和来源级 `8/4` 切分；`verify_media_g2_quality_suite.py --verify-files` 与 `probe_qwen_image_g2_quality.py --validate-inputs` 均已通过。后者在不调用模型的前提下构造并回读了 36 个输入 PNG。
+
+在用户明确授权的批量质量评测范围内，`probe_qwen_image_g2_quality.py` 对固定模型 `qwen-image-3.0-pro` 执行 36 次真实调用，最小请求起始间隔为 35 秒。每次只接收 1 张输入、请求 1 张输出、关闭提示词扩展和水印；结果仅在下载、PNG 回读和同尺寸检查后记为 `completed_pending_review`。最终 36/36 通过传输和文件完整性检查，Provider usage 字段均已记录，逐请求金额未返回，均标记为 `unknown`。运行时不重试 rejected/unknown 结果，也不写入 API Key、原始 Provider 响应、短期 URL 或公共来源图片正文。
+
+`verify_media_g2_review_packet.py` 已验证 `review_packet/` 内 36 张左右对照 PNG、两份各 36 行的 CSV 和卡片哈希一致；盲评包不含模型和 Provider 名称。当前 `review_state=incomplete`，这是正确状态：只有两位评审（至少一位非实现者）独立填写三项 `1-5` 分、决策和必要备注，并处理分差达到 2 分的项目后，才能计算 `QUAL-02/03` 和判定 G2。
