@@ -11,6 +11,7 @@ class QComboBox;
 class QLabel;
 class QListWidget;
 class MediaImageCanvas;
+class QPlainTextEdit;
 class QPushButton;
 class QSpinBox;
 class QTabWidget;
@@ -32,6 +33,7 @@ private:
     void selectAsset();
     void selectRevision();
     void createRevision(const QString &operation, const QJsonObject &parameters = {});
+    void startAiImageEdit();
     void navigateHistory(const QString &action);
     void exportSelectedRevision();
     void populateProjects();
@@ -74,6 +76,7 @@ private:
     QString pendingExportTaskId;
     bool imageImportPending = false;
     bool revisionRequestPending = false;
+    bool pendingAiEdit = false;
     bool historyNavigationPending = false;
     bool revisionConflictRefreshPending = false;
     bool layerStackRequestPending = false;
@@ -95,6 +98,8 @@ private:
     QPushButton *rotateRightButton = nullptr;
     QPushButton *flipButton = nullptr;
     QPushButton *grayscaleButton = nullptr;
+    QPlainTextEdit *aiInstructionEdit = nullptr;
+    QPushButton *aiEditButton = nullptr;
     QSpinBox *brightnessSpin = nullptr;
     QSpinBox *contrastSpin = nullptr;
     QSpinBox *saturationSpin = nullptr;

@@ -2955,6 +2955,41 @@ void BackendClient::requestMediaImageRevisionTaskResult(const QString &taskId)
     });
 }
 
+void BackendClient::startMediaImageAiEditTask(
+    const QString &projectId,
+    const QString &assetId,
+    const QString &baseRevisionId,
+    const QString &instruction)
+{
+    if (projectId.trimmed().isEmpty() || assetId.trimmed().isEmpty()
+        || baseRevisionId.trimmed().isEmpty() || instruction.trimmed().isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("start_ai_edit_task"), QStringLiteral("AI 修图缺少当前图片版本或编辑指令。"));
+        return;
+    }
+    QJsonObject payload;
+    payload.insert(QStringLiteral("base_revision_id"), baseRevisionId.trimmed());
+    payload.insert(QStringLiteral("instruction"), instruction.trimmed());
+    QNetworkReply *reply = networkManager_.post(
+        createRequest(buildMediaAgentAssetAiEditStartUrl(projectId.trimmed(), assetId.trimmed()), 10000),
+        QJsonDocument(payload).toJson(QJsonDocument::Compact));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        handleMediaImageAiEditTaskStartReply(reply);
+    });
+}
+
+void BackendClient::requestMediaImageAiEditTaskResult(const QString &taskId)
+{
+    if (taskId.trimmed().isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("ai_edit_task_result"), QStringLiteral("AI 修图任务 ID 为空。"));
+        return;
+    }
+    QNetworkReply *reply = networkManager_.get(
+        createRequest(buildMediaAgentAiEditTaskResultUrl(taskId.trimmed()), 10000));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        handleMediaImageAiEditTaskResultReply(reply);
+    });
+}
+
 void BackendClient::navigateMediaImageHistory(
     const QString &projectId,
     const QString &assetId,
@@ -4940,6 +4975,25 @@ QUrl BackendClient::buildMediaAgentEditTaskResultUrl(const QString &taskId) cons
     return url;
 }
 
+QUrl BackendClient::buildMediaAgentAssetAiEditStartUrl(
+    const QString &projectId,
+    const QString &assetId) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/agents/media_agent/projects/%1/images/%2/ai-edits/start")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(projectId)),
+                         QString::fromUtf8(QUrl::toPercentEncoding(assetId))));
+    return url;
+}
+
+QUrl BackendClient::buildMediaAgentAiEditTaskResultUrl(const QString &taskId) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/agents/media_agent/ai-edits/%1/result")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(taskId))));
+    return url;
+}
+
 QUrl BackendClient::buildMediaAgentAssetHistoryUrl(
     const QString &projectId,
     const QString &assetId,
@@ -6324,6 +6378,67 @@ void BackendClient::handleMediaImageRevisionTaskResultReply(QNetworkReply *reply
         QStringLiteral("图片编辑未完成，请在任务历史中查看原因。"));
     emit mediaAgentFailed(
         QStringLiteral("create_revision"),
+        payload.value(QStringLiteral("conflict")).toBool() ? QStringLiteral("HTTP 409 · %1").arg(message) : message);
+}
+
+void BackendClient::handleMediaImageAiEditTaskStartReply(QNetworkReply *reply)
+{
+    reply->deleteLater();
+    if (reply->error() != QNetworkReply::NoError) {
+        emit mediaAgentFailed(QStringLiteral("start_ai_edit_task"), replyErrorMessage(reply));
+        return;
+    }
+    const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+    const QJsonObject payload = document.object();
+    const QString taskId = payload.value(QStringLiteral("task_id")).toString().trimmed();
+    if (!document.isObject() || taskId.isEmpty()
+        || payload.value(QStringLiteral("status")).toString() != QStringLiteral("queued")) {
+        emit mediaAgentFailed(QStringLiteral("start_ai_edit_task"), QStringLiteral("AI 修图任务未返回有效受理状态。"));
+        return;
+    }
+    emit mediaImageRevisionTaskStarted(taskId);
+}
+
+void BackendClient::handleMediaImageAiEditTaskResultReply(QNetworkReply *reply)
+{
+    reply->deleteLater();
+    if (reply->error() != QNetworkReply::NoError) {
+        emit mediaAgentFailed(QStringLiteral("ai_edit_task_result"), replyErrorMessage(reply));
+        return;
+    }
+    const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+    if (!document.isObject()) {
+        emit mediaAgentFailed(QStringLiteral("ai_edit_task_result"), QStringLiteral("AI 修图结果响应格式无效。"));
+        return;
+    }
+    const QJsonObject payload = document.object();
+    const QString taskId = payload.value(QStringLiteral("task_id")).toString().trimmed();
+    const QString status = payload.value(QStringLiteral("status")).toString();
+    if (taskId.isEmpty() || status.isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("ai_edit_task_result"), QStringLiteral("AI 修图结果缺少任务状态。"));
+        return;
+    }
+    if (status == QStringLiteral("queued") || status == QStringLiteral("pending") || status == QStringLiteral("running")) {
+        emit mediaImageRevisionStillRunning(taskId, status);
+        return;
+    }
+    if (status == QStringLiteral("cancelled")) {
+        emit mediaImageRevisionCancelled(payload.value(QStringLiteral("message")).toString(
+            QStringLiteral("AI 修图已取消，未创建新的图片版本。")));
+        return;
+    }
+    if (status == QStringLiteral("completed") && payload.value(QStringLiteral("revision")).isObject()) {
+        const MediaImageRevisionInfo revision = readMediaImageRevisionInfo(
+            payload.value(QStringLiteral("revision")).toObject());
+        if (!revision.revisionId.isEmpty() && !revision.assetId.isEmpty()) {
+            emit mediaImageRevisionCreated(revision);
+            return;
+        }
+    }
+    const QString message = payload.value(QStringLiteral("message")).toString(
+        QStringLiteral("AI 修图未完成，请在任务历史中查看原因。"));
+    emit mediaAgentFailed(
+        QStringLiteral("ai_edit_task_result"),
         payload.value(QStringLiteral("conflict")).toBool() ? QStringLiteral("HTTP 409 · %1").arg(message) : message);
 }
 

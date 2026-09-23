@@ -6,7 +6,7 @@
 
 ## 2026-09-23 多媒体助手专题规划
 
-多媒体专题见[开发计划](MULTIMEDIA_AGENT_DEVELOPMENT_PLAN.md)和[评测与验证方案](MULTIMEDIA_AGENT_EVALUATION.md)。路线采用“模型负责理解与生成、成熟工具负责精确执行、AgentFlow 负责版本/权限/恢复/交付”，不建设完整图片或视频编辑器。MM-0 模型可行性和 MM-1 最薄底座已满足内部开发门槛 `G0-DEV + L1-DEV`；MM-2 已完成可恢复 AI 修图后端与离线边界验证，但不代表能力已对用户开放。当前下一步是最小 Qt 自然语言入口与界面冒烟，随后才进行一次受控真实调用并进入 G2。独立质量复核、费用核对和完整客户端/DPI 验收分别在 G2/G3 完成，Matting/Segmentation 等未启用候选不得阻塞主线。
+多媒体专题见[开发计划](MULTIMEDIA_AGENT_DEVELOPMENT_PLAN.md)和[评测与验证方案](MULTIMEDIA_AGENT_EVALUATION.md)。路线采用“模型负责理解与生成、成熟工具负责精确执行、AgentFlow 负责版本/权限/恢复/交付”，不建设完整图片或视频编辑器。MM-0 模型可行性和 MM-1 最薄底座已满足内部开发门槛 `G0-DEV + L1-DEV`；MM-2 已完成可恢复 AI 修图后端、Qt 最小自然语言入口与一次合成夹具真实模型到 revision 的回读验证，但不代表能力已对用户开放。当前下一步是冻结 G2 真实质量集和独立复核。费用核对和完整客户端/DPI 验收仍分别在 G2/G3 完成，Matting/Segmentation 等未启用候选不得阻塞主线。
 
 ## 总体判断
 

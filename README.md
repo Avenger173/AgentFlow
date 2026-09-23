@@ -145,7 +145,7 @@ AI调度台总指挥同样可以使用：
 | 本地知识库 | 文档版本、FTS5、可选 Chroma/FastEmbed、可信问答、深度 Map-Reduce 和可选本地 OCR |
 | 记忆系统 | 会话归档、有限近轮上下文、Compaction、跨会话短事实记忆和显式确认 |
 | 模型网关 | DeepSeek、Kimi/Moonshot、OpenAI、Anthropic、Qwen 和自定义 OpenAI-compatible 服务 |
-| 多媒体助手（内部） | AI 修图后端闭环：Qwen 图像编辑路由、失败分类、可撤销 revision 和重启对账；Qt 入口与真实质量验收尚未开放 |
+| 多媒体助手（内部） | AI 修图最小闭环：Qwen 图像编辑路由、Qt 自然语言入口、失败分类、可撤销 revision 和重启对账；合成夹具真实回读已验证，质量与发布验收尚未通过 |
 | 治理与审计 | 权限确认、作用域隔离、Tool 审计、任务历史、来源验证、产物回读和敏感信息过滤 |
 
 ## 工作方式
@@ -346,7 +346,7 @@ ctest --test-dir build\dev -C Debug --output-on-failure
 | --- | --- |
 | 已形成闭环 | Commander 调度、文档助手、数据工作台、本地知识库、任务历史、权限审计、分层记忆、多模型网关 |
 | 可选能力 | 本地语义索引、本地 OCR、Pexels 图片、Seedream 图片生成、联网资料核验 |
-| 正在完善 | Windows 目录式发行、真实材料体验验收、长期记忆命中可视化、用户画像聚合和多媒体 AI 修图 Qt 入口 |
+| 正在完善 | Windows 目录式发行、真实材料体验验收、长期记忆命中可视化、用户画像聚合和多媒体 AI 修图 G2 质量验收 |
 | 尚未作为正式能力 | 通用 Code Agent、第三方 Agent 插件市场、多用户/多租户、跨平台桌面发行 |
 
 项目状态以 [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md) 为准；开发计划与未完成边界以 [`docs/DEVELOPMENT_ROADMAP.md`](docs/DEVELOPMENT_ROADMAP.md) 为准。README 只描述当前对外可理解的产品能力，不承担开发流水账职责。
@@ -358,7 +358,7 @@ ctest --test-dir build\dev -C Debug --output-on-failure
 - [Agent 与 Workflow 规格](docs/AGENT_SPECIFICATIONS.md)
 - [Agent 工程指南](docs/AGENT_ENGINEERING_GUIDE.md)
 - [记忆系统开发计划](docs/AGENT_MEMORY_DEVELOPMENT_PLAN.md)
-- [多媒体助手开发计划（MM-2 后端已完成）](docs/MULTIMEDIA_AGENT_DEVELOPMENT_PLAN.md)
+- [多媒体助手开发计划（MM-2 最小闭环进行中）](docs/MULTIMEDIA_AGENT_DEVELOPMENT_PLAN.md)
 - [多媒体助手评测与验证方案](docs/MULTIMEDIA_AGENT_EVALUATION.md)
 - [数据工作台产品规格](docs/DATA_WORKSPACE_PRODUCT_SPEC.md)
 - [知识库产品规格](docs/KNOWLEDGE_BASE_PRODUCT_SPEC.md)

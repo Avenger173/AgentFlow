@@ -1418,6 +1418,13 @@ public:
         const QString &baseRevisionId,
         const QJsonObject &parameters = {});
     void requestMediaImageRevisionTaskResult(const QString &taskId);
+    // AI 修图由后端固定解析模型路由；客户端仅能提交当前 revision 和自然语言指令。
+    void startMediaImageAiEditTask(
+        const QString &projectId,
+        const QString &assetId,
+        const QString &baseRevisionId,
+        const QString &instruction);
+    void requestMediaImageAiEditTaskResult(const QString &taskId);
     void navigateMediaImageHistory(
         const QString &projectId,
         const QString &assetId,
@@ -1896,6 +1903,8 @@ private:
         const QString &revisionId) const;
     QUrl buildMediaAgentAssetRevisionStartUrl(const QString &projectId, const QString &assetId) const;
     QUrl buildMediaAgentEditTaskResultUrl(const QString &taskId) const;
+    QUrl buildMediaAgentAssetAiEditStartUrl(const QString &projectId, const QString &assetId) const;
+    QUrl buildMediaAgentAiEditTaskResultUrl(const QString &taskId) const;
     QUrl buildMediaAgentAssetHistoryUrl(
         const QString &projectId,
         const QString &assetId,
@@ -2006,6 +2015,8 @@ private:
     void handleDataTransformationExportResultReply(QNetworkReply *reply);
     void handleMediaImageRevisionTaskStartReply(QNetworkReply *reply);
     void handleMediaImageRevisionTaskResultReply(QNetworkReply *reply);
+    void handleMediaImageAiEditTaskStartReply(QNetworkReply *reply);
+    void handleMediaImageAiEditTaskResultReply(QNetworkReply *reply);
     void handleMediaImageExportTaskStartReply(QNetworkReply *reply);
     void handleMediaImageExportTaskResultReply(QNetworkReply *reply);
     void handleDocumentAgentStartReply(QNetworkReply *reply);

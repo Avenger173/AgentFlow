@@ -22,6 +22,7 @@
 #include <QListWidget>
 #include <QListWidgetItem>
 #include <QMessageBox>
+#include <QPlainTextEdit>
 #include <QPixmap>
 #include <QPushButton>
 #include <QSaveFile>
@@ -111,6 +112,9 @@ QString operationDisplayName(const QString &operation)
     if (operation == QStringLiteral("recompose_raster_layers")) {
         return QStringLiteral("重组图层");
     }
+    if (operation == QStringLiteral("ai_image_edit")) {
+        return QStringLiteral("AI 修图");
+    }
     return operation;
 }
 
@@ -159,6 +163,10 @@ QString revisionParameterSummary(const MediaImageRevisionInfo &revision)
             .arg(parameters.value(QStringLiteral("x")).toInt())
             .arg(parameters.value(QStringLiteral("y")).toInt())
             .arg(parameters.value(QStringLiteral("opacity")).toInt());
+    }
+    if (revision.operation == QStringLiteral("ai_image_edit")) {
+        const QString instruction = parameters.value(QStringLiteral("instruction")).toString();
+        return instruction.size() > 48 ? QStringLiteral("%1...").arg(instruction.left(48)) : instruction;
     }
     return {};
 }
@@ -332,6 +340,28 @@ void MediaWorkspaceDialog::buildUi()
     exportButton->setToolTip(QStringLiteral("将所选版本另存为 PNG"));
     basicLayout->addWidget(exportButton);
     editTabs->addTab(basicTab, QStringLiteral("基础"));
+
+    auto *aiTab = new QWidget(editTabs);
+    auto *aiLayout = new QVBoxLayout(aiTab);
+    aiLayout->setContentsMargins(8, 8, 8, 8);
+    aiLayout->setSpacing(8);
+    aiInstructionEdit = new QPlainTextEdit(aiTab);
+    aiInstructionEdit->setObjectName(QStringLiteral("mediaWorkspaceAiInstructionInput"));
+    aiInstructionEdit->setAccessibleName(QStringLiteral("AI 修图指令"));
+    aiInstructionEdit->setPlaceholderText(QStringLiteral("例如：把中央的红色圆形改成绿色，其他区域保持不变"));
+    aiInstructionEdit->setMaximumHeight(72);
+    aiInstructionEdit->setToolTip(QStringLiteral("基于当前版本提交一次 AI 修图，结果将生成可撤销的新版本"));
+    aiLayout->addWidget(aiInstructionEdit);
+    auto *aiActionLayout = new QHBoxLayout;
+    aiActionLayout->addStretch();
+    aiEditButton = new QPushButton(QStringLiteral("开始修图"), aiTab);
+    aiEditButton->setObjectName(QStringLiteral("primaryButton"));
+    aiEditButton->setAccessibleName(QStringLiteral("提交 AI 修图"));
+    aiEditButton->setMinimumHeight(34);
+    aiEditButton->setToolTip(QStringLiteral("调用当前配置的 AI 修图模型并回读验证结果"));
+    aiActionLayout->addWidget(aiEditButton);
+    aiLayout->addLayout(aiActionLayout);
+    editTabs->addTab(aiTab, QStringLiteral("AI 修图"));
 
     auto configurePercentSpin = [this](QSpinBox *spin) {
         spin->setRange(-100, 100);
@@ -535,6 +565,8 @@ void MediaWorkspaceDialog::buildUi()
             [this]() { createRevision(QStringLiteral("flip_horizontal")); });
     connect(grayscaleButton, &QPushButton::clicked, this,
             [this]() { createRevision(QStringLiteral("grayscale")); });
+    connect(aiEditButton, &QPushButton::clicked, this, [this]() { startAiImageEdit(); });
+    connect(aiInstructionEdit, &QPlainTextEdit::textChanged, this, [this]() { updateActionState(); });
     connect(colorApplyButton, &QPushButton::clicked, this, [this]() {
         createRevision(
             QStringLiteral("adjust_color"),
@@ -753,9 +785,16 @@ void MediaWorkspaceDialog::connectBackend()
                     contrastSpin->setValue(0);
                     saturationSpin->setValue(0);
                 }
+                const bool completedAiEdit = pendingAiEdit;
+                pendingAiEdit = false;
+                if (completedAiEdit) {
+                    aiInstructionEdit->clear();
+                }
                 preferredRevisionId = revision.revisionId;
                 pendingRevisionId = revision.revisionId;
-                setStatus(QStringLiteral("已生成新的图片版本。"));
+                setStatus(completedAiEdit
+                              ? QStringLiteral("AI 修图结果已回读验证并生成新的图片版本。")
+                              : QStringLiteral("已生成新的图片版本。"));
                 backendClient->requestMediaProject(currentProjectId());
                 backendClient->requestMediaAssetRevisions(currentProjectId(), activeAssetId);
                 updateActionState();
@@ -766,10 +805,16 @@ void MediaWorkspaceDialog::connectBackend()
                     return;
                 }
                 pendingRevisionTaskId = taskId;
-                setStatus(QStringLiteral("正在生成并校验图片版本..."));
+                setStatus(pendingAiEdit
+                              ? QStringLiteral("正在提交 AI 修图并等待结果...")
+                              : QStringLiteral("正在生成并校验图片版本..."));
                 QTimer::singleShot(100, this, [this, taskId]() {
                     if (revisionRequestPending && pendingRevisionTaskId == taskId) {
-                        backendClient->requestMediaImageRevisionTaskResult(taskId);
+                        if (pendingAiEdit) {
+                            backendClient->requestMediaImageAiEditTaskResult(taskId);
+                        } else {
+                            backendClient->requestMediaImageRevisionTaskResult(taskId);
+                        }
                     }
                 });
             });
@@ -778,10 +823,16 @@ void MediaWorkspaceDialog::connectBackend()
                 if (!revisionRequestPending || pendingRevisionTaskId != taskId) {
                     return;
                 }
-                setStatus(QStringLiteral("正在生成并校验图片版本..."));
+                setStatus(pendingAiEdit
+                              ? QStringLiteral("正在等待 AI 修图结果并回读校验...")
+                              : QStringLiteral("正在生成并校验图片版本..."));
                 QTimer::singleShot(160, this, [this, taskId]() {
                     if (revisionRequestPending && pendingRevisionTaskId == taskId) {
-                        backendClient->requestMediaImageRevisionTaskResult(taskId);
+                        if (pendingAiEdit) {
+                            backendClient->requestMediaImageAiEditTaskResult(taskId);
+                        } else {
+                            backendClient->requestMediaImageRevisionTaskResult(taskId);
+                        }
                     }
                 });
             });
@@ -791,6 +842,7 @@ void MediaWorkspaceDialog::connectBackend()
                     return;
                 }
                 revisionRequestPending = false;
+                pendingAiEdit = false;
                 pendingRevisionId.clear();
                 pendingRevisionTaskId.clear();
                 setStatus(message, true);
@@ -876,13 +928,17 @@ void MediaWorkspaceDialog::connectBackend()
         }
         if (operation == QStringLiteral("create_revision")) {
             revisionRequestPending = false;
+            pendingAiEdit = false;
             pendingRevisionId.clear();
             pendingRevisionTaskId.clear();
             refreshAfterConflict = message.startsWith(QStringLiteral("HTTP 409"));
         }
         if (operation == QStringLiteral("start_revision_task")
-            || operation == QStringLiteral("revision_task_result")) {
+            || operation == QStringLiteral("revision_task_result")
+            || operation == QStringLiteral("start_ai_edit_task")
+            || operation == QStringLiteral("ai_edit_task_result")) {
             revisionRequestPending = false;
+            pendingAiEdit = false;
             pendingRevisionId.clear();
             pendingRevisionTaskId.clear();
         }
@@ -1077,11 +1133,33 @@ void MediaWorkspaceDialog::createRevision(const QString &operation, const QJsonO
         return;
     }
     revisionRequestPending = true;
+    pendingAiEdit = false;
     pendingRevisionId.clear();
     setStatus(QStringLiteral("正在生成%1版本...").arg(operationDisplayName(operation)));
     updateActionState();
     backendClient->startMediaImageRevisionTask(
         currentProjectId(), activeAssetId, operation, selectedRevisionId, parameters);
+}
+
+void MediaWorkspaceDialog::startAiImageEdit()
+{
+    const QString instruction = aiInstructionEdit ? aiInstructionEdit->toPlainText().trimmed() : QString();
+    if (currentProjectId().isEmpty() || activeAssetId.isEmpty() || instruction.isEmpty()
+        || revisionRequestPending || historyNavigationPending) {
+        return;
+    }
+    if (selectedRevisionId != currentAsset.currentRevisionId) {
+        setStatus(QStringLiteral("请选择当前版本后再继续 AI 修图。"), true);
+        updateActionState();
+        return;
+    }
+    revisionRequestPending = true;
+    pendingAiEdit = true;
+    pendingRevisionId.clear();
+    setStatus(QStringLiteral("正在受理 AI 修图任务..."));
+    updateActionState();
+    backendClient->startMediaImageAiEditTask(
+        currentProjectId(), activeAssetId, selectedRevisionId, instruction);
 }
 
 void MediaWorkspaceDialog::navigateHistory(const QString &action)
@@ -1551,6 +1629,7 @@ void MediaWorkspaceDialog::updateActionState()
                                    || maskHeightSpin->value() != selectedRevisionHeight);
     const bool hasLayerSource = layerSourceCombo->currentIndex() >= 0
                                 && !layerSourceCombo->currentData().toString().isEmpty();
+    const bool hasAiInstruction = aiInstructionEdit && !aiInstructionEdit->toPlainText().trimmed().isEmpty();
     const bool canRecomposeLayers = canEdit && layerStack.editable && !layerStackRequestPending
                                     && !layerStack.layers.isEmpty();
     const bool selectionLocked = revisionRequestPending || historyNavigationPending;
@@ -1566,6 +1645,8 @@ void MediaWorkspaceDialog::updateActionState()
     rotateRightButton->setEnabled(canEdit);
     flipButton->setEnabled(canEdit);
     grayscaleButton->setEnabled(canEdit);
+    aiInstructionEdit->setEnabled(canEdit);
+    aiEditButton->setEnabled(canEdit && hasAiInstruction);
     colorApplyButton->setEnabled(canEdit && hasColorChange);
     cropApplyButton->setEnabled(canEdit && hasCropChange);
     maskApplyButton->setEnabled(canEdit && hasMaskChange);

@@ -10,7 +10,9 @@
 
 `backend/scripts/verify_media_ai_edit_delivery.py` 已在临时 SQLite 和内存模型替身中验证 AI 修图后端链路：任务受理、Provider 明确拒绝/限流/未知结果、结果下载失败、当前 revision 冲突、执行前取消、PNG 回读提交、统一任务历史和服务重启对账均通过；既有图片工作区、导出、确定性编辑恢复、Qwen Adapter 和模型配置回归也通过。
 
-该证据只覆盖 E0/E1 的工程边界，不包含真实图片内容质量、局部保护、费用或 Qt 完整流程。`media_image_edit` 路由现为可配置的 Qwen 图像编辑路由；模型临时 URL 不落 SQLite/项目 metadata，未知结果不自动重发。下一步先完成单一 Qt 输入入口和离线界面冒烟，再在用户明确设置调用上限后执行一次公开夹具真实请求并进入 G2。
+`backend/scripts/verify_live_media_ai_edit.py --live` 已在用户授权下补做一次受控 E2 连通性探针：程序生成的 `1024 x 768` 几何图片经 `media_image_edit` 路由提交给 `qwen_image / qwen-image-3.0-pro`，用时 `49,242.851 ms`；Provider 报告输入/输出各 1 张、`qima_input_1k/qima_output_1k`，结果同尺寸 PNG 已下载、回读并登记为新的 `ai_image_edit` revision。请求标识已进入本地任务审计，脱敏 manifest 仅保留其 SHA-256，路径为忽略目录 `data/media_evaluations/live_media_ai_edit_20260923T025239Z/`；逐请求金额未由 API 返回，明确记为 `unknown`。
+
+该证据只证明模型到受控 revision 的一次端到端连通性，不包含真实图片内容质量、局部保护、费用核对或 Qt 完整流程。`media_image_edit` 路由现为可配置的 Qwen 图像编辑路由；模型临时 URL 不落 SQLite/项目 metadata，未知结果不自动重发。下一步冻结 G2 的真实授权图片开发集/留出集，并以独立复核执行固定任务；不得以这次合成夹具调用宣布 G2 或 G3 通过。
 
 ## 1. 如何判定任务完成
 
