@@ -31,7 +31,7 @@
 
 ## 当前阶段
 
-> **2026-09-23 多媒体助手 MM-2 最小入口与真实闭环：**图片工作区已新增“AI 修图”页，客户端只提交当前 revision 与自然语言指令，异步轮询后复用既有预览、版本、撤销和 PNG 导出，不新增平行编辑器。`media.ai_edit_image` 和 `task_media_ai_edit_*` 检查点仍只以受控内存字节提交 Qwen Image；临时 URL 必须下载、解码、同尺寸检查、PNG 回读和 SQLite 原子登记后才成为可撤销新版本。离线回归覆盖明确拒绝、限流、未知结果、下载失败、迟到版本、执行前取消和服务重启，未知结果不自动重放。`verify_live_media_ai_edit.py --live` 已用程序生成的 `1024 x 768` 夹具完成一次 `qwen-image-3.0-pro` 调用：约 49 秒后写入并回读同尺寸 PNG revision，Provider usage 为输入/输出各 1，逐请求金额为 unknown。Qt 编译和现有 CTest 已通过；独立质量复核、费用核对、完整 GUI/DPI 流程及 G2/G3 仍未通过，故不得描述为正式客户功能。
+> **2026-09-23 多媒体助手 MM-2 最小入口与真实闭环：**图片工作区已新增“AI 修图”页，客户端只提交当前 revision 与自然语言指令，异步轮询后复用既有预览、版本、撤销和 PNG 导出，不新增平行编辑器。`media.ai_edit_image` 和 `task_media_ai_edit_*` 检查点仍只以受控内存字节提交 Qwen Image；临时 URL 必须下载、解码、同尺寸检查、PNG 回读和 SQLite 原子登记后才成为可撤销新版本。离线回归覆盖明确拒绝、限流、未知结果、下载失败、迟到版本、执行前取消和服务重启，未知结果不自动重放。`verify_live_media_ai_edit.py --live` 已用程序生成的 `1024 x 768` 夹具完成一次 `qwen-image-3.0-pro` 调用：约 49 秒后写入并回读同尺寸 PNG revision，Provider usage 为输入/输出各 1，逐请求金额为 unknown。Qt 编译、现有 CTest 和图片工作区的 AI 修图入口 Windows GUI 冒烟均已通过；独立质量复核、费用核对、完整 GUI/DPI 流程及 G2/G3 仍未通过，故不得描述为正式客户功能。
 
 > **2026-09-23 多媒体助手路线纠偏：**主线仍为 AI 修图 -> 对话式视频剪辑 -> 视频翻译配音，但统一改为“模型理解/生成 + Pillow/OpenCV/FFmpeg 精确执行 + AgentFlow 调度交付”，不建设完整图片或视频编辑器。Qwen 图片编辑、规划、失败语义和 usage 字段已经满足 `G0-DEV`；现有图片项目、revision、撤销、导出、Runtime/Artifact 和 Qt 主路径满足 `L1-DEV`。图片工作区从现在起冻结功能范围，Lite Matting/SAM 作为 optional，不再阻塞主线。MM-2 最小入口和一次受控真实 revision 闭环已经完成；下一步固定为 G2 的真实质量集与独立复核。费用核对、完整 DPI 和客户端流程保留到 G2/G3，当前仍不得把 AI 修图描述为正式客户功能。
 

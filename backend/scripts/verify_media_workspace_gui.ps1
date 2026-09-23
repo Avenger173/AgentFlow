@@ -14,11 +14,22 @@ if (!(Test-Path (Join-Path $QtBinPath "Qt6Core.dll"))) { throw "Missing Qt runti
 function Wait-Element {
     param([scriptblock]$Find, [string]$Description, [int]$TimeoutMs = 25000)
     $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
+    $lastTransientAutomationError = $null
     do {
-        $element = & $Find
+        try {
+            $element = & $Find
+        } catch {
+            if ($_.Exception.ToString() -notmatch "0x8000FFFF") { throw }
+            $lastTransientAutomationError = $_.Exception.Message
+            Start-Sleep -Milliseconds 150
+            continue
+        }
         if ($null -ne $element) { return $element }
         Start-Sleep -Milliseconds 150
     } while ([DateTime]::UtcNow -lt $deadline)
+    if ($lastTransientAutomationError) {
+        throw "Timed out waiting for UI element after transient UI Automation failures: $Description ($lastTransientAutomationError)"
+    }
     throw "Timed out waiting for UI element: $Description"
 }
 
@@ -69,6 +80,16 @@ function Invoke-Element {
         throw "UI element cannot be invoked: $($Element.Current.AutomationId)"
     }
     $pattern.Invoke()
+}
+
+function Select-Element {
+    param([System.Windows.Automation.AutomationElement]$Element)
+    $pattern = $null
+    if ($Element.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern, [ref]$pattern)) {
+        $pattern.Select()
+        return
+    }
+    Invoke-Element -Element $Element
 }
 
 function Save-Evidence {
@@ -139,8 +160,24 @@ try {
     $workspace = Wait-Element -Description "media workspace window" -Find {
         Find-ProcessWindow -ProcessId $process.Id -Name "mediaWorkspaceDialog"
     }
+    $aiTabName = "AI " + [char]0x4FEE + [char]0x56FE
+    $aiTab = Wait-Element -Description "AI image edit tab" -Find {
+        Find-ByName -Root $workspace -Name $aiTabName
+    }
+    Select-Element -Element $aiTab
+    $aiInstructionName = "AI " + [char]0x4FEE + [char]0x56FE + [char]0x6307 + [char]0x4EE4
+    $aiSubmitName = [string][char]0x63D0 + [char]0x4EA4 + " AI " + [char]0x4FEE + [char]0x56FE
+    $aiInstruction = Wait-Element -Description "AI image edit instruction" -Find {
+        Find-ByName -Root $workspace -Name $aiInstructionName
+    }
+    $aiSubmit = Wait-Element -Description "AI image edit submit" -Find {
+        Find-ByName -Root $workspace -Name $aiSubmitName
+    }
+    if ($aiSubmit.Current.IsEnabled) {
+        throw "AI image edit submit must be disabled before selecting a current revision."
+    }
     Save-Evidence -Window $workspace -Directory $evidenceDir
-    Write-Output "Media workspace Windows GUI open-path verification passed."
+    Write-Output "Media workspace Windows GUI open-path and AI edit entry verification passed."
     Write-Output "Evidence: $evidenceDir"
 } catch {
     $failure = $_
