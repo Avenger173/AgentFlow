@@ -454,3 +454,9 @@ CER/WER 使用编辑距离定义，报告替换、删除、插入及参考长度
 `backend/scripts/verify_media_workspace_gui.ps1` 已扩展为打开工作区后选择“AI 修图”页，检查“AI 修图指令”输入框和“提交 AI 修图”按钮可由 Windows UI Automation 发现，并确认尚未选择当前 revision 时提交按钮保持禁用。该次真实桌面运行通过，截图和控件树保存在忽略目录 `data/media_evaluations/l1_gui_uia_20260923T111748/`。
 
 脚本仅把页面切换期间 Windows UI Automation 的 `0x8000FFFF` 瞬态控件树重建视为可重试；其他异常和最终超时仍直接失败。它没有导入用户文件、填写提示词或发起 Provider 调用，因此这是入口和禁用态验证，不构成 G2 内容质量或 G3 完整用户流程证据。
+
+### 10.5 G2 质量集数据契约（2026-09-23）
+
+新增离线校验器 `backend/scripts/verify_media_g2_quality_suite.py`。实际质量集冻结为 `suite.json` 后，校验器要求 12 个具有 `HTTPS` 来源页、许可证链接、SHA-256 和人工权利确认的来源图片；来源级切分固定为开发集 8 张、留出集 4 张。每张图片必须对应换背景、局部消除、中文文字编辑各 1 项，总计 36 项，三类在开发/留出集分别固定为 `8/4`，从数据结构上杜绝同一来源跨 split 复用。
+
+每个任务还必须冻结自然语言指令、目标、保护要求、预期结果及 `max_provider_calls=1`；评审协议固定为 2 位盲评者，其中至少 1 位非实现者，对指令遵循、目标保护和边缘自然度使用 `1-5` 分并以 `4` 分为通过线，分差达到 2 分必须复核。准备真实公开或已授权素材后，在其忽略目录执行 `backend/.venv/Scripts/python.exe backend/scripts/verify_media_g2_quality_suite.py --suite suite.json --verify-files`。`--self-test` 只用临时合成字节验证校验器本身，不产生 Provider 调用，也不构成 G2 通过证据。
