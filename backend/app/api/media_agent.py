@@ -18,6 +18,9 @@ from app.schemas.media_workspace import (
     MediaAssetInfo,
     MediaAssetRevisionListResponse,
     MediaHistoryNavigationRequest,
+    MediaImageAiEditRequest,
+    MediaImageAiEditTaskResultResponse,
+    MediaImageAiEditTaskStartResponse,
     MediaImageEditTaskResultResponse,
     MediaImageEditTaskStartResponse,
     MediaImageExportInfo,
@@ -58,6 +61,11 @@ from app.services.media_edit_delivery import (
     get_media_edit_task_result,
     run_media_edit_task,
 )
+from app.services.media_ai_edit_delivery import (
+    create_media_ai_edit_queued_run,
+    get_media_ai_edit_task_result,
+    run_media_ai_edit_task,
+)
 from app.services.task_event_stream import (
     finish_live_task_event_stream,
     has_live_task_event_stream,
@@ -71,6 +79,7 @@ router = APIRouter(prefix="/api/agents/media_agent", tags=["media-agent"])
 logger = logging.getLogger(__name__)
 _BACKGROUND_MEDIA_EXPORT_TASKS: set[asyncio.Task[None]] = set()
 _BACKGROUND_MEDIA_EDIT_TASKS: set[asyncio.Task[None]] = set()
+_BACKGROUND_MEDIA_AI_EDIT_TASKS: set[asyncio.Task[None]] = set()
 
 
 @router.get("/projects", response_model=MediaProjectListResponse)
@@ -232,6 +241,67 @@ async def get_media_image_revision_result_endpoint(task_id: str) -> MediaImageEd
             message="正在生成并回读新的 PNG 修订版本。",
         )
     raise HTTPException(status_code=404, detail=f"Media edit task '{task_id}' was not found.")
+
+
+@router.post(
+    "/projects/{project_id}/images/{asset_id}/ai-edits/start",
+    response_model=MediaImageAiEditTaskStartResponse,
+    status_code=202,
+)
+async def start_media_image_ai_edit_endpoint(
+    project_id: str,
+    asset_id: str,
+    request: MediaImageAiEditRequest,
+) -> MediaImageAiEditTaskStartResponse:
+    """受理一次已确认的模型修图；模型输出必须回到受控 revision 链。"""
+
+    task_id = f"task_media_ai_edit_{uuid4().hex[:12]}"
+    try:
+        await asyncio.to_thread(
+            create_media_ai_edit_queued_run,
+            task_id=task_id,
+            project_id=project_id,
+            asset_id=asset_id,
+            request=request,
+        )
+    except MediaWorkspaceError as exc:
+        raise _media_error_to_http(exc) from exc
+    open_live_task_event_stream(task_id)
+    await publish_live_task_event(
+        task_id=task_id,
+        event="task_queued",
+        agent_id="media_agent",
+        message="AI 修图已受理，尚未向模型 Provider 发送图片。",
+    )
+    task = asyncio.create_task(
+        _run_media_ai_edit_background(
+            task_id=task_id,
+            project_id=project_id,
+            asset_id=asset_id,
+            request=request,
+        )
+    )
+    _BACKGROUND_MEDIA_AI_EDIT_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_MEDIA_AI_EDIT_TASKS.discard)
+    return MediaImageAiEditTaskStartResponse(task_id=task_id)
+
+
+@router.get(
+    "/ai-edits/{task_id}/result",
+    response_model=MediaImageAiEditTaskResultResponse,
+)
+async def get_media_image_ai_edit_result_endpoint(task_id: str) -> MediaImageAiEditTaskResultResponse:
+    result = get_media_ai_edit_task_result(task_id)
+    if result is not None:
+        return result
+    if has_live_task_event_stream(task_id) and not live_task_event_stream_finished(task_id):
+        return MediaImageAiEditTaskResultResponse(
+            task_id=task_id,
+            status="running",
+            summary="AI 修图正在执行。",
+            message="正在等待图像模型并回读验证结果。",
+        )
+    raise HTTPException(status_code=404, detail=f"Media AI edit task '{task_id}' was not found.")
 
 
 @router.post(
@@ -421,6 +491,35 @@ async def _run_media_edit_background(
             agent_id="media_agent",
             level="error",
             message="图片编辑异常结束，请在任务历史中查看记录。",
+        )
+    finally:
+        await finish_live_task_event_stream(task_id)
+
+
+async def _run_media_ai_edit_background(
+    *,
+    task_id: str,
+    project_id: str,
+    asset_id: str,
+    request: MediaImageAiEditRequest,
+) -> None:
+    """模型请求异常也必须结束实时流，避免客户端无限显示处理中。"""
+
+    try:
+        await run_media_ai_edit_task(
+            task_id=task_id,
+            project_id=project_id,
+            asset_id=asset_id,
+            request=request,
+        )
+    except Exception:  # pragma: no cover - 服务层会落终态，此处只守住事件流生命周期。
+        logger.exception("Media AI edit task ended unexpectedly: %s", task_id)
+        await publish_live_task_event(
+            task_id=task_id,
+            event="task_failed",
+            agent_id="media_agent",
+            level="error",
+            message="AI 修图异常结束，请在任务历史中查看记录。",
         )
     finally:
         await finish_live_task_event_stream(task_id)

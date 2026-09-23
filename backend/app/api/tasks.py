@@ -77,6 +77,7 @@ from app.services.data_transformation_delivery import (
 )
 from app.services.media_export_delivery import cancel_media_export_task
 from app.services.media_edit_delivery import cancel_media_edit_task
+from app.services.media_ai_edit_delivery import cancel_media_ai_edit_task
 from app.services.commander_memory_proposals import ensure_completed_task_memory_proposals
 from app.services.long_term_memory import (
     LongTermMemorySafetyError,
@@ -979,6 +980,8 @@ async def cancel_task(task_id: str) -> TaskControlResponse:
     # 导出线程不能被强杀，专用处理器需要先落 cancelled、清理未登记文件，再让后台线程安全返回。
     # 因此这里必须先尝试专用任务，不能让通用 Runtime 分支提前返回 ``running``。
     response = await cancel_media_edit_task(task_id)
+    if response is None:
+        response = await cancel_media_ai_edit_task(task_id)
     if response is None:
         response = await cancel_media_export_task(task_id)
     if response is None:

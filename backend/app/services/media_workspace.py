@@ -48,6 +48,9 @@ _LAYER_ID_PATTERN = re.compile(r"^ml_[0-9a-f]{16}$")
 _EXPORT_ID_PATTERN = re.compile(r"^me_[0-9a-f]{16}$")
 _MEDIA_EXPORT_TASK_ID_PATTERN = re.compile(r"^task_media_export_[0-9a-f]{12}$")
 _MEDIA_EDIT_TASK_ID_PATTERN = re.compile(r"^task_media_edit_[0-9a-f]{12}$")
+_MEDIA_AI_EDIT_TASK_ID_PATTERN = re.compile(r"^task_media_ai_edit_[0-9a-f]{12}$")
+_MEDIA_REVISION_TASK_ID_PATTERNS = (_MEDIA_EDIT_TASK_ID_PATTERN, _MEDIA_AI_EDIT_TASK_ID_PATTERN)
+_MAX_AI_RESULT_BYTES = 30 * 1024 * 1024
 _SUPPORTED_IMAGE_TYPES = {
     "JPEG": (".jpg", "image/jpeg"),
     "PNG": (".png", "image/png"),
@@ -309,6 +312,102 @@ def create_media_image_revision(
             task_id=task_id,
             root_dir=root_dir,
         )
+
+
+def read_media_image_revision_for_ai_edit(
+    *,
+    project_id: str,
+    asset_id: str,
+    base_revision_id: str,
+    root_dir: Path | None = None,
+) -> tuple[MediaImageRevisionInfo, bytes]:
+    """读取一份已验证的当前 PNG revision，供模型调用边界转换为内存输入。
+
+    调用方拿不到项目内路径，也不能读取非当前 revision；真正提交模型结果时仍会
+    再次校验 ``base_revision_id``，防止模型等待期间覆盖较新的用户编辑。
+    """
+
+    with _project_write_lock(project_id):
+        project_dir, manifest = _project_manifest(project_id, root_dir=root_dir)
+        asset = _find_asset(manifest, asset_id)
+        _assert_current_revision(asset, base_revision_id)
+        revision = _find_revision_for_asset(manifest, base_revision_id, asset_id)
+        path = _resolve_project_file(project_dir, revision["file"])
+        _verify_revision_integrity(path, revision)
+        try:
+            image_bytes = path.read_bytes()
+        except OSError as exc:
+            raise MediaWorkspaceError("当前图片修订版本无法读取，无法提交 AI 修图。") from exc
+        if not image_bytes:
+            raise MediaWorkspaceError("当前图片修订版本为空，无法提交 AI 修图。")
+        return _revision_info(revision), image_bytes
+
+
+def create_media_image_ai_revision(
+    *,
+    project_id: str,
+    asset_id: str,
+    base_revision_id: str,
+    image_bytes: bytes,
+    parameters: dict[str, Any],
+    task_id: str,
+    root_dir: Path | None = None,
+) -> MediaImageRevisionInfo:
+    """将模型结果作为不可变 PNG revision 原子纳入项目历史。
+
+    模型临时 URL 永不进入工程元数据。只有下载字节通过图像解码、尺寸比对、PNG
+    回读和 SQLite manifest 写入后，当前版本指针才会更新。
+    """
+
+    if not _MEDIA_AI_EDIT_TASK_ID_PATTERN.fullmatch(task_id):
+        raise MediaWorkspaceError("AI 修图任务标识无效。")
+    normalized_parameters = _normalize_ai_edit_parameters(parameters)
+    if not image_bytes or len(image_bytes) > _MAX_AI_RESULT_BYTES:
+        raise MediaWorkspaceError("AI 修图结果为空或超过 30MB 安全上限。")
+
+    with _project_write_lock(project_id):
+        project_dir, manifest = _project_manifest(project_id, root_dir=root_dir)
+        asset = _find_asset(manifest, asset_id)
+        _assert_current_revision(asset, base_revision_id)
+        parent = _find_revision_for_asset(manifest, base_revision_id, asset_id)
+        parent_path = _resolve_project_file(project_dir, parent["file"])
+        _verify_revision_integrity(parent_path, parent)
+        result = _decode_ai_result_image(image_bytes)
+        if result.size != (int(parent["width"]), int(parent["height"])):
+            raise MediaWorkspaceError("AI 修图结果尺寸与当前版本不一致，未创建新版本。")
+
+        revision_id = _new_id("mr")
+        revision_relative = f"revisions/{revision_id}.png"
+        revision_path = _resolve_project_file(project_dir, revision_relative)
+        try:
+            _atomic_save_png(result, revision_path)
+            _verify_png(revision_path)
+            revision = _revision_record(
+                revision_id=revision_id,
+                asset_id=asset_id,
+                parent_revision_id=parent["revision_id"],
+                operation="ai_image_edit",
+                parameters=normalized_parameters,
+                relative_file=revision_relative,
+                path=revision_path,
+                created_at=_utc_now(),
+                task_id=task_id,
+            )
+        except Exception:
+            revision_path.unlink(missing_ok=True)
+            raise
+
+        manifest["revisions"].append(revision)
+        asset["undo_revision_ids"].append(parent["revision_id"])
+        asset["redo_revision_ids"].clear()
+        asset["current_revision_id"] = revision_id
+        _touch_manifest(manifest)
+        try:
+            _write_manifest(project_dir, manifest)
+        except Exception:
+            revision_path.unlink(missing_ok=True)
+            raise
+        return _revision_info(revision)
 
 
 def _create_media_image_revision_locked(
@@ -675,7 +774,7 @@ def find_media_image_revision_for_task(
     避免重复生成一个新分支或把迟到任务覆盖到用户后来选择的版本。
     """
 
-    if not _MEDIA_EDIT_TASK_ID_PATTERN.fullmatch(task_id):
+    if not any(pattern.fullmatch(task_id) for pattern in _MEDIA_REVISION_TASK_ID_PATTERNS):
         raise MediaWorkspaceError("图片编辑任务标识无效。")
     with _project_write_lock(project_id):
         project_dir, manifest = _project_manifest(project_id, root_dir=root_dir)
@@ -874,7 +973,8 @@ def _validate_manifest(manifest: dict) -> dict:
             raise MediaWorkspaceError("图片修订版本关联的图层无效。")
         task_id = revision["task_id"]
         if task_id is not None and (
-            not isinstance(task_id, str) or not _MEDIA_EDIT_TASK_ID_PATTERN.fullmatch(task_id)
+            not isinstance(task_id, str)
+            or not any(pattern.fullmatch(task_id) for pattern in _MEDIA_REVISION_TASK_ID_PATTERNS)
         ):
             raise MediaWorkspaceError("图片修订版本关联的任务无效。")
         composition_root_revision_id = revision["composition_root_revision_id"]
@@ -1324,6 +1424,17 @@ def _normalize_image(image: Image.Image) -> Image.Image:
     return normalized.convert("RGB")
 
 
+def _decode_ai_result_image(image_bytes: bytes) -> Image.Image:
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as probe:
+            probe.verify()
+        with Image.open(io.BytesIO(image_bytes)) as source:
+            source.load()
+            return _normalize_image(source.copy())
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise MediaWorkspaceError("AI 修图结果无法解码为有效图片。") from exc
+
+
 def _load_revision_image(path: Path) -> Image.Image:
     try:
         with Image.open(path) as source:
@@ -1430,6 +1541,57 @@ def _normalize_operation_parameters(operation: str, parameters: dict[str, Any] |
             raise MediaWorkspaceError("栅格图层参数无效。")
         return normalized
     raise MediaWorkspaceError("当前图片工作区不支持该编辑操作。")  # pragma: no cover
+
+
+def _normalize_ai_edit_parameters(parameters: dict[str, Any]) -> dict[str, Any]:
+    """只保存 UI/审计所需的脱敏模型事实，拒绝临时 URL 和任意 Provider 原始响应。"""
+
+    required = {"instruction", "provider", "model", "request_id", "usage"}
+    if not isinstance(parameters, dict) or set(parameters) != required:
+        raise MediaWorkspaceError("AI 修图版本元数据无效。")
+    if not all(isinstance(parameters[key], str) for key in {"instruction", "provider", "model", "request_id"}):
+        raise MediaWorkspaceError("AI 修图版本元数据无效。")
+    instruction = " ".join(parameters["instruction"].split()).strip()
+    provider = parameters["provider"].strip()
+    model = parameters["model"].strip()
+    request_id = parameters["request_id"].strip()
+    usage = parameters["usage"]
+    if not instruction or len(instruction) > 800 or not provider or len(provider) > 80 or not model or len(model) > 200:
+        raise MediaWorkspaceError("AI 修图版本元数据无效。")
+    if len(request_id) > 160 or not isinstance(usage, dict):
+        raise MediaWorkspaceError("AI 修图版本元数据无效。")
+    allowed_usage = {
+        "usage_reported",
+        "input_image_count",
+        "output_image_count",
+        "input_image_type",
+        "output_image_type",
+        "width",
+        "height",
+    }
+    if set(usage) - allowed_usage:
+        raise MediaWorkspaceError("AI 修图版本元数据无效。")
+    normalized_usage: dict[str, Any] = {}
+    for key, value in usage.items():
+        if key == "usage_reported":
+            if not isinstance(value, bool):
+                raise MediaWorkspaceError("AI 修图版本元数据无效。")
+            normalized_usage[key] = value
+        elif key in {"input_image_count", "output_image_count", "width", "height"}:
+            if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 0):
+                raise MediaWorkspaceError("AI 修图版本元数据无效。")
+            normalized_usage[key] = value
+        else:
+            if value is not None and (not isinstance(value, str) or len(value) > 80):
+                raise MediaWorkspaceError("AI 修图版本元数据无效。")
+            normalized_usage[key] = value
+    return {
+        "instruction": instruction,
+        "provider": provider,
+        "model": model,
+        "request_id": request_id,
+        "usage": normalized_usage,
+    }
 
 
 def _adjust_color(image: Image.Image, parameters: dict[str, int]) -> Image.Image:

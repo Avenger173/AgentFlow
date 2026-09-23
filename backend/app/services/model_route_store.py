@@ -78,10 +78,10 @@ MODEL_ROUTE_DEFINITIONS: dict[str, tuple[str, str, tuple[str, ...], bool, ModelG
         ModelGenerationParameters(),
     ),
     "media_image_edit": (
-        "AI 修图（模型验证）",
-        "多媒体助手 MM-0 的源图编辑 Provider；仅用于已确认的模型探针，未代表修图工作区已开放。",
+        "AI 修图",
+        "多媒体助手的单图自然语言修图；模型结果会回读并登记为可撤销的图片版本。",
         ("image_edit",),
-        False,
+        True,
         ModelGenerationParameters(),
     ),
 }

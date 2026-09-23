@@ -11,6 +11,7 @@ from app.services.knowledge_keyword_index import recover_interrupted_knowledge_i
 from app.services.conversation_lifecycle import run_configured_conversation_retention
 from app.services.media_export_delivery import recover_interrupted_media_export_tasks
 from app.services.media_edit_delivery import recover_interrupted_media_edit_tasks
+from app.services.media_ai_edit_delivery import recover_interrupted_media_ai_edit_tasks
 
 
 @asynccontextmanager
@@ -21,6 +22,7 @@ async def _agentflow_lifespan(app: FastAPI):
     # manifest task_id 对账，避免服务重启后将已经回读成功的 PNG 永久留在 running。
     recovered_media_export_task_ids = await asyncio.to_thread(recover_interrupted_media_export_tasks)
     recovered_media_edit_task_ids = await asyncio.to_thread(recover_interrupted_media_edit_tasks)
+    recovered_media_ai_edit_task_ids = await asyncio.to_thread(recover_interrupted_media_ai_edit_tasks)
     recovered_task_ids = await asyncio.to_thread(recover_interrupted_runtime_jobs)
     recovered_knowledge_job_ids = await asyncio.to_thread(recover_interrupted_knowledge_index_jobs)
     recovered_knowledge_deletion_ids = await asyncio.to_thread(recover_pending_knowledge_base_deletions)
@@ -29,6 +31,7 @@ async def _agentflow_lifespan(app: FastAPI):
     app.state.recovered_runtime_task_count = len(recovered_task_ids)
     app.state.recovered_media_export_task_count = len(recovered_media_export_task_ids)
     app.state.recovered_media_edit_task_count = len(recovered_media_edit_task_ids)
+    app.state.recovered_media_ai_edit_task_count = len(recovered_media_ai_edit_task_ids)
     # 知识库索引同样不能在重启后盲目续跑。K1 先收束为失败并等待显式重试，避免磁盘上半写
     # FTS 或未来 Chroma 目录被误当成已验证 generation。
     app.state.recovered_knowledge_index_job_count = len(recovered_knowledge_job_ids)

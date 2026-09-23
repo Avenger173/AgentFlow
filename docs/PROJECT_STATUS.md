@@ -31,7 +31,9 @@
 
 ## 当前阶段
 
-> **2026-09-23 多媒体助手路线纠偏：**主线仍为 AI 修图 -> 对话式视频剪辑 -> 视频翻译配音，但统一改为“模型理解/生成 + Pillow/OpenCV/FFmpeg 精确执行 + AgentFlow 调度交付”，不建设完整图片或视频编辑器。Qwen 图片编辑、规划、失败语义和 usage 字段已经满足 `G0-DEV`；现有图片项目、revision、撤销、导出、Runtime/Artifact 和 Qt 主路径满足 `L1-DEV`。图片工作区从现在起冻结功能范围，Lite Matting/SAM 作为 optional，不再阻塞主线。下一步直接进入 MM-2，接通“自然语言 + 图片 -> 真实模型 -> 新 revision -> 预览/撤销/继续修改/导出”；独立复核、费用核对、完整 DPI 和客户端流程保留到 G2/G3，当前仍不得把 AI 修图描述为正式客户功能。
+> **2026-09-23 多媒体助手 MM-2 后端闭环：**新增 `media.ai_edit_image` 任务和 `task_media_ai_edit_*` 检查点。当前 revision 只会以内存字节提交 Qwen Image；返回临时 URL 需下载、解码、同尺寸检查、PNG 回读和 SQLite 原子登记后才成为可撤销新版本。任务历史记录脱敏路由、Provider usage、失败分类和验证事实；明确拒绝、限流、未知结果、下载失败、迟到版本、执行前取消和服务重启均有离线验证，未知结果不自动重放。模型配置中的 `media_image_edit` 已从探针预留升级为可配置路由。Qt 尚未接入自然语言操作入口，尚未进行受控真实调用、独立质量复核、费用核对或 DPI 完整流程，故仍不得描述为正式客户功能。
+
+> **2026-09-23 多媒体助手路线纠偏：**主线仍为 AI 修图 -> 对话式视频剪辑 -> 视频翻译配音，但统一改为“模型理解/生成 + Pillow/OpenCV/FFmpeg 精确执行 + AgentFlow 调度交付”，不建设完整图片或视频编辑器。Qwen 图片编辑、规划、失败语义和 usage 字段已经满足 `G0-DEV`；现有图片项目、revision、撤销、导出、Runtime/Artifact 和 Qt 主路径满足 `L1-DEV`。图片工作区从现在起冻结功能范围，Lite Matting/SAM 作为 optional，不再阻塞主线。MM-2 后端已接通；下一步是最小 Qt 自然语言入口与离线界面冒烟，之后才以受控真实调用进入 G2。独立复核、费用核对、完整 DPI 和客户端流程保留到 G2/G3，当前仍不得把 AI 修图描述为正式客户功能。
 
 > **2026-09-14 模型配置与任务参数治理：**模型配置升级为 v3，DeepSeek、Kimi、OpenAI、Anthropic、Qwen、Custom 和 Seedream 均按 Provider 独立保存 Base URL、模型、Thinking 与受支持参数，Key 继续使用 Provider 级 DPAPI 密文。关键 LLM 作用域可在继承全局模型时单独覆盖生成参数，分析/问答、规划/深度任务和 PPT 创作分别采用保守推荐温度；最终参数经 Provider 能力过滤后才进入请求，通用环境 Key 也不会跨 Provider 误用。Qt 模型页增加账号模型目录刷新、可编辑模型选择和常用参数，Seedream 作为独立图像 Provider 接入同一配置与视觉路由，不会替换默认聊天模型。离线专项、C6.5 路由、全量后端、PPT 工作室回归及 Qt Debug/Release 构建与 CTest 均通过；本轮未调用真实供应商，详情见 `docs/MODEL_CONFIGURATION_AND_ROUTING.md`。
 

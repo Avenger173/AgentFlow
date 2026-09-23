@@ -182,7 +182,8 @@ def _verify_http_and_runtime_configuration() -> None:
         assert routes["document_presentation"]["resolved"]["parameters"]["temperature"] == 0.7
         assert routes["visual_generation"]["availability"] == "ready"
         assert routes["visual_generation"]["resolved"]["model"] == "seedream-fixture"
-        assert routes["media_image_edit"]["availability"] == "reserved"
+        assert routes["media_image_edit"]["availability"] == "ready"
+        assert routes["media_image_edit"]["resolved"]["model"] == "qwen-image-3.0-pro"
 
         route_save = client.put(
             "/api/models/routes/document_presentation",

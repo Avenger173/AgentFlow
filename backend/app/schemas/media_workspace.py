@@ -64,6 +64,7 @@ class MediaImageRevisionInfo(BaseModel):
         "apply_rect_mask",
         "composite_raster_layer",
         "recompose_raster_layers",
+        "ai_image_edit",
     ]
     parameters: dict[str, object] = Field(default_factory=dict)
     mask_id: str | None = Field(default=None, pattern=r"^mm_[0-9a-f]{16}$")
@@ -274,6 +275,58 @@ class MediaImageEditTaskResultResponse(BaseModel):
     summary: str
     message: str
     conflict: bool = False
+    revision: MediaImageRevisionInfo | None = None
+
+
+class MediaImageAiEditRequest(BaseModel):
+    """一次显式确认的 AI 修图请求。
+
+    首版固定只生成一张与当前版本同尺寸的结果。模型、密钥和 Provider 由
+    ``media_image_edit`` 路由解析，客户端不能在任务请求中夹带任意 URL 或 Key。
+    """
+
+    base_revision_id: str = Field(pattern=r"^mr_[0-9a-f]{16}$")
+    instruction: str = Field(min_length=1, max_length=800)
+
+    @model_validator(mode="after")
+    def normalize_instruction(self) -> "MediaImageAiEditRequest":
+        normalized = " ".join(self.instruction.split()).strip()
+        if not normalized:
+            raise ValueError("AI 修图指令不能为空。")
+        self.instruction = normalized
+        return self
+
+
+class MediaImageAiEditTaskStartResponse(BaseModel):
+    """AI 修图任务的即时受理回执。"""
+
+    task_id: str = Field(pattern=r"^task_media_ai_edit_[0-9a-f]{12}$")
+    status: Literal["queued"] = "queued"
+
+
+class MediaImageAiEditTaskResultResponse(BaseModel):
+    """AI 修图任务的可恢复终态。
+
+    ``provider_outcome_unknown`` 表示请求可能已到达 Provider，但本地没有可验证
+    的结果，调用方必须由用户显式发起新的请求，不能自动重放。
+    """
+
+    task_id: str = Field(pattern=r"^task_media_ai_edit_[0-9a-f]{12}$")
+    status: Literal["pending", "running", "completed", "failed", "cancelled"]
+    summary: str
+    message: str
+    conflict: bool = False
+    failure_reason: Literal[
+        "provider_rejected",
+        "provider_rate_limited",
+        "provider_outcome_unknown",
+        "result_download_failed",
+        "workspace_conflict",
+        "validation_failed",
+        "cancelled",
+        "unexpected",
+    ] | None = None
+    retry_after_seconds: float | None = Field(default=None, ge=0, le=3600)
     revision: MediaImageRevisionInfo | None = None
 
 
