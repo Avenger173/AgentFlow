@@ -53,9 +53,11 @@ MM-0 只建立足以判断模型路线可行的代表样本和 INTENT 小集；�
 
 完整 `VIDEO` 集仍服务于 `G4/G5` 的 EDL、同步和渲染验收，不能被当前短媒体转写能力替代。为避免把一条 SAPI 演示误写成 ASR 质量，先建立更小的 `G4-ASR-DEV` 前置集：固定 `8` 段人工权利确认的公开授权源视频，按源级 `5/3` 分为开发/留出集，两个 split 都包含中文和英文，合计源时长至少 `8 min`。每段必须具有 HTTPS 来源页、许可证链接、来源录音唯一标识、视频 SHA-256、人工校对参考文本、人工复核的单调句段时间标注及对应哈希；相同录音、相邻裁片或二次编码不能跨 split 复用。
 
-当前音轨会固定提取为 `16 kHz` 单声道 PCM WAV，单段派生音频不得超过 `200 s`，为 `7 MiB` 传输上限保留余量。Windows SAPI 或其它程序生成媒体可继续用于 FFmpeg、任务恢复、JSON/Artifact 和 UI 工程测试，但 `verify_media_transcription_quality_suite.py` 会拒绝把 `source_kind=program_generated` 写入内容质量集。推荐从带转写文本和明确许可的公开语音资料建立候选，例如 [Mozilla Common Voice 数据集目录](https://commonvoice.mozilla.org/cv/datasets)所列 CC0 ASR 数据；下载、选段、转为项目测试视频和人工复核后，仍需在本地忽略目录冻结自己的来源和标注，不能用网页宣传或模型自动转写替代人工参考答案。
+当前音轨会固定提取为 `16 kHz` 单声道 PCM WAV，单段派生音频不得超过 `200 s`，为 `7 MiB` 传输上限保留余量。Windows SAPI 或其它程序生成媒体可继续用于 FFmpeg、任务恢复、JSON/Artifact 和 UI 工程测试，但 `verify_media_transcription_quality_suite.py` 会拒绝把 `source_kind=program_generated` 写入内容质量集。推荐从带转写文本和明确许可的公开语音资料建立候选，例如 [Mozilla Common Voice 数据集目录](https://commonvoice.mozilla.org/cv/datasets)所列 CC0 ASR 数据；其正式下载需要独立 MDC API Key，不能复用 Qwen Key，也不能因数据集免费而跳过来源条款或扬声器反识别限制。下载、选段、转为项目测试视频和人工复核后，仍需在本地忽略目录冻结自己的来源和标注，不能用网页宣传或模型自动转写替代人工参考答案。
 
 `backend/scripts/verify_media_transcription_quality_suite.py --suite <suite.json> --verify-media-files` 只验证来源、拆分、参考标注、短媒体输入界限和哈希，不会调用模型或联网。`backend/scripts/evaluate_media_transcription_quality.py --suite <suite.json> --run <run.json> --verify-media-files` 只读取已回读的 `MediaTranscriptionArtifactPayload`：每例最多一条 Provider 调用，任何未知/失败/取消都保留为未完成而不自动重放；报告仅保留 fixture ID、哈希、调用数、聚合分数和时间偏差，不输出转写正文。两份 `--self-test` 仅验证脚本，不构成真实质量证据。
+
+`prepare_media_transcription_quality_fixtures.py` 是夹具准备器，不是数据下载器。它只接受位于同一目录的本地计划 JSON、已经取得的公开授权音频和参考文本，并要求调用者显式提供 `ffmpeg.exe`、`ffprobe.exe`；输出只能写入被 Git 忽略的 `data/` 目录。它为每段音频生成黑底 MP4、回读音视频流与时长、生成来源/哈希清单和候选 `suite.json`。没有人工段落标注时，它仅写入 `pending_human_review` 的单段草案并保持两个 review 标记为 `false`；质量校验器将明确拒绝该候选，而不是生成虚假的通过结果。计划最小字段为 `source_catalog`（数据集名/ID、HTTPS 来源页、许可证、人工权利确认）和 `8` 个 fixture（ID、split、`zh/en`、相对音频路径、相对参考文本路径、可选人工段落 JSON 与 review 标记）。
 
 ### 2.1.1 模型 Profile 选型探针
 
