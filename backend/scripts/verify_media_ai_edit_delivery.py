@@ -56,9 +56,11 @@ from app.services.qwen_image_edit import (
 from main import create_app
 
 
-def _fixture_png(*, color: tuple[int, int, int, int]) -> bytes:
-    image = Image.new("RGBA", (640, 512), color)
-    image.paste((245, 183, 61, 255), (160, 120, 480, 392))
+def _fixture_png(*, color: tuple[int, int, int, int], size: tuple[int, int] = (640, 512)) -> bytes:
+    image = Image.new("RGBA", size, color)
+    left = size[0] // 4
+    top = size[1] // 4
+    image.paste((245, 183, 61, 255), (left, top, size[0] - left, size[1] - top))
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
     return buffer.getvalue()
@@ -152,6 +154,56 @@ async def _run() -> None:
     assert calls[0].tool_name == "media.ai_edit_image"
     assert calls[0].request["model_used"] is True and calls[0].request["network_used"] is True
     assert calls[0].result["verification_passed"] is True
+
+    # Qwen 3.0 的竖图可低于旧的 512px 单边门槛，只要其输入边长建议和输出像素面积均有效。
+    portrait_asset = import_media_image_base64(
+        project_id=project.project_id,
+        filename="portrait-source.png",
+        content_base64=base64.b64encode(
+            _fixture_png(color=(43, 102, 188, 255), size=(384, 1024))
+        ).decode("ascii"),
+    )
+    portrait_request = MediaImageAiEditRequest(
+        base_revision_id=portrait_asset.current_revision_id,
+        instruction="把黄色区域改成绿色，其余画面保持不变。",
+    )
+    portrait_task_id = "task_media_ai_edit_0123456789ac"
+    create_media_ai_edit_queued_run(
+        task_id=portrait_task_id,
+        project_id=project.project_id,
+        asset_id=portrait_asset.asset_id,
+        request=portrait_request,
+    )
+
+    async def portrait_editor(**kwargs: object) -> QwenImageEditResult:
+        assert kwargs["output_size"] == "384*1024"
+        return QwenImageEditResult(
+            provider="qwen_image",
+            model="qwen-image-3.0-pro",
+            request_id="portrait-fixture-request-id",
+            output_urls=("https://dashscope-result-sz.oss-cn-shenzhen.aliyuncs.com/portrait.png",),
+        )
+
+    async def portrait_downloader(**_: object) -> QwenDownloadedImage:
+        image_bytes = _fixture_png(color=(51, 126, 78, 255), size=(384, 1024))
+        return QwenDownloadedImage(
+            image_bytes=image_bytes,
+            mime_type="image/png",
+            image_format="PNG",
+            width=384,
+            height=1024,
+        )
+
+    portrait = await run_media_ai_edit_task(
+        task_id=portrait_task_id,
+        project_id=project.project_id,
+        asset_id=portrait_asset.asset_id,
+        request=portrait_request,
+        runtime=_runtime(),
+        image_editor=portrait_editor,
+        image_downloader=portrait_downloader,
+    )
+    assert portrait.status == "completed", portrait
 
     # 结果迟到时只能失败，不能覆盖用户在模型等待期间新建的 revision。
     stale_task_id = "task_media_ai_edit_123456789abc"

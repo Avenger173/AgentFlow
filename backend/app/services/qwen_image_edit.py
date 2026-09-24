@@ -30,12 +30,12 @@ from app.services.model_gateway import (
 _MULTIMODAL_GENERATION_PATH = "/services/aigc/multimodal-generation/generation"
 _ALLOWED_MIME_TYPES = {"image/jpeg", "image/png", "image/bmp", "image/tiff", "image/webp", "image/gif"}
 _MAX_INPUT_IMAGES = 3
-_MAX_INPUT_IMAGE_BYTES = 20 * 1024 * 1024
+_MAX_INPUT_IMAGE_BYTES = 10 * 1024 * 1024
 _MAX_OUTPUT_IMAGE_BYTES = 30 * 1024 * 1024
 _MAX_OUTPUT_IMAGE_PIXELS = 40_000_000
 _MAX_PROMPT_CHARS = 800
 _MAX_NEGATIVE_PROMPT_CHARS = 500
-_SAFE_SIZE_RE = re.compile(r"^(?:[5-9]\d{2}|1\d{3}|20(?:0[0-4][0-8]|[0-3]\d{2}))\*(?:[5-9]\d{2}|1\d{3}|20(?:0[0-4][0-8]|[0-3]\d{2}))$")
+_SIZE_RE = re.compile(r"^(\d{1,5})\*(\d{1,5})$")
 _SECRET_PATTERN = re.compile(r"<?\b(?:sk|ak)-[A-Za-z0-9_-]{12,}\b>?", re.IGNORECASE)
 _DASHSCOPE_RESULT_HOST_RE = re.compile(
     r"^dashscope(?:-[a-z0-9]+)*\.oss(?:-[a-z0-9]+)*\.aliyuncs\.com$",
@@ -178,7 +178,7 @@ async def edit_qwen_image(
     count = int(output_count)
     if count < 1 or count > 6:
         raise ModelGatewayError("Qwen Image 输出数量必须在 1 到 6 之间。")
-    size = _normalize_size(output_size)
+    size = _normalize_size(output_size, model=active_runtime.model)
     if seed is not None and not 0 <= int(seed) <= 2_147_483_647:
         raise ModelGatewayError("Qwen Image seed 必须在 0 到 2147483647 之间。")
 
@@ -315,7 +315,7 @@ def _prepare_images(images: Sequence[QwenImageEditInput]) -> tuple[QwenImageEdit
         if mime_type not in _ALLOWED_MIME_TYPES:
             raise ModelGatewayError("源图格式仅支持 JPEG、PNG、BMP、TIFF、WEBP 或 GIF。")
         if not item.image_bytes or len(item.image_bytes) > _MAX_INPUT_IMAGE_BYTES:
-            raise ModelGatewayError("单张源图必须大于 0 且不超过 20 MB。")
+            raise ModelGatewayError("单张源图必须大于 0 且不超过 10 MB。")
         try:
             with Image.open(BytesIO(item.image_bytes)) as image:
                 image.verify()
@@ -333,12 +333,22 @@ def _normalize_prompt(value: str, *, field_name: str, maximum: int, required: bo
     return normalized
 
 
-def _normalize_size(value: str | None) -> str:
+def _normalize_size(value: str | None, *, model: str) -> str:
     size = (value or "").strip().lower().replace("x", "*")
     if not size:
         return ""
-    if not _SAFE_SIZE_RE.fullmatch(size):
-        raise ModelGatewayError("输出尺寸必须是 512 到 2048 范围内的“宽*高”格式。")
+    match = _SIZE_RE.fullmatch(size)
+    if match is None:
+        raise ModelGatewayError("输出尺寸必须使用“宽*高”格式。")
+    width, height = (int(match.group(1)), int(match.group(2)))
+    is_qwen3 = model.strip().lower().startswith("qwen-image-3.0")
+    minimum_edge = 384 if is_qwen3 else 512
+    if not minimum_edge <= width <= 2048 or not minimum_edge <= height <= 2048:
+        raise ModelGatewayError(
+            f"当前模型的输出宽高必须分别在 {minimum_edge} 到 2048 像素之间。"
+        )
+    if not 512 * 512 <= width * height <= 2048 * 2048:
+        raise ModelGatewayError("输出总像素必须在 512 x 512 到 2048 x 2048 之间。")
     return size
 
 

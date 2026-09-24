@@ -159,6 +159,51 @@ async def _verify_qwen3_usage_and_request_header() -> None:
     assert (result.image_count, result.width, result.height) == (1, 1024, 1024)
 
 
+async def _verify_qwen3_size_contract() -> None:
+    fixture = _fixture_png()
+    result_url = "https://dashscope-result-sz.oss-cn-shenzhen.aliyuncs.com/qwen3-size.png"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["parameters"]["size"] == "384*1024"
+        return httpx.Response(
+            200,
+            json={
+                "output": {"choices": [{"message": {"content": [{"image": result_url}]}}]},
+            },
+        )
+
+    runtime = VisualModelRuntime(
+        provider="qwen_image",
+        label="Qwen Image / DashScope",
+        transport="dashscope_multimodal",
+        base_url="https://dashscope.example.test/api/v1",
+        model="qwen-image-3.0-pro",
+        api_key="fixture-qwen-key",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await edit_qwen_image(
+            images=[QwenImageEditInput(image_bytes=fixture, mime_type="image/png")],
+            prompt="验证 Qwen 3.0 的竖图输出尺寸。",
+            output_size="384*1024",
+            runtime=runtime,
+            client=client,
+        )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        try:
+            await edit_qwen_image(
+                images=[QwenImageEditInput(image_bytes=fixture, mime_type="image/png")],
+                prompt="验证像素面积下限。",
+                output_size="384*512",
+                runtime=runtime,
+                client=client,
+            )
+        except ModelGatewayError as exc:
+            assert "总像素" in str(exc)
+        else:  # pragma: no cover - 防止无效面积仍然发往 Provider。
+            raise AssertionError("Qwen 3.0 output below the documented pixel-area floor must be rejected")
+
+
 async def _verify_submission_failure_contracts() -> None:
     fixture = _fixture_png()
     runtime = VisualModelRuntime(
@@ -296,6 +341,7 @@ async def _verify_submission_failure_contracts() -> None:
 def main() -> None:
     asyncio.run(_verify_request_and_response())
     asyncio.run(_verify_qwen3_usage_and_request_header())
+    asyncio.run(_verify_qwen3_size_contract())
     asyncio.run(_verify_submission_failure_contracts())
     print("Qwen Image edit provider verification passed.")
 

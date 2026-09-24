@@ -101,7 +101,7 @@ QString operationDisplayName(const QString &operation)
         return QStringLiteral("裁剪");
     }
     if (operation == QStringLiteral("resize")) {
-        return QStringLiteral("缩放");
+        return QStringLiteral("调整尺寸");
     }
     if (operation == QStringLiteral("apply_rect_mask")) {
         return QStringLiteral("矩形蒙版");
@@ -512,19 +512,19 @@ void MediaWorkspaceDialog::buildUi()
     resizeLayout->setContentsMargins(8, 8, 8, 8);
     resizeLayout->setHorizontalSpacing(10);
     resizeLayout->setVerticalSpacing(6);
-    resizeLayout->addWidget(new QLabel(QStringLiteral("目标宽"), resizeTab), 0, 0);
+    resizeLayout->addWidget(new QLabel(QStringLiteral("目标宽度"), resizeTab), 0, 0);
     resizeWidthSpin = new QSpinBox(resizeTab);
     configurePixelSpin(resizeWidthSpin);
     resizeLayout->addWidget(resizeWidthSpin, 0, 1);
-    resizeLayout->addWidget(new QLabel(QStringLiteral("目标高"), resizeTab), 1, 0);
+    resizeLayout->addWidget(new QLabel(QStringLiteral("目标高度"), resizeTab), 1, 0);
     resizeHeightSpin = new QSpinBox(resizeTab);
     configurePixelSpin(resizeHeightSpin);
     resizeLayout->addWidget(resizeHeightSpin, 1, 1);
-    resizeApplyButton = new QPushButton(QStringLiteral("应用缩放"), resizeTab);
-    resizeApplyButton->setToolTip(QStringLiteral("使用高质量重采样生成指定像素尺寸的新版本"));
+    resizeApplyButton = new QPushButton(QStringLiteral("应用尺寸"), resizeTab);
+    resizeApplyButton->setToolTip(QStringLiteral("使用本地高质量重采样生成指定像素尺寸的新版本，不调用 AI 模型"));
     resizeLayout->addWidget(resizeApplyButton, 2, 0, 1, 2);
     resizeLayout->setColumnStretch(1, 1);
-    editTabs->addTab(resizeTab, QStringLiteral("缩放"));
+    editTabs->addTab(resizeTab, QStringLiteral("调整尺寸"));
     previewLayout->addWidget(editTabs);
 
     QWidget *librarySplitterWidget = libraryPane;
@@ -577,10 +577,10 @@ void MediaWorkspaceDialog::buildUi()
     connect(cropApplyButton, &QPushButton::clicked, this, [this]() {
         createRevision(
             QStringLiteral("crop"),
-            {{QStringLiteral("x"), cropXSpin->value()},
-             {QStringLiteral("y"), cropYSpin->value()},
-             {QStringLiteral("width"), cropWidthSpin->value()},
-             {QStringLiteral("height"), cropHeightSpin->value()}});
+            {{QStringLiteral("crop_x"), cropXSpin->value()},
+             {QStringLiteral("crop_y"), cropYSpin->value()},
+             {QStringLiteral("crop_width"), cropWidthSpin->value()},
+             {QStringLiteral("crop_height"), cropHeightSpin->value()}});
     });
     connect(maskApplyButton, &QPushButton::clicked, this, [this]() {
         createRevision(
@@ -626,8 +626,8 @@ void MediaWorkspaceDialog::buildUi()
     connect(resizeApplyButton, &QPushButton::clicked, this, [this]() {
         createRevision(
             QStringLiteral("resize"),
-            {{QStringLiteral("width"), resizeWidthSpin->value()},
-             {QStringLiteral("height"), resizeHeightSpin->value()}});
+            {{QStringLiteral("resize_width"), resizeWidthSpin->value()},
+             {QStringLiteral("resize_height"), resizeHeightSpin->value()}});
     });
     for (QSpinBox *spin : {brightnessSpin, contrastSpin, saturationSpin}) {
         connect(spin, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { updateActionState(); });

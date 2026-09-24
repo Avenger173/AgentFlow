@@ -143,8 +143,8 @@ async def run_media_ai_edit_task(
             asset_id=asset_id,
             base_revision_id=request.base_revision_id,
         )
-        _validate_source_size(source_revision)
         active_runtime, active_audit = _resolve_runtime(runtime=runtime, route_audit=route_audit)
+        _validate_source_size(source_revision, runtime=active_runtime)
     except MediaWorkspaceConflictError as exc:
         return await _persist_failed_task(
             task_id=task_id,
@@ -490,9 +490,32 @@ def _resolve_runtime(
     return resolution.runtime, resolution.audit_snapshot(stage=MEDIA_AI_EDIT_STEP_ID)
 
 
-def _validate_source_size(revision: MediaImageRevisionInfo) -> None:
-    if not 512 <= revision.width <= 2048 or not 512 <= revision.height <= 2048:
-        raise MediaWorkspaceError("AI 修图首版仅支持宽高均在 512 到 2048 像素之间的当前版本，请先用本地缩放生成兼容版本。")
+def _validate_source_size(revision: MediaImageRevisionInfo, *, runtime: VisualModelRuntime) -> None:
+    """在模型调用前保持“同尺寸交付”的可验证边界。
+
+    Qwen Image 3.0 的 I2I 输入建议每边在 384-2048 像素，输出要求总像素位于
+    512^2-2048^2。本工作区会请求与当前 revision 同尺寸的结果并拒绝静默缩放，故在此
+    预检而不是让用户先付费再收到 Provider 参数错误。其他已接入的历史 Qwen 路线仍保持
+    更保守的 512-2048 单边兼容范围。
+    """
+
+    width = revision.width
+    height = revision.height
+    pixels = width * height
+    minimum_pixels = 512 * 512
+    maximum_pixels = 2048 * 2048
+    is_qwen3 = runtime.model.strip().lower().startswith("qwen-image-3.0")
+    minimum_edge = 384 if is_qwen3 else 512
+    if not minimum_edge <= width <= 2048 or not minimum_edge <= height <= 2048:
+        raise MediaWorkspaceError(
+            "当前 AI 修图路线为保证输入与同尺寸交付，要求宽高均在 "
+            f"{minimum_edge} 到 2048 像素之间；请先用“调整尺寸”生成兼容版本。"
+        )
+    if not minimum_pixels <= pixels <= maximum_pixels:
+        raise MediaWorkspaceError(
+            "当前 AI 修图路线要求总像素在 512 x 512 到 2048 x 2048 之间；"
+            "请先用“调整尺寸”生成兼容版本。"
+        )
 
 
 async def _persist_failed_task(
