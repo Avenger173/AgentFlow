@@ -120,6 +120,16 @@ ACTION_ADMISSIONS: dict[tuple[str, str], AgentActionAdmission] = {
         verification_scope="只传递客户本轮主题，不读取文档、不调用模型、不创建或导出文件。",
         recovery_hint="在智能制作 PPT 工作台确认创作计划；导出 PPTX 时仍单独确认文件写入与可选外部素材。",
     ),
+    ("media_agent", "open_media_workspace"): AgentActionAdmission(
+        agent_id="media_agent",
+        action="open_media_workspace",
+        execution_mode="guided_handoff",
+        requires_runtime_ready=False,
+        material_kind=None,
+        expected_output="已带入客户修图目标的图片工作区入口；尚未选择图片、上传图片或调用模型。",
+        verification_scope="只传递客户本轮修图文字；不会读取本机文件、创建图片项目、发送 Provider 请求或生成图片版本。",
+        recovery_hint="在图片工作区导入或选择图片的当前版本，核对预填指令后主动点击“开始修图”。",
+    ),
     ("knowledge_agent", "answer_question"): AgentActionAdmission(
         agent_id="knowledge_agent",
         action="answer_question",

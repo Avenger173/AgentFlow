@@ -74,7 +74,7 @@ def main() -> None:
         assert missing_data.next_action == "ask_clarifying_questions"
 
         composed = create_commander_plan(
-            "@文档助手 @数据工作台 @知识库 请分别处理当前材料后汇总。",
+            "@文档助手 @数据工作台 @知识库 请结合当前文档、数据和知识库，分别处理后汇总。",
             available_agents=agents,
             materials=all_materials,
         )

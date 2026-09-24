@@ -216,6 +216,20 @@ NODE_CONTRACTS: dict[tuple[str, str], NodeContract] = {
         failure_codes=("presentation_studio_unavailable",),
         evaluation_signals=("guided_handoff_presented", "prompt_prefilled"),
     ),
+    ("media_agent", "open_media_workspace"): NodeContract(
+        agent_id="media_agent",
+        action="open_media_workspace",
+        tool_name="ui.media_workspace.open",
+        node_type="ui",
+        input_schema={
+            "task_goal": "customer image-editing goal, maximum 1200 characters",
+            "instruction": "prefilled AI image-edit instruction, maximum 1200 characters",
+        },
+        output_schema={"next_action": "open_media_workspace", "message": "string"},
+        state_writes=("routing.media_workspace",),
+        failure_codes=("media_workspace_unavailable",),
+        evaluation_signals=("guided_handoff_presented", "instruction_prefilled", "no_provider_call"),
+    ),
     ("knowledge_agent", "answer_question"): NodeContract(
         agent_id="knowledge_agent",
         action="answer_question",

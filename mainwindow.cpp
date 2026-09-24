@@ -99,12 +99,13 @@ struct DispatchAgentHintDefinition
 
 const QList<DispatchAgentHintDefinition> &dispatchAgentHintDefinitions()
 {
-    // `@` 只暴露已经有正式 Runtime action 的三项能力。这里不从导航、manifest 或插件
+    // `@` 只暴露已声明正式 action 的内置能力。这里不从导航、manifest 或插件
     // 动态枚举，避免客户以为历史占位页或未来 MCP 已经能够被总指挥调用。
     static const QList<DispatchAgentHintDefinition> definitions = {
         {"document_agent", "文档助手", "@文档助手", {"文档助手", "文档", "document", "document_agent"}},
         {"data_agent", "数据工作台", "@数据工作台", {"数据工作台", "数据", "data", "data_agent"}},
         {"knowledge_agent", "知识库", "@知识库", {"知识库", "知识库助手", "knowledge", "knowledge_agent"}},
+        {"media_agent", "图片助手", "@图片助手", {"图片助手", "多媒体助手", "修图", "image", "media", "media_agent"}},
     };
     return definitions;
 }
@@ -176,6 +177,15 @@ QString agentDisplayName(const QString &agentId)
     }
     if (agentId == QStringLiteral("document_agent")) {
         return QStringLiteral("文档助手");
+    }
+    if (agentId == QStringLiteral("data_agent")) {
+        return QStringLiteral("数据工作台");
+    }
+    if (agentId == QStringLiteral("knowledge_agent")) {
+        return QStringLiteral("知识库");
+    }
+    if (agentId == QStringLiteral("media_agent")) {
+        return QStringLiteral("图片助手");
     }
     if (agentId == QStringLiteral("code_agent")) {
         return QStringLiteral("代码工坊");
@@ -1604,6 +1614,8 @@ void MainWindow::setupDispatchChat()
     ui->dispatchModelRouteButton->setIcon(style()->standardIcon(QStyle::SP_ComputerIcon));
     ui->dispatchModelRouteButton->setToolTip(
         QStringLiteral("选择总指挥本轮规划与回复使用的模型；不会显示或复制 API Key。"));
+    ui->dispatchInputEdit->setAccessibleName(QStringLiteral("调度台任务输入"));
+    ui->sendTaskButton->setAccessibleName(QStringLiteral("发送调度任务"));
     ui->dispatchClearDocumentButton->setIcon(style()->standardIcon(QStyle::SP_DialogCloseButton));
     ui->dispatchClearDocumentButton->setText(QString());
     ui->dispatchClearKnowledgeButton->setIcon(style()->standardIcon(QStyle::SP_DialogCloseButton));
@@ -3863,10 +3875,10 @@ void MainWindow::setupMediaWorkspace()
     ui->visionMainLayout->insertWidget(qMax(0, inputIndex), openButton);
     openButton->style()->unpolish(openButton);
     openButton->style()->polish(openButton);
-    connect(openButton, &QPushButton::clicked, this, &MainWindow::openMediaWorkspace);
+    connect(openButton, &QPushButton::clicked, this, [this]() { openMediaWorkspace(); });
 }
 
-void MainWindow::openMediaWorkspace()
+void MainWindow::openMediaWorkspace(const QString &aiInstruction)
 {
     if (!backendClient || !backendManager || !backendManager->isReady()) {
         QMessageBox::information(
@@ -3886,6 +3898,9 @@ void MainWindow::openMediaWorkspace()
     mediaWorkspaceDialog->show();
     mediaWorkspaceDialog->raise();
     mediaWorkspaceDialog->activateWindow();
+    if (!aiInstruction.trimmed().isEmpty()) {
+        mediaWorkspaceDialog->setAiInstructionForHandoff(aiInstruction);
+    }
 }
 
 void MainWindow::setupDataWorkspace()
@@ -10575,6 +10590,7 @@ void MainWindow::updateDispatchActionButtons()
     const bool autoReadOnlyTask = isCurrentDispatchAutoReadOnlyTask();
     const bool directConversation = isCurrentDispatchDirectConversation();
     const bool presentationHandoff = currentDispatchPresentationHandoff;
+    const bool mediaWorkspaceHandoff = isCurrentDispatchMediaWorkspaceHandoff();
     const bool compositionRuntimeRequired = currentDispatchPlanSummary.executionReadiness
         == QStringLiteral("requires_composition_runtime");
     if (ui->dispatchPlanButton) {
@@ -10624,6 +10640,8 @@ void MainWindow::updateDispatchActionButtons()
                     ? QStringLiteral("正在制作 PPT")
                     : currentDispatchPresentationCompleted ? QStringLiteral("PPT 已生成")
                                                             : QStringLiteral("PPT 制作已受理"));
+        } else if (mediaWorkspaceHandoff) {
+            ui->dispatchExecuteButton->setText(QStringLiteral("已打开图片工作区"));
         } else if (directConversation) {
             ui->dispatchExecuteButton->setText(QStringLiteral("回答已完成"));
         } else if (currentDispatchGuidedHandoff) {
@@ -10647,8 +10665,9 @@ void MainWindow::updateDispatchActionButtons()
         }
 
         ui->dispatchExecuteButton->setEnabled(!autoReadOnlyTask
-                                             && !presentationHandoff
-                                             && !directConversation
+                                              && !presentationHandoff
+                                              && !mediaWorkspaceHandoff
+                                              && !directConversation
                                              && hasTask
                                              && !runtimeTask
                                              && !currentDispatchNeedsClarification
@@ -10673,6 +10692,9 @@ void MainWindow::updateDispatchActionButtons()
                     : currentDispatchPresentationCompleted
                           ? QStringLiteral("PPT 已完成，可在创作窗口或任务历史查看交付物。")
                           : QStringLiteral("PPT 制作已受理，可继续发送“开始制作”恢复创作窗口。"));
+        } else if (mediaWorkspaceHandoff) {
+            ui->dispatchExecuteButton->setToolTip(
+                QStringLiteral("修图指令已带入图片工作区；请选择图片当前版本后主动点击“开始修图”。"));
         } else if (currentDispatchNeedsClarification) {
             ui->dispatchExecuteButton->setToolTip(QStringLiteral("当前计划需要补充信息，暂不适合执行。"));
         } else if (compositionRuntimeRequired) {
@@ -11261,6 +11283,11 @@ bool MainWindow::isCurrentDispatchPublicReferenceSearch() const
                        });
 }
 
+bool MainWindow::isCurrentDispatchMediaWorkspaceHandoff() const
+{
+    return currentDispatchPlanSummary.nextAction == QStringLiteral("open_media_workspace");
+}
+
 bool MainWindow::isCurrentDispatchDataChartDelivery() const
 {
     // 只识别既有的单数据图表写入闭环。它需要客户确认，不能因为含有“图表”一词就把任意
@@ -11297,6 +11324,7 @@ bool MainWindow::isCurrentDispatchDirectConversation() const
     // 保存在审计面，Qt 只是不再把一个已经回答的问题强行变成 Runtime 操作。
     return !currentDispatchNeedsClarification
         && !currentDispatchGuidedHandoff
+        && !isCurrentDispatchMediaWorkspaceHandoff()
         && !isCurrentDispatchAutoReadOnlyTask()
         && currentDispatchPlanSummary.intent == QStringLiteral("direct_answer");
 }
@@ -19860,6 +19888,7 @@ void MainWindow::sendDispatchMessage()
         && !currentDispatchNeedsClarification
         && !currentDispatchGuidedHandoff
         && !currentDispatchPresentationHandoff
+        && !isCurrentDispatchMediaWorkspaceHandoff()
         && !isCurrentDispatchDirectConversation()
         && currentDispatchRuntimeMode != QStringLiteral("runtime")
         && !currentDispatchExecutionInProgress
@@ -20187,6 +20216,8 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
             ? QStringLiteral("正在制作 PPT")
             : currentDispatchPresentationCompleted ? QStringLiteral("PPT 已生成")
                                                     : QStringLiteral("PPT 制作已受理");
+    } else if (isCurrentDispatchMediaWorkspaceHandoff()) {
+        taskSummary = QStringLiteral("已转入图片工作区");
     } else if (currentDispatchGuidedHandoff) {
         taskSummary = QStringLiteral("待转入数据工作台");
     } else if (currentDispatchDirectDataAnalysis) {
@@ -20242,6 +20273,11 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
             QStringLiteral("<hr/><h3>AI 调度台</h3><p><b>已开始制作 PPT。</b></p>"
                            "<p>正在生成创作计划、整理页面并导出可编辑 PPTX；完整进度会显示在独立创作窗口，"
                            "主对话不会被切走。</p>"));
+    } else if (isCurrentDispatchMediaWorkspaceHandoff()) {
+        appendConversationHtml(
+            QStringLiteral("<hr/><h3>AI 调度台</h3><p><b>已打开图片工作区。</b></p>"
+                           "<p>我已带入修图指令；请选择图片当前版本并核对内容后，主动点击“开始修图”。"
+                           "当前不会上传图片或调用模型。</p>"));
     } else if (currentDispatchGuidedHandoff) {
         appendConversationHtml(
             QStringLiteral("<hr/><h3>AI 调度台</h3><p>已识别到需要在数据工作台继续处理。选择数据文件后，我会基于该文件给出可执行分析。</p>"));
@@ -20275,6 +20311,8 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
         dispatchStatus = QStringLiteral("等待开始联网检索");
     } else if (currentDispatchPresentationHandoff) {
         dispatchStatus = QStringLiteral("已识别 PPT 制作需求");
+    } else if (isCurrentDispatchMediaWorkspaceHandoff()) {
+        dispatchStatus = QStringLiteral("已识别图片编辑需求");
     } else if (currentDispatchGuidedHandoff) {
         dispatchStatus = QStringLiteral("待转入工作台");
     } else if (directConversation) {
@@ -20332,6 +20370,12 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
             : currentDispatchPresentationCompleted
                   ? QStringLiteral("5 当前结论 · PPT 已交付")
                   : QStringLiteral("5 当前结论 · PPT 制作已受理");
+    } else if (isCurrentDispatchMediaWorkspaceHandoff()) {
+        stageThree = QStringLiteral("3 图片工作区交接 · 等待你选择当前版本");
+        stageFour = QStringLiteral("4 模型调用 · 尚未提交");
+        stageFive = QStringLiteral("5 当前结论 · 已带入修图指令");
+        stageThreeBadge = QStringLiteral("badgeGreen");
+        stageFiveBadge = QStringLiteral("badgeGreen");
     } else if (currentDispatchGuidedHandoff) {
         stageThree = QStringLiteral("3 工作台交接 · 等待你选择数据");
         stageFour = QStringLiteral("4 权限 / 产物 · 尚未创建数据任务");
@@ -20351,6 +20395,15 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
         // 明确的“制作 PPT”请求直接进入现有创作/导出链；主窗口不切页，也不要求客户
         // 再重复点击“开始执行”。独立窗口负责展示计划、导出和回读验证进度。
         openPresentationStudioForPrompt(currentDispatchUserGoal, true);
+    } else if (isCurrentDispatchMediaWorkspaceHandoff()) {
+        QString instruction = currentDispatchUserGoal;
+        for (const WorkflowStepInfo &step : currentDispatchPlanSteps) {
+            if (step.action == QStringLiteral("open_media_workspace")) {
+                instruction = step.input.value(QStringLiteral("instruction")).toString(instruction).trimmed();
+                break;
+            }
+        }
+        openMediaWorkspace(instruction);
     }
 }
 

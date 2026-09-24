@@ -22,6 +22,7 @@ class MediaWorkspaceDialog : public QDialog
 {
 public:
     explicit MediaWorkspaceDialog(BackendClient *backendClient, QWidget *parent = nullptr);
+    void setAiInstructionForHandoff(const QString &instruction);
 
 private:
     void buildUi();

@@ -6,7 +6,7 @@
 
 ## 多媒体助手规划入口
 
-2026-09-16 用户同意整合 GitHub 调研并编写专题计划。暂定一个 `media_agent`，按图片编辑、视频剪辑、翻译配音加载对应工具，复用 Native AgentRunner；分割、ASR、TTS、转码和音频分离归为工具/Provider，实时交互单列平台扩展。详细范围、首期交付、模型与权限、失败处理和分阶段顺序以 [开发计划](MULTIMEDIA_AGENT_DEVELOPMENT_PLAN.md) 为准，验收以 [评测与验证方案](MULTIMEDIA_AGENT_EVALUATION.md) 为准。当前已落地首个内部 Tool `media.ai_edit_image`：它将已确认的图片与指令提交至可配置图像路由，并只把回读验证后的结果写为新 revision；Qt 自然语言入口、真实质量验收与用户发布尚未完成。
+2026-09-16 用户同意整合 GitHub 调研并编写专题计划。暂定一个 `media_agent`，按图片编辑、视频剪辑、翻译配音加载对应工具，复用 Native AgentRunner；分割、ASR、TTS、转码和音频分离归为工具/Provider，实时交互单列平台扩展。详细范围、首期交付、模型与权限、失败处理和分阶段顺序以 [开发计划](MULTIMEDIA_AGENT_DEVELOPMENT_PLAN.md) 为准，验收以 [评测与验证方案](MULTIMEDIA_AGENT_EVALUATION.md) 为准。当前已落地首个内部 Tool `media.ai_edit_image`：它将已确认的图片与指令提交至可配置图像路由，并只把回读验证后的结果写为新 revision；AI 调度台可识别或点名图片编辑并将指令带入工作区，但不会隐式上传图片或调用模型，用户仍需选择当前 revision 后主动提交。真实独立质量验收与用户发布尚未完成。
 
 ## 确认流程
 

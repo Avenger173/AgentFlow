@@ -75,6 +75,10 @@ DATA_JOIN_KEYWORDS = (
 PRESENTATION_ROUTE_KEYWORDS = (
     "ppt", "pptx", "演示文稿", "幻灯片", "幻灯",
 )
+MEDIA_IMAGE_EDIT_ROUTE_KEYWORDS = (
+    "ai修图", "ai 修图", "修图", "图片编辑", "图像编辑", "换背景", "替换背景", "背景换成", "背景替换",
+    "去除背景", "去背景", "消除物体", "移除物体", "擦除物体", "图片换色", "局部改图",
+)
 KNOWLEDGE_ROUTE_KEYWORDS = (
     "知识库", "资料库", "根据资料", "查资料", "问资料", "引用来源",
 )
@@ -100,6 +104,7 @@ _AGENT_HINT_ALIASES: dict[str, tuple[str, ...]] = {
     "document_agent": ("文档助手", "文档", "document", "document_agent"),
     "data_agent": ("数据工作台", "数据", "data", "data_agent"),
     "knowledge_agent": ("知识库", "知识库助手", "knowledge", "knowledge_agent"),
+    "media_agent": ("图片助手", "多媒体助手", "修图", "image", "media", "media_agent"),
 }
 # C6.4 的 Native 组合 Runtime 只接收已有正式子任务入口、只读边界与独立验证器的动作。
 # 这份规划期白名单与 Runtime 的二次核验必须保持一致；新增动作要先讨论并发、预算、
@@ -181,7 +186,17 @@ def create_commander_plan(
         and not fresh_external_information_requested
         and _matches_any(lowered, PUBLIC_REFERENCE_ROUTE_KEYWORDS)
     )
-    knowledge_intent_requested = not history_recall_requested and (
+    media_image_edit_requested = (
+        not history_recall_requested
+        and not presentation_requested
+        and not fresh_external_information_requested
+        and not public_reference_requested
+        and (
+            _matches_any(lowered, MEDIA_IMAGE_EDIT_ROUTE_KEYWORDS)
+            or "media_agent" in hinted_agent_ids
+        )
+    )
+    knowledge_intent_requested = not history_recall_requested and not media_image_edit_requested and (
         _matches_any(lowered, KNOWLEDGE_ROUTE_KEYWORDS)
         or knowledge_deep_requested
     )
@@ -191,9 +206,10 @@ def create_commander_plan(
         knowledge_intent_requested
         or public_reference_requested
         or fresh_external_information_requested
+        or media_image_edit_requested
     ) and _matches_any(lowered, DOCUMENT_ROUTE_KEYWORDS)
     data_intent_requested = not history_recall_requested and not (
-        public_reference_requested or fresh_external_information_requested
+        public_reference_requested or fresh_external_information_requested or media_image_edit_requested
     ) and (
         _matches_any(lowered, DATA_ROUTE_KEYWORDS)
     )
@@ -202,6 +218,7 @@ def create_commander_plan(
             presentation_requested,
             fresh_external_information_requested,
             public_reference_requested,
+            media_image_edit_requested,
             knowledge_intent_requested,
             document_intent_requested,
             data_intent_requested,
@@ -233,6 +250,7 @@ def create_commander_plan(
     explicit_specialist_intent = (
         fresh_external_information_requested
         or public_reference_requested
+        or media_image_edit_requested
         or knowledge_intent_requested
         or document_intent_requested
         or data_intent_requested
@@ -256,7 +274,7 @@ def create_commander_plan(
         dataset_refs=dataset_refs,
         knowledge_base_refs=knowledge_base_refs,
     )
-    knowledge_requested = not (presentation_requested or fresh_external_information_requested) and (
+    knowledge_requested = not (presentation_requested or fresh_external_information_requested or media_image_edit_requested) and (
         knowledge_intent_requested
         or (multi_material_composition_requested and bool(knowledge_base_refs))
         or (
@@ -277,7 +295,7 @@ def create_commander_plan(
     # C6.3 允许客户明确组合文档、资料库和数据集；材料引用优先于模糊关键词。
     # 只有没有资料库绑定时，才把“资料”等宽泛词当作普通文档意图，避免单独问资料库
     # 时额外产生“请选择文档”的噪声澄清。
-    document_requested = not (presentation_requested or fresh_external_information_requested) and (
+    document_requested = not (presentation_requested or fresh_external_information_requested or media_image_edit_requested) and (
         document_intent_requested
         or (multi_material_composition_requested and bool(document_refs))
         or (
@@ -295,7 +313,7 @@ def create_commander_plan(
             )
         )
     )
-    data_requested = not (presentation_requested or fresh_external_information_requested) and (
+    data_requested = not (presentation_requested or fresh_external_information_requested or media_image_edit_requested) and (
         data_intent_requested
         or (multi_material_composition_requested and bool(dataset_refs))
         or data_transform_intent_requested
@@ -385,6 +403,30 @@ def create_commander_plan(
                 next_index += 1
             else:
                 clarifying_questions.append("公开资料连接当前未通过总指挥动作准入，请检查连接状态后重试。")
+
+    if media_image_edit_requested:
+        specialist_step_id = f"step_{next_index}"
+        decision = _append_admitted_step(
+            steps=steps,
+            step_id=specialist_step_id,
+            agent_id="media_agent",
+            action="open_media_workspace",
+            title="打开图片工作区并带入修图指令",
+            depends_on=["step_1"],
+            step_input={
+                "task_goal": message,
+                "instruction": _media_edit_instruction_for_handoff(message),
+            },
+            reason="客户明确提出图片 AI 编辑目标；先把原始意图带入受控图片工作区，由客户选择当前图片版本并主动提交，避免在调度台隐式上传图片或调用模型。",
+            agents=available_agent_list,
+            materials=material_bindings,
+            timeout_ms=30_000,
+        )
+        if decision is not None:
+            specialist_step_ids.append(specialist_step_id)
+            next_index += 1
+        else:
+            clarifying_questions.append("图片工作区当前不可用，请检查多媒体助手状态后重试。")
 
     if knowledge_requested:
         if not knowledge_base_refs:
@@ -884,7 +926,7 @@ def _normalize_agent_hints(
         if any(f"@{alias.casefold()}" in normalized_message for alias in aliases):
             selected_ids.add(agent_id)  # type: ignore[arg-type]
 
-    order = ("document_agent", "data_agent", "knowledge_agent")
+    order = ("document_agent", "data_agent", "knowledge_agent", "media_agent")
     return [
         CommanderAgentHint(agent_id=agent_id, source="mention")
         for agent_id in order
@@ -1420,6 +1462,7 @@ def _normalize_material_bindings(
         r"(?P<path>[\w\-.\\/:\u4e00-\u9fff ]+?\.(?:txt|md|markdown|pdf|docx|csv|xlsx))",
         re.IGNORECASE,
     )
+
     for match in pattern.finditer(message):
         candidate = match.group("path").strip().strip("'\"“”‘’，,。；;：:")
         # 正常中文输入常写成“请读取 方案.docx”。正则必须允许中文文件名和空格，但不能
@@ -1461,6 +1504,16 @@ def _normalize_material_bindings(
             )
         )
     return bindings
+
+
+def _media_edit_instruction_for_handoff(message: str) -> str:
+    """移除调度台路由标记，保留可直接交给图片模型理解的客户原话。"""
+
+    instruction = message.strip()
+    for alias in _AGENT_HINT_ALIASES["media_agent"]:
+        instruction = re.sub(rf"@{re.escape(alias)}", "", instruction, flags=re.IGNORECASE)
+    instruction = re.sub(r"\s+", " ", instruction).strip()
+    return instruction[:1200] or message.strip()[:1200]
 
 
 def _safe_material_ref(value: str, *, kind: str) -> str | None:
@@ -1626,6 +1679,8 @@ def _retry_policy_for_step(agent_id: str, action: str) -> WorkflowRetryPolicy:
         return WorkflowRetryPolicy(max_attempts=3, retryable=True, stop_condition="固定公开资料连接连续失败后停止自动重试，避免重复联网请求。")
     if agent_id == COMMANDER_AGENT_ID:
         return WorkflowRetryPolicy(max_attempts=2, retryable=True, stop_condition="规划失败后转为澄清问题。")
+    if agent_id == "media_agent" and action == "open_media_workspace":
+        return WorkflowRetryPolicy(max_attempts=1, retryable=False, stop_condition="工作区引导失败时停止；不会自动导入图片或重发模型请求。")
     if agent_id == "document_agent" and action == "analyze_document":
         return WorkflowRetryPolicy(
             max_attempts=1,
@@ -1696,6 +1751,8 @@ def _success_criteria_for_step(agent_id: str, action: str) -> list[str]:
         return ["任务意图已识别", "风险和权限已标记", "计划通过校验"]
     if agent_id == COMMANDER_AGENT_ID and action == "search_public_references":
         return ["仅调用已启用的固定 MCP Tool", "来源 URL 与字段通过契约校验", "联网与 stdio 启动均记录权限和审计"]
+    if agent_id == "media_agent" and action == "open_media_workspace":
+        return ["图片工作区已打开", "修图指令已预填", "未读取图片、未调用 Provider"]
     if agent_id == COMMANDER_AGENT_ID:
         return ["给出可理解的直接答复或澄清问题"]
     if agent_id == "document_agent" and action == "read_text":
@@ -1773,6 +1830,8 @@ def _max_risk_level(steps: list[WorkflowStep]) -> RiskLevel:
 def _infer_intent(steps: list[WorkflowStep]) -> str:
     if any(step.action == "search_public_references" for step in steps):
         return "public_reference_search"
+    if any(step.action == "open_media_workspace" for step in steps):
+        return "media_image_edit"
     agents = {step.agent for step in steps}
     if agents <= {COMMANDER_AGENT_ID}:
         return "direct_answer"
@@ -1864,6 +1923,8 @@ def _build_definition_of_done(steps: list[WorkflowStep]) -> list[str]:
     done: list[str] = []
     if any(step.action == "search_public_references" for step in steps):
         done.append("已从启用的固定 Wikimedia 公开资料连接取得有限参考线索；每条来源均包含可打开链接与抓取时间，且不会被自动写成已核验事实。")
+    if "media_agent" in agents:
+        done.append("图片工作区已带入本轮修图目标；客户仍需自行选择图片当前版本并确认提交，当前未上传图片或调用模型。")
     if "document_agent" in agents:
         done.append("文档助手完成受控分析，结论附带可验证来源，并形成后续 Agent 可引用的上下文。")
     if "knowledge_agent" in agents:
@@ -1973,6 +2034,8 @@ def _next_action(
     if has_guided_handoff:
         if guided_handoff_action == "open_presentation_studio":
             return "open_presentation_studio"
+        if guided_handoff_action == "open_media_workspace":
+            return "open_media_workspace"
         return "open_data_workspace"
     if requires_confirmation:
         return "review_plan_and_confirm_permissions"
@@ -1984,6 +2047,7 @@ def _build_plan_summary(steps: list[WorkflowStep]) -> str:
         "document_agent": "文档助手",
         "data_agent": "数据工作台",
         "knowledge_agent": "知识库",
+        "media_agent": "图片助手",
     }
     if any(step.action == "search_public_references" for step in steps):
         return "Commander 将在你确认联网与受控 stdio 服务启动后，检索有限的 Wikimedia 公开资料参考。"
@@ -2005,5 +2069,8 @@ def _build_plan_summary(steps: list[WorkflowStep]) -> str:
             + "、".join(parallel_names)
             + " 可在未来组合 Runtime 中并行处理，随后再汇总；当前仅供审阅，不会提前执行。"
         )
-    suffix = "其中数据工作台当前需要你继续确认材料与操作。" if guided else ""
+    if any(step.action == "open_media_workspace" for step in steps):
+        suffix = "图片工作区会带入修图指令；请选择图片当前版本后再主动提交，当前不会调用模型。"
+    else:
+        suffix = "其中数据工作台当前需要你继续确认材料与操作。" if guided else ""
     return "Commander 将按顺序处理：" + " -> ".join(agent_sequence) + "。" + suffix

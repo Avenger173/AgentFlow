@@ -92,6 +92,24 @@ function Select-Element {
     Invoke-Element -Element $Element
 }
 
+function Set-ElementValue {
+    param([System.Windows.Automation.AutomationElement]$Element, [string]$Value)
+    $pattern = $null
+    if (!$Element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
+        throw "UI element does not support ValuePattern: $($Element.Current.AutomationId)"
+    }
+    $pattern.SetValue($Value)
+}
+
+function Read-ElementValue {
+    param([System.Windows.Automation.AutomationElement]$Element)
+    $pattern = $null
+    if (!$Element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
+        throw "UI element does not support ValuePattern: $($Element.Current.AutomationId)"
+    }
+    return $pattern.Current.Value
+}
+
 function Save-Evidence {
     param([System.Windows.Automation.AutomationElement]$Window, [string]$Directory)
     $rows = @()
@@ -124,12 +142,14 @@ $evidenceDir = Join-Path $repoRoot "data\media_evaluations\$runId"
 New-Item -ItemType Directory -Force -Path $evidenceDir | Out-Null
 $previousDataDir = $env:AGENTFLOW_DATA_DIR
 $previousPath = $env:PATH
+$previousChatMode = $env:AGENTFLOW_CHAT_MODE
 $process = $null
 $failure = $null
 
 try {
     $env:AGENTFLOW_DATA_DIR = $evidenceDir
     $env:PATH = "$QtBinPath;$env:PATH"
+    $env:AGENTFLOW_CHAT_MODE = "mock"
     $process = Start-Process -FilePath $executable -PassThru
     $mainWindow = Wait-Element -Description "AgentFlow main window" -Find {
         $process.Refresh()
@@ -151,12 +171,19 @@ try {
     }
     if (!$backendReady) { throw "Local backend did not become ready." }
 
-    Invoke-Element (Wait-Element -Description "vision navigation" -Find {
-        Find-ByIdSuffix -Root $mainWindow -Suffix ".navVisionButton"
-    })
-    Invoke-Element (Wait-Element -Description "open workspace button" -Find {
-        Find-ByName -Root $mainWindow -Name "mediaWorkspaceOpenButton"
-    })
+    $dispatchNavigation = Wait-Element -Description "dispatch navigation" -Find {
+        Find-ByIdSuffix -Root $mainWindow -Suffix ".navDispatchButton"
+    }
+    Invoke-Element -Element $dispatchNavigation
+    $dispatchInput = Wait-Element -Description "dispatch task input" -Find {
+        Find-ByIdSuffix -Root $mainWindow -Suffix ".dispatchInputEdit"
+    }
+    Set-ElementValue -Element $dispatchInput -Value "@image Remove the background clutter and keep the subject unchanged."
+    $dispatchSendName = [string][char]0x53D1 + [char]0x9001 + [char]0x8C03 + [char]0x5EA6 + [char]0x4EFB + [char]0x52A1
+    $dispatchSend = Wait-Element -Description "dispatch send button" -Find {
+        Find-ByName -Root $mainWindow -Name $dispatchSendName
+    }
+    Invoke-Element -Element $dispatchSend
     $workspace = Wait-Element -Description "media workspace window" -Find {
         Find-ProcessWindow -ProcessId $process.Id -Name "mediaWorkspaceDialog"
     }
@@ -176,6 +203,10 @@ try {
     if ($aiSubmit.Current.IsEnabled) {
         throw "AI image edit submit must be disabled before selecting a current revision."
     }
+    $prefilledInstruction = Read-ElementValue -Element $aiInstruction
+    if ($prefilledInstruction -ne "Remove the background clutter and keep the subject unchanged.") {
+        throw "AI image edit instruction was not handed off correctly: $prefilledInstruction"
+    }
     Save-Evidence -Window $workspace -Directory $evidenceDir
     Write-Output "Media workspace Windows GUI open-path and AI edit entry verification passed."
     Write-Output "Evidence: $evidenceDir"
@@ -191,6 +222,7 @@ try {
     }
     $env:AGENTFLOW_DATA_DIR = $previousDataDir
     $env:PATH = $previousPath
+    $env:AGENTFLOW_CHAT_MODE = $previousChatMode
 }
 
 if ($failure) { throw "Media workspace GUI verification failed: $($failure.Exception.Message)" }

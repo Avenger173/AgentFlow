@@ -124,6 +124,7 @@ private:
     bool isCurrentDispatchDataWorkbookDelivery() const;
     bool isCurrentDispatchAutoReadOnlyTask() const;
     bool isCurrentDispatchPublicReferenceSearch() const;
+    bool isCurrentDispatchMediaWorkspaceHandoff() const;
     bool isCurrentDispatchDirectConversation() const;
     QString currentDispatchAutoReadOnlyActivityText() const;
     QString currentDispatchKnowledgeBaseName() const;
@@ -188,7 +189,7 @@ private:
     void handleKnowledgeBaseDeletionFailed(const QString &message);
     void setupDataWorkspace();
     void setupMediaWorkspace();
-    void openMediaWorkspace();
+    void openMediaWorkspace(const QString &aiInstruction = QString());
     void importDataDatasetFromFile();
     void refreshDataDatasets();
     void requestSelectedDataDatasetProfile();

@@ -1,0 +1,31 @@
+id: media_agent
+name: 图片助手
+description: 将用户的图片编辑目标交接给受控图片工作区；用户选择当前图片版本并确认后，才会调用配置的 AI 修图模型。
+category: 多媒体处理
+version: 0.1.0
+icon: icons/vision.svg
+sort_order: 34
+enabled: true
+# 当前只批准由 Commander 引导进入工作区；实际模型调用仍由工作区内的显式提交和独立任务链负责。
+runtime_ready: false
+health: ready
+maturity: experimental
+llm:
+  provider: inherit
+  model: inherit
+  allow_override: true
+tools:
+  - ui.open_media_workspace
+permissions:
+  file_read: false
+  file_write: false
+  network: false
+  shell: false
+  database: false
+ui:
+  type: qt_builtin_page
+  config: media_workspace
+capabilities:
+  - 图片 AI 编辑目标交接
+  - 受控图片版本与预览
+  - 用户确认后提交 AI 修图

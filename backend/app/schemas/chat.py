@@ -95,7 +95,7 @@ class WorkflowMaterialBinding(BaseModel):
     model_visible: bool = False
 
 
-CommanderAgentHintId = Literal["document_agent", "data_agent", "knowledge_agent"]
+CommanderAgentHintId = Literal["document_agent", "data_agent", "knowledge_agent", "media_agent"]
 
 
 class CommanderAgentHint(BaseModel):

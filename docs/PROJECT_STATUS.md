@@ -31,6 +31,8 @@
 
 ## 当前阶段
 
+> **2026-09-24 多媒体助手调度台安全交接：**已将此前仅存在于图片工作区/API 的 `media_agent` 注册为内置 Agent，并补齐 `media_agent.open_media_workspace` 的 Commander 动作准入与 Node Contract。AI 调度台现在可识别“修图、换背景、去除杂物”等目标或 `@图片助手`，自动打开既有图片工作区并预填指令；该节点没有文件、网络或模型调用权限，不导入图片、不创建 revision，也不将 dry-run 模拟写成实际修图。用户必须在工作区选择当前 revision 后主动点击“开始修图”，才会进入既有 Provider、回读与版本链路。`verify_media_dispatch_handoff.py` 覆盖 manifest、文本/标签路由、PPT 优先级、空作用域和 API 契约；Qt Debug 构建、CTest 与一次 Windows GUI 冒烟均已通过，GUI 固定验证指令预填且未选择 revision 时提交按钮禁用。正式 `G2` 仍为待独立复核，`G3` 未运行。
+
 > **2026-09-24 多媒体助手尺寸契约修复：**图片工作区的“调整尺寸”和裁剪此前使用了 UI 内部字段名，未转换为 FastAPI 所需的 `resize_*` / `crop_*` 字段，导致有效操作被 422 拒绝；现已修复，并保留“本地重采样、新 revision、不调用 AI”的边界。Qwen 3.0 路线的尺寸校验也改为官方图生图输入建议（单边 `384-2048`、文件不超过 `10 MB`）与输出像素面积范围（`512 x 512` 至 `2048 x 2048`）的交集。离线回归覆盖 `384 x 1024` 竖图同尺寸交付和低于像素面积下限的调用前拒绝；未新增 Provider 请求。
 
 > **2026-09-23 多媒体助手 MM-2 最小入口与真实闭环：**图片工作区已新增“AI 修图”页，客户端只提交当前 revision 与自然语言指令，异步轮询后复用既有预览、版本、撤销和 PNG 导出，不新增平行编辑器。`media.ai_edit_image` 和 `task_media_ai_edit_*` 检查点仍只以受控内存字节提交 Qwen Image；临时 URL 必须下载、解码、同尺寸检查、PNG 回读和 SQLite 原子登记后才成为可撤销新版本。离线回归覆盖明确拒绝、限流、未知结果、下载失败、迟到版本、执行前取消和服务重启，未知结果不自动重放。`verify_live_media_ai_edit.py --live` 已用程序生成的 `1024 x 768` 夹具完成一次 `qwen-image-3.0-pro` 调用：约 49 秒后写入并回读同尺寸 PNG revision，Provider usage 为输入/输出各 1，逐请求金额为 unknown。Qt 编译、现有 CTest 和图片工作区的 AI 修图入口 Windows GUI 冒烟均已通过；独立质量复核、费用核对、完整 GUI/DPI 流程及正式 G2 待独立复核、G3 尚未运行，故不得描述为正式客户功能。

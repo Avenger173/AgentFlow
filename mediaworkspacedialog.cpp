@@ -182,6 +182,26 @@ MediaWorkspaceDialog::MediaWorkspaceDialog(BackendClient *backendClient, QWidget
     refreshProjects();
 }
 
+void MediaWorkspaceDialog::setAiInstructionForHandoff(const QString &instruction)
+{
+    const QString normalized = instruction.trimmed();
+    if (normalized.isEmpty() || !aiInstructionEdit || !editTabs) {
+        return;
+    }
+    if (revisionRequestPending || historyNavigationPending) {
+        setStatus(QStringLiteral("当前图片任务仍在处理，请完成后再带入新的修图指令。"), true);
+        return;
+    }
+
+    editTabs->setCurrentWidget(aiInstructionEdit->parentWidget());
+    aiInstructionEdit->setPlainText(normalized);
+    aiInstructionEdit->setFocus();
+    setStatus(activeAssetId.isEmpty() || selectedRevisionId.isEmpty()
+                  ? QStringLiteral("已带入修图指令；导入或选择图片当前版本后再确认提交。")
+                  : QStringLiteral("已带入修图指令；请核对当前版本后再确认提交。"));
+    updateActionState();
+}
+
 void MediaWorkspaceDialog::buildUi()
 {
     setObjectName(QStringLiteral("mediaWorkspaceDialog"));
