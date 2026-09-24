@@ -117,7 +117,7 @@ AI 修图：图片 + 提示词 + 可选蒙版 -> 图片编辑模型 -> 局部合
 - 当前 Adapter 只接收内存中的 WAV/MP3 字节，原始输入上限 `7 MiB`，编码为 Base64 后直接请求 Provider；不传本机路径，不上传到公共 OSS，也不把 Base64 写入任务、聊天、长期记忆或日志。
 - 不足一分钟时解析 Provider 返回的 JSON 终态，较长音频解析 SSE；两条路径都只接受已稳定的句级结果及其词级时间戳。显式拒绝、限流等结果可明确呈现，网络/5xx 导致结果未知时不自动重试付费请求。
 - `media_source_preparation` 已接收受控内存字节并写入私有源文件目录，记录范围、哈希与有限容器/流元数据；`ffprobe` 和 `ffmpeg` 只能由 `source_id` 解析内部文件，并固定提取首条音轨为 `16 kHz` 单声道 PCM WAV。素材原件不会覆盖，派生 WAV 需回读、哈希一致且不超过 `7 MiB` 才能交给 ASR。
-- 当前机器尚未检测到 `ffprobe`/`ffmpeg`，因此真实媒体探测和音轨提取尚未执行；`/health` 会提前报告该依赖缺失。长媒体分片、Filetrans/OSS、任务/checkpoint、字幕交付和 Qt 工作区仍未实现，不能因为模型路由或离线命令夹具已存在就对用户宣称“已支持视频转写”。
+- 开发机已用显式传入的 `Gyan.FFmpeg.Essentials 9.0.1` 路径完成一次真实探测与提取，但应用配置仍未写入 `AGENTFLOW_FFMPEG_PATH` / `AGENTFLOW_FFPROBE_PATH`；`/health` 因此继续诚实报告用户运行时依赖未就绪。长媒体分片、Filetrans/OSS、字幕、EDL 和 Qt 视频工作区仍未实现，不能因为模型路由、一次任务交付或离线命令夹具就对用户宣称“已支持视频转写”。
 
 确定性工具优先采用成熟依赖：
 
@@ -170,7 +170,7 @@ AI 修图：图片 + 提示词 + 可选蒙版 -> 图片编辑模型 -> 局部合
 | MM-1 最薄媒体底座 | 受控导入、原图保护、新 revision、撤销、回读导出、Runtime/Artifact | `L1-DEV`：足以承载模型结果 | 已满足并冻结。已有额外蒙版/图层能力不再继续扩建 |
 | MM-2 AI 修图纵向闭环 | 调度台安全交接指令，工作区由用户选择当前 revision 后提交图片与提示词，调用 `media_image_edit`，写入新 revision，预览、继续修改、撤销和导出 | `G2-DEV`：固定真实样本的最低效果通过；正式 `G2` 再补独立主观复核 | `media_agent` 已具备 manifest、动作准入和 Node Contract；调度台可识别图片编辑并预填工作区指令，不会隐式调用模型。Qt 图片工作区已接入状态和异步结果轮询；后端受控字节输入、失败分类、版本提交、取消与重启对账均有离线验证。36 项真实结果已全部通过开发质量回读；正式独立复核和完整客户端发布流程仍待后续按需执行 |
 | MM-3 图片发布准入 | 权限、费用、取消恢复、Qt 完整流程、DPI、原功能回归和用户可理解错误 | `G3`：AI 修图可正式对用户开放 | 未开始 |
-| MM-4 视频技术闭环 | ASR 时间戳、LLM 生成 EDL、FFmpeg 渲染一个真实视频 | `G4`：转写、EDL、同步和导出可验证 | 已开始模型/协议底座：`media_transcription` 路由、受控媒体源与音轨提取命令契约均有离线回归，并完成一次程序生成 WAV 的真实转写探针；当前缺少本机 FFmpeg，尚无任务或 UI，G4 未运行 |
+| MM-4 视频技术闭环 | ASR 时间戳、LLM 生成 EDL、FFmpeg 渲染一个真实视频 | `G4`：转写、EDL、同步和导出可验证 | 已完成 ASR 路由、受控媒体源、一次短视频转写任务交付和离线质量评分契约；公开授权中英夹具、真实质量运行、EDL、同步、长媒体与 UI 仍未完成，`G4` 未运行 |
 | MM-5 对话式剪辑 | 连续修改片段/字幕、增量失效和可靠交付 | `G5`：语义选段、边界、同步和恢复通过 | 未开始 |
 | MM-6 翻译与配音 | ASR -> 翻译 -> TTS -> 对齐/混音/封装 | `G6`：字幕和配音分别通过质量、成本与失败验收 | 未开始 |
 | MM-7 整合发行 | 跨 Agent 素材协作、升级与整体回归 | `G7`：已准入能力联合发布 | 未开始 |
@@ -204,7 +204,7 @@ MM-4 当前只完成下列起步项，不能提前计为视频功能：
 5. 已用 `probe_media_source_preparation.py --execute` 对程序生成的 `2 s` 黑色视频与 `880 Hz` 音调执行一次真实 `ffprobe -> ffmpeg -> WAV 回读`。受控源探测为 MP4/MPEG-4 + AAC（第 1 条音轨，`48 kHz` 单声道），派生 WAV 回读为 `16 kHz` 单声道 PCM、`32,000` frames、`64,078` bytes，源与派生哈希均一致。开发机验证使用 `Gyan.FFmpeg.Essentials 9.0.1` 的显式路径，证据位于忽略目录 `data/media_evaluations/media_source_preparation_e1_20260924T065700Z/`；它不修改应用配置，也不包含用户媒体或模型请求。
 6. 已将受控 WAV 接入 `media.transcribe_audio` 一次性任务：API 只接受项目内 `source_id + audio_id`，任务在模型提交前登记，读取时再次校验项目范围、源/派生哈希和 WAV 规格；模型结果必须写为 JSON、原子替换并 Pydantic 回读后，才登记 `agentflow-output://runtime/...` Artifact。任务历史只保存脱敏路由、Provider usage、请求 ID 哈希和转写结果，不保存音频正文、路径、Key 或 Provider 原始响应；执行前可取消，重启后仅对账已回读 JSON，其他中断一律标记结果未知且不自动重放。
 7. `verify_media_transcription_delivery.py` 已用临时 SQLite、FFmpeg/Qwen 内存替身覆盖成功、跨项目拒绝、明确拒绝、未知结果不重放、执行前取消、JSON Artifact 预览及“文件已提交/任务未完成”重启对账。`probe_live_media_transcription_delivery.py --live` 已对 SAPI 生成的 `3.869 s` 英文语音视频执行一次真实端到端闭环：MP4/AAC 经真实 FFmpeg 提取为 `16 kHz` 单声道 WAV 后，由 `qwen_audio / qwen-audio-3.1-asr-flash` 在约 `4.436 s` 完成转写，生成 `1` 个稳定句段、`7` 个词级时间戳和 `145/8/153` input/output/total tokens；回读 JSON 为 `2,491` bytes，夹具文本归一化后匹配，逐请求金额为 `unknown`。证据位于忽略目录 `data/media_evaluations/live_media_transcription_delivery_20260924T072426Z/`。
-8. 当前短音频探针、E1 和一次任务闭环仍不等于视频、字幕、EDL 或 G4。下一步应先冻结授权视频夹具与 CER/WER、时间戳偏差及失败恢复口径，再讨论字幕交付，不提前扩展翻译、配音或剪辑界面。
+8. 已新增 `verify_media_transcription_quality_suite.py` 与 `evaluate_media_transcription_quality.py`，建立 `G4-ASR-DEV` 的机器契约：仅接受 `8` 段人工权利确认的公开授权源视频（开发/留出 `5/3`、中英均覆盖、合计至少 `8 min`），每段均需 SHA-256、人工校对文本及单调句段时间标注。当前 `16 kHz` 单声道 WAV 的 `7 MiB` 输入上限约束每段派生音频至 `<=200 s`；程序生成夹具只能验证工程协议，明确拒绝计入内容质量。评分器只回读已验证的转写 Artifact，强制每例 `0/1` 次 Provider 调用，按开发/留出集分别计算中文 CER `<=15%`、英文 WER `<=20%`，并记录转写句段首尾包络的 P95 `<=500 ms`、最大 `<=1500 ms` 偏差；报告不输出转写正文。两份脚本的 `--self-test` 已通过，但尚未收集实际公开授权中英视频或调用模型，`G4-ASR-DEV` 与完整 `G4` 都不能标通过。下一步是准备并人工复核真实夹具，先跑离线契约和既有恢复回归，再由用户确认一次固定批量真实运行；不提前扩展字幕、翻译、配音或剪辑界面。
 
 本阶段完成标准不是“新增了多少按钮”，而是用户输入一张图和一句自然语言后，能得到一张经过真实模型处理、可追踪、可撤销、可继续修改且可下载的图片。
 

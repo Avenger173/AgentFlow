@@ -53,7 +53,8 @@
 
 当前处于：**阶段 5：内置 Agent MVP。文档助手 V1 和数据工作台均已完成当前基础闭环，后续按已确认的客户价值扩展；总指挥已完成 C0-C4、C5.1 全库深度总结受控委派、C5.2 父子任务真实状态镜像与 C5.3 关联深度任务工作台入口。知识库已完成 K0-K4.15、K5.1-K5.7：全库任务冻结全部活动章节，以可恢复 Map/Reduce 执行；同 generation 的本地检索证据可短时复用，ModelGateway 只记录 Provider 实际返回的 cache usage，K4 任务累计部分可观测指标，索引任务记录阶段耗时与解析复用数，版本/Profile 不变时复用已验证 generation；增量索引仅可在同 Profile、同 child ID、同内容哈希下从活动向量代次受限复用向量。K5.7 已对 K3/K4 的实际模型输入写入无正文路由和字符预算，不把已确认的长窗口能力变成整库直灌。资料对照仍只在知识库工作台由客户明确选择材料后启动。**
 
-> 当前阶段以本节为准：阶段 5 内置 Agent MVP；知识库已完成 K4.1-K4.15、K5.1 本地检索短缓存、K5.2 Provider usage 基础可观测、K5.3 K4 任务指标聚合、K5.4 索引性能事实、K5.5 无变化索引快路径、K5.6 受控增量向量复用与 K5.7 上下文路由/预算边界，Commander 已完成 C5.1 的全库深度总结受控委派、C5.2 的父子状态镜像、C5.3 的关联工作台入口和 R5.4A/B/R5.4C 首版数据交付。文档助手与数据工作台是可用的基础闭环，仍保留后续扩展空间；资料对照仍仅在知识库工作台启动。
+
+> **2026-09-24 MM-4 转写质量契约：**媒体转写已具备受控短视频导入、FFprobe/FFmpeg 固定首音轨提取、一次 `media_transcription` Runtime、JSON Artifact 回读、取消与重启对账；一次 Windows SAPI 英文短视频真实链路已完成，但它仅证明连通性。现新增 `verify_media_transcription_quality_suite.py` 和 `evaluate_media_transcription_quality.py`，将 `G4-ASR-DEV` 固定为公开授权中英短视频 `5/3` source split、人工文本/时间标注、每段最多 `200 s` 派生 WAV、中文 CER `<=15%`、英文 WER `<=20%`、时间包络 P95 `<=500 ms`、最大 `<=1500 ms`，并强制每例 `0/1` 次 Provider 调用与 Artifact 哈希回读。两者临时合成自测和禁止程序生成夹具/重复调用的负例均通过；真实公开夹具和批量模型运行尚未执行，故 `G4-ASR-DEV`、G4、字幕、EDL、同步和视频 UI 仍未通过或未实现。
 
 > **2026-09-10 Agent 记忆管理对照与短期记忆修正：**已按持续技术基线复核会话、长期记忆、Runtime 状态和程序性规则的真实调用链。短期记忆从固定 8 条升级为最多 20 条、约 18k token 的受控近轮窗口，Prompt 不再把原文二次截成 6 条、每条 420 字；归档单条上限增至 8000 字，旧消息压缩为带 task_id 的目标/约束/待办/结果摘要，并暴露摘要水位与估算 token 供诊断。长期记忆保持用户确认、默认关闭和 global/project 隔离；随后 MEM-5 已将 scoped FTS5/BM25 准入默认读取，Hybrid 继续受真实本地 Dense 证据门禁约束。完整结论见 `docs/AGENT_MEMORY_IMPLEMENTATION_AUDIT.md`。
 
