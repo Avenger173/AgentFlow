@@ -218,6 +218,14 @@ class Settings:
         ).resolve()
 
     @property
+    def media_source_dir(self) -> Path:
+        """返回音视频源文件的私有暂存目录，不与图片 revision 混用。"""
+
+        return Path(
+            os.getenv("AGENTFLOW_MEDIA_SOURCE_DIR", self.data_dir / "media_sources")
+        ).resolve()
+
+    @property
     def media_export_output_dir(self) -> Path:
         """返回多媒体图片交付物的固定输出目录。"""
 

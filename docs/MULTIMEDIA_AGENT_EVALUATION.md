@@ -69,6 +69,12 @@ MM-0 只建立足以判断模型路线可行的代表样本和 INTENT 小集；�
 
 这不是 `MODEL-05` 或 `G4` 通过：当前没有授权 VIDEO 集、人工转写标注、CER/WER、视频音轨提取、长媒体策略、FFmpeg 输出、任务恢复或客户端交付。后续真实探针仍只允许使用程序生成或公开授权夹具，并记录模型、路由、请求次数、时长、Provider usage 和逐请求金额 `unknown`（如接口未返回）。
 
+### 2.1.6 MM-4 受控媒体源与工具协议基线
+
+2026-09-24 已新增 `media_source_preparation`，将音视频原件与既有图片 revision 隔离。它只接收上层已读入的内存字节，使用 `source_id` 绑定项目范围、文件哈希和受控私有目录；`ffprobe`/`ffmpeg` 仅取得服务端由 ID 解析的路径，命令没有来自模型或客户端的 codec、filter、路径或 Shell 参数。提取固定为首条已探测音轨、`16 kHz` 单声道 PCM WAV，并在不超过 `7 MiB`、WAV 回读和 SHA-256 一致后登记为可交给 ASR 的派生音频。
+
+`verify_media_source_preparation.py` 使用临时目录与工具替身覆盖范围拒绝、源篡改拒绝、ffprobe 容器/音视频流解析、固定 `-map 0:<stream>`/`-vn`/`-ac 1`/`-ar 16000`/`pcm_s16le` 命令、派生 WAV 回读和同输入复用；不运行真实系统工具、不会读取用户媒体或调用模型。当前开发机未发现 `ffprobe` 和 `ffmpeg`，`/health` 会返回缺失状态，因此真实 E1 编解码结果和 `G4` 仍为未运行。
+
 ### 2.1.2 当前 Qwen Image 探针记录
 
 2026-09-18 已对 `Qwen Image / DashScope · qwen-image-2.0-pro` 执行一次受控真实请求。探针只构造了本地 `1024 x 768` 几何图，并要求“将中心红色圆形改为绿色，其他内容不变”。请求返回 1 张同尺寸 PNG，下载后可由 Pillow 成功回读，中心 RGB 采样由 `(228, 83, 76)` 变为 `(32, 149, 77)`，用时约 18 秒。输入、结果与不含临时签名 URL 的 manifest 存在本机忽略目录 `data/media_evaluations/qwen_image_probe_20260918T020938Z/`。

@@ -2,6 +2,7 @@ from app.core.config import settings
 from app.harness.platform_capabilities import runtime_platform_dependency_status
 from app.schemas.health import HealthResponse
 from app.services.data_workspace import data_workspace_dependency_status
+from app.services.media_source_preparation import media_transcription_preparation_status
 from fastapi import APIRouter
 
 
@@ -19,6 +20,7 @@ async def health() -> HealthResponse:
         environment=settings.environment,
         capabilities={
             "data_workspace": data_workspace_dependency_status(),
+            "media_transcription_preparation": media_transcription_preparation_status(),
             "lgm_platform": runtime_platform_dependency_status(),
         },
     )
