@@ -34,6 +34,7 @@ from app.services.model_gateway import (
     model_provider_api_key_source,
     resolve_model_runtime_for_route,
     resolve_model_runtime_for_test,
+    resolve_audio_model_runtime_for_route,
     resolve_visual_model_runtime_for_route,
 )
 from main import app
@@ -184,6 +185,9 @@ def _verify_http_and_runtime_configuration() -> None:
         assert routes["visual_generation"]["resolved"]["model"] == "seedream-fixture"
         assert routes["media_image_edit"]["availability"] == "ready"
         assert routes["media_image_edit"]["resolved"]["model"] == "qwen-image-3.0-pro"
+        assert routes["media_transcription"]["availability"] == "ready"
+        assert routes["media_transcription"]["resolved"]["provider"] == "qwen_audio"
+        assert routes["media_transcription"]["resolved"]["model"] == "qwen-audio-3.1-asr-flash"
 
         route_save = client.put(
             "/api/models/routes/document_presentation",
@@ -236,6 +240,12 @@ def _verify_http_and_runtime_configuration() -> None:
         assert qwen_image["supports_image_edit"] is True
         assert qwen_image["api_key_configured"] is True
         assert qwen_image["configured_model"] is None
+        qwen_audio = {
+            item["provider"]: item for item in provider_list.json()["providers"]
+        }["qwen_audio"]
+        assert qwen_audio["model_kind"] == "audio"
+        assert qwen_audio["supports_audio_transcription"] is True
+        assert qwen_audio["api_key_configured"] is True
 
     kimi_runtime, _ = resolve_model_runtime_for_test(provider="kimi")
     kimi_payload: dict[str, object] = {}
@@ -247,6 +257,10 @@ def _verify_http_and_runtime_configuration() -> None:
     assert qwen_image_runtime.provider == "qwen_image"
     assert qwen_image_runtime.model == "qwen-image-3.0-pro"
     assert qwen_image_runtime.api_key_configured
+    qwen_audio_runtime = resolve_audio_model_runtime_for_route("media_transcription").runtime
+    assert qwen_audio_runtime.provider == "qwen_audio"
+    assert qwen_audio_runtime.model == "qwen-audio-3.1-asr-flash"
+    assert qwen_audio_runtime.api_key_configured
 
 
 def main() -> None:

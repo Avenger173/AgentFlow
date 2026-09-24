@@ -31,6 +31,8 @@
 
 ## 当前阶段
 
+> **2026-09-24 多媒体助手 MM-4 语音转写协议底座：**已新增 `media_transcription -> qwen_audio / qwen-audio-3.1-asr-flash` 独立模型路由；它安全复用已保存的 Qwen DPAPI 密钥，但 Base URL、模型和审计配置可单独管理。Adapter 当前仅接收内存 WAV/MP3 字节（原始输入上限 `7 MiB`），以 Base64 直连；不足一分钟解析 JSON 终态，较长音频解析 SSE，并只接收稳定句/词时间戳。它不会上传本机路径或公共 OSS，不把媒体正文写入聊天、任务或长期记忆。`verify_qwen_audio_transcription.py` 已覆盖请求边界、JSON/SSE 时间戳、usage/request ID、明确拒绝和未知结果不自动重试，`verify_model_configuration.py` 已覆盖路由与共享密钥解析。随后 `probe_qwen_audio_transcription.py --live` 在 Windows SAPI 生成的 `3.314 s` 英文 WAV 上执行一次真实调用：约 `2.348 s` 返回正确转写、1 个稳定句段、5 个词级时间戳和 `138/6/144` token usage；逐请求金额为 `unknown`，证据写入忽略目录。尚未实现音视频导入、FFmpeg/ffprobe、任务/checkpoint、字幕/EDL 或 Qt 页面，`G4` 未运行；下一步是受控素材和媒体探测。
+
 > **2026-09-24 多媒体助手调度台安全交接：**已将此前仅存在于图片工作区/API 的 `media_agent` 注册为内置 Agent，并补齐 `media_agent.open_media_workspace` 的 Commander 动作准入与 Node Contract。AI 调度台现在可识别“修图、换背景、去除杂物”等目标或 `@图片助手`，自动打开既有图片工作区并预填指令；该节点没有文件、网络或模型调用权限，不导入图片、不创建 revision，也不将 dry-run 模拟写成实际修图。用户必须在工作区选择当前 revision 后主动点击“开始修图”，才会进入既有 Provider、回读与版本链路。`verify_media_dispatch_handoff.py` 覆盖 manifest、文本/标签路由、PPT 优先级、空作用域和 API 契约；Qt Debug 构建、CTest 与一次 Windows GUI 冒烟均已通过，GUI 固定验证指令预填且未选择 revision 时提交按钮禁用。正式 `G2` 仍为待独立复核，`G3` 未运行。
 
 > **2026-09-24 多媒体助手尺寸契约修复：**图片工作区的“调整尺寸”和裁剪此前使用了 UI 内部字段名，未转换为 FastAPI 所需的 `resize_*` / `crop_*` 字段，导致有效操作被 422 拒绝；现已修复，并保留“本地重采样、新 revision、不调用 AI”的边界。Qwen 3.0 路线的尺寸校验也改为官方图生图输入建议（单边 `384-2048`、文件不超过 `10 MB`）与输出像素面积范围（`512 x 512` 至 `2048 x 2048`）的交集。离线回归覆盖 `384 x 1024` 竖图同尺寸交付和低于像素面积下限的调用前拒绝；未新增 Provider 请求。

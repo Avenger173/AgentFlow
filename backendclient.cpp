@@ -1426,6 +1426,7 @@ ModelProviderInfo readModelProviderInfo(const QJsonObject &payload)
     provider.supportsFrequencyPenalty = payload.value(QStringLiteral("supports_frequency_penalty")).toBool();
     provider.supportsVisualGeneration = payload.value(QStringLiteral("supports_visual_generation")).toBool();
     provider.supportsImageEdit = payload.value(QStringLiteral("supports_image_edit")).toBool();
+    provider.supportsAudioTranscription = payload.value(QStringLiteral("supports_audio_transcription")).toBool();
     provider.apiKeyConfigured = payload.value(QStringLiteral("api_key_configured")).toBool();
     provider.configuredBaseUrl = payload.value(QStringLiteral("configured_base_url")).toString();
     provider.configuredModel = payload.value(QStringLiteral("configured_model")).toString();

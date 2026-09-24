@@ -39,6 +39,8 @@ from app.services.model_gateway import (
     resolve_model_runtime,
     resolve_model_runtime_for_route,
     resolve_model_runtime_for_test,
+    resolve_audio_model_runtime,
+    resolve_audio_model_runtime_for_route,
     resolve_visual_model_runtime,
     resolve_visual_model_runtime_for_route,
     validate_model_profile_model,
@@ -96,6 +98,7 @@ def list_model_providers() -> ModelProviderListResponse:
             supports_frequency_penalty=profile.sends_frequency_penalty,
             supports_visual_generation=profile.supports_visual_generation,
             supports_image_edit=profile.supports_image_edit,
+            supports_audio_transcription=profile.supports_audio_transcription,
             context_cache_mode=profile.context_cache_mode,
             context_cache_note=profile.context_cache_note,
             api_key_configured=api_key_source != "none",
@@ -172,11 +175,7 @@ def list_model_routes() -> ModelRouteListResponse:
             )
             continue
         try:
-            resolution = (
-                resolve_visual_model_runtime_for_route(route_id, validate=True)
-                if _route_uses_image_runtime(capabilities)
-                else resolve_model_runtime_for_route(route_id, validate=True)
-            )  # type: ignore[arg-type]
+            resolution = _resolve_route_runtime(route_id, capabilities)  # type: ignore[arg-type]
         except (ModelGatewayError, ModelRouteStoreError) as exc:
             routes.append(
                 ModelRouteStatus(
@@ -232,6 +231,7 @@ def update_model_route(route_id: ModelRouteScope, request: ModelRouteUpdateReque
             supports_thinking=profile.supports_thinking,
             supports_visual_generation=profile.supports_visual_generation,
             supports_image_edit=profile.supports_image_edit,
+            supports_audio_transcription=profile.supports_audio_transcription,
             thinking=request.thinking,
         )
         _validate_parameter_capabilities(profile, request.parameters)
@@ -263,6 +263,12 @@ def update_model_route(route_id: ModelRouteScope, request: ModelRouteUpdateReque
                     get_model_provider_profile(inherited_visual.runtime.provider),
                     settings_value.parameters,
                 )
+            elif _route_uses_audio_runtime(capabilities):
+                inherited_audio = resolve_audio_model_runtime_for_route(route_id, validate=True)
+                _validate_parameter_capabilities(
+                    get_model_provider_profile(inherited_audio.runtime.provider),
+                    settings_value.parameters,
+                )
             else:
                 inherited_runtime = resolve_model_runtime(validate=True)
                 _validate_parameter_capabilities(
@@ -277,6 +283,13 @@ def update_model_route(route_id: ModelRouteScope, request: ModelRouteUpdateReque
                     model=settings_value.model,
                     validate=True,
                 )
+            elif _route_uses_audio_runtime(capabilities):
+                resolve_audio_model_runtime(
+                    provider=settings_value.provider,
+                    base_url=settings_value.base_url,
+                    model=settings_value.model,
+                    validate=True,
+                )
             else:
                 resolve_model_runtime_for_test(
                     provider=settings_value.provider,
@@ -285,11 +298,7 @@ def update_model_route(route_id: ModelRouteScope, request: ModelRouteUpdateReque
                     thinking=settings_value.thinking,
                 )
         save_model_route_settings(settings_value)
-        resolution = (
-            resolve_visual_model_runtime_for_route(route_id, validate=True)
-            if _route_uses_image_runtime(capabilities)
-            else resolve_model_runtime_for_route(route_id, validate=True)
-        )
+        resolution = _resolve_route_runtime(route_id, capabilities)
     except (ModelGatewayError, ModelRouteStoreError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -429,6 +438,7 @@ def _validate_route_capabilities(
     supports_thinking: bool,
     supports_visual_generation: bool,
     supports_image_edit: bool,
+    supports_audio_transcription: bool,
     thinking: str,
 ) -> None:
     """拒绝能力不匹配的显式 Profile，不能把它降级为全局模型。"""
@@ -442,6 +452,8 @@ def _validate_route_capabilities(
         unavailable.append("视觉生成")
     if "image_edit" in required_capabilities and not supports_image_edit:
         unavailable.append("图片编辑")
+    if "audio_transcription" in required_capabilities and not supports_audio_transcription:
+        unavailable.append("语音转写")
     if thinking == "enabled" and not supports_thinking:
         unavailable.append("思考模式")
     if unavailable:
@@ -476,6 +488,20 @@ def _route_uses_image_runtime(required_capabilities: tuple[str, ...]) -> bool:
     """根据显式能力而非 route 名判断是否应解析专用图像运行时。"""
 
     return "visual_generation" in required_capabilities or "image_edit" in required_capabilities
+
+
+def _route_uses_audio_runtime(required_capabilities: tuple[str, ...]) -> bool:
+    """音频路由必须走专用 Provider，不能错误继承文本聊天运行时。"""
+
+    return "audio_transcription" in required_capabilities
+
+
+def _resolve_route_runtime(route_id: ModelRouteScope, capabilities: tuple[str, ...]):
+    if _route_uses_image_runtime(capabilities):
+        return resolve_visual_model_runtime_for_route(route_id, validate=True)
+    if _route_uses_audio_runtime(capabilities):
+        return resolve_audio_model_runtime_for_route(route_id, validate=True)
+    return resolve_model_runtime_for_route(route_id, validate=True)
 
 
 def _unavailable_route_snapshot(

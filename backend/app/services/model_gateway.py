@@ -19,7 +19,7 @@ from app.services.secret_store import SecretStoreError
 
 
 ModelTransport = Literal["openai_compatible", "anthropic", "ark_image", "dashscope_multimodal"]
-ModelKind = Literal["chat", "image"]
+ModelKind = Literal["chat", "image", "audio"]
 ContextCacheMode = Literal[
     "automatic_observable",
     "explicit_request",
@@ -70,6 +70,23 @@ class VisualModelRuntime:
 
 
 @dataclass(frozen=True)
+class AudioModelRuntime:
+    """语音 Provider 的最小运行时；不复用文本聊天或图像编辑协议。"""
+
+    provider: str
+    label: str
+    transport: ModelTransport
+    base_url: str
+    model: str
+    api_key: str
+    thinking: str = "disabled"
+
+    @property
+    def api_key_configured(self) -> bool:
+        return bool(self.api_key.strip())
+
+
+@dataclass(frozen=True)
 class ModelRouteResolution:
     """一次作用域模型路由的解析结果。
 
@@ -78,7 +95,7 @@ class ModelRouteResolution:
     """
 
     route: ModelRouteSettings
-    runtime: "ModelRuntime | VisualModelRuntime"
+    runtime: "ModelRuntime | VisualModelRuntime | AudioModelRuntime"
 
     def audit_snapshot(self, *, stage: str = "") -> ModelRouteAuditSnapshot:
         return ModelRouteAuditSnapshot(
@@ -231,6 +248,7 @@ class ModelProviderProfile:
     # ``visual_generation`` 是文生图，``image_edit`` 要求 Provider 接收现有图片并返回编辑结果。
     # 两者不能互相推断，避免再次把“能生图”当作“能修图”。
     supports_image_edit: bool = False
+    supports_audio_transcription: bool = False
     # 某些同厂商能力使用同一把 Key，但 API Host 与模型配置独立保存。只允许在这里显式
     # 声明共享关系，不能让任意 Provider 猜测并读取其它 Provider 的密钥。
     credential_provider: str = ""
@@ -754,6 +772,27 @@ _PROVIDER_PROFILES: dict[str, ModelProviderProfile] = {
             "可使用已保存的 Qwen Key；北京业务空间建议配置专属 API Host。"
         ),
     ),
+    "qwen_audio": ModelProviderProfile(
+        provider="qwen_audio",
+        label="Qwen Audio / DashScope",
+        transport="dashscope_multimodal",
+        model_kind="audio",
+        # ASR 使用多模态生成接口，不能借用 qwen 文本兼容模式的 /chat/completions。
+        default_base_url="https://dashscope.aliyuncs.com/api/v1",
+        default_model="qwen-audio-3.1-asr-flash",
+        recommended_models=("qwen-audio-3.1-asr-flash",),
+        sends_temperature=False,
+        sends_top_p=False,
+        supports_json_output=False,
+        supports_tool_calls=False,
+        supports_audio_transcription=True,
+        credential_provider="qwen",
+        context_cache_note="语音转写请求不使用文本上下文缓存。",
+        notes=(
+            "Qwen Audio 通过 DashScope 多模态生成 API 接收受控音频字节。"
+            "首期仅支持本地显式提交的短媒体转写，复用已保存的 Qwen Key。"
+        ),
+    ),
     "seedream": ModelProviderProfile(
         provider="seedream",
         label="Seedream / 火山方舟",
@@ -800,6 +839,7 @@ _PROVIDER_ENV_PREFIXES = {
     "anthropic": ("ANTHROPIC", "CLAUDE"),
     "qwen": ("QWEN", "DASHSCOPE"),
     "qwen_image": ("QWEN", "DASHSCOPE"),
+    "qwen_audio": ("QWEN", "DASHSCOPE"),
     "kimi": ("KIMI", "MOONSHOT"),
     "seedream": ("AGENTFLOW_SEEDREAM", "SEEDREAM"),
     "openai_compatible": ("OPENAI_COMPATIBLE", "CUSTOM_LLM"),
@@ -847,6 +887,10 @@ def validate_model_profile_model(provider: str, model: str) -> None:
     if normalized_provider == "qwen_image" and not value.startswith("qwen-image"):
         raise ModelGatewayError(
             "Qwen Image / DashScope 当前仅接入 qwen-image-* 图片模型；Wan 等其它模型需完成独立适配后再添加。"
+        )
+    if normalized_provider == "qwen_audio" and value != "qwen-audio-3.1-asr-flash":
+        raise ModelGatewayError(
+            "Qwen Audio / DashScope 当前仅接入 qwen-audio-3.1-asr-flash；长音频 Filetrans 需完成对象存储与异步恢复设计后再添加。"
         )
 
 
@@ -902,7 +946,7 @@ def model_provider_api_key_source(
         return "local_config"
 
     profile = _profile_for(normalized_provider)
-    if profile.model_kind == "image":
+    if profile.model_kind in {"image", "audio"}:
         return "environment" if _visual_environment_api_key(normalized_provider) else "none"
 
     value, source = _resolve_runtime_field_with_source(
@@ -1164,6 +1208,69 @@ def resolve_visual_model_runtime(
     return runtime
 
 
+def resolve_audio_model_runtime_for_route(
+    route_id: ModelRouteScope = "media_transcription",
+    *,
+    validate: bool = True,
+) -> ModelRouteResolution:
+    """解析受控语音转写路由；音频模型不从全局聊天模型继承。"""
+
+    if route_id != "media_transcription":
+        raise ModelGatewayError(f"模型路由 {route_id} 不是音频能力作用域。")
+    route = load_model_route_settings(route_id)
+    stored_config = _load_stored_model_config()
+    provider = normalize_model_provider(route.provider) if route.mode == "configured" else "qwen_audio"
+    profile = _profile_for(provider)
+    if profile.model_kind != "audio" or not profile.supports_audio_transcription:
+        raise ModelGatewayError(f"{profile.label} 不支持语音转写，无法用于 {route_id}。")
+    provider_base_url, provider_model = model_provider_connection_preview(
+        provider,
+        stored_config=stored_config,
+    )
+    runtime = resolve_audio_model_runtime(
+        provider=provider,
+        base_url=(route.base_url if route.mode == "configured" else provider_base_url),
+        model=(route.model if route.mode == "configured" else provider_model),
+        validate=validate,
+    )
+    return ModelRouteResolution(route=route, runtime=runtime)
+
+
+def resolve_audio_model_runtime(
+    *,
+    provider: str = "qwen_audio",
+    base_url: str | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
+    validate: bool = True,
+) -> AudioModelRuntime:
+    """解析明确的音频 Provider 配置，Key 仍只在调用时解密到内存。"""
+
+    normalized_provider = normalize_model_provider(provider)
+    profile = _profile_for(normalized_provider)
+    if profile.model_kind != "audio" or not profile.supports_audio_transcription:
+        raise ModelGatewayError(f"{profile.label} 不支持已接入的语音转写能力。")
+    stored_config = _load_stored_model_config()
+    provider_base_url, provider_model = model_provider_connection_preview(
+        normalized_provider,
+        stored_config=stored_config,
+    )
+    runtime = AudioModelRuntime(
+        provider=normalized_provider,
+        label=profile.label,
+        transport=profile.transport,
+        base_url=((base_url or "").strip() or provider_base_url).rstrip("/"),
+        model=(model or "").strip() or provider_model,
+        api_key=(api_key or "").strip()
+        or _stored_api_key_for_provider(stored_config, normalized_provider)
+        or _visual_environment_api_key(normalized_provider),
+    )
+    validate_model_profile_model(normalized_provider, runtime.model)
+    if validate:
+        _validate_runtime(runtime)
+    return runtime
+
+
 async def discover_model_catalog(
     *,
     provider: str,
@@ -1183,7 +1290,7 @@ async def discover_model_catalog(
     if not resolved_base_url:
         resolved_base_url = provider_base_url
     resolved_key = (api_key or "").strip() or _stored_api_key_for_provider(stored_config, normalized_provider)
-    if not resolved_key and profile.model_kind == "image":
+    if not resolved_key and profile.model_kind in {"image", "audio"}:
         resolved_key = _visual_environment_api_key(normalized_provider)
     if not resolved_key and profile.model_kind == "chat":
         resolved_key = _resolve_runtime_field(normalized_provider, "API_KEY")
@@ -1409,7 +1516,9 @@ def _apply_route_generation_parameters(runtime: ModelRuntime, route: ModelRouteS
     )
 
 
-def _runtime_generation_parameters(runtime: ModelRuntime | VisualModelRuntime) -> ModelGenerationParameters:
+def _runtime_generation_parameters(
+    runtime: ModelRuntime | VisualModelRuntime | AudioModelRuntime,
+) -> ModelGenerationParameters:
     if not isinstance(runtime, ModelRuntime):
         return ModelGenerationParameters()
     return ModelGenerationParameters(
@@ -1586,7 +1695,7 @@ def _usable_env_value(name: str) -> str:
     return value
 
 
-def _validate_runtime(runtime: ModelRuntime) -> None:
+def _validate_runtime(runtime: ModelRuntime | VisualModelRuntime | AudioModelRuntime) -> None:
     if not runtime.base_url:
         raise ModelGatewayError(f"未配置 {runtime.label} Base URL。")
     if not runtime.model:

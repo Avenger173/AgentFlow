@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 
 ModelTransport = Literal["openai_compatible", "anthropic", "ark_image", "dashscope_multimodal"]
-ModelKind = Literal["chat", "image"]
+ModelKind = Literal["chat", "image", "audio"]
 ContextCacheMode = Literal[
     "automatic_observable",
     "explicit_request",
@@ -21,6 +21,7 @@ ModelRouteScope = Literal[
     "knowledge_deep_analysis",
     "visual_generation",
     "media_image_edit",
+    "media_transcription",
 ]
 ModelRouteMode = Literal["inherit_global", "configured"]
 ModelRouteAvailability = Literal["ready", "unavailable", "reserved"]
@@ -64,6 +65,7 @@ class ModelProviderInfo(BaseModel):
     supports_frequency_penalty: bool = False
     supports_visual_generation: bool = False
     supports_image_edit: bool = False
+    supports_audio_transcription: bool = False
     # 只说明已核验的接入方式；实际命中只依赖每次模型响应的 usage 计量。
     context_cache_mode: ContextCacheMode = "unknown"
     context_cache_note: str = ""

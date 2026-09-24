@@ -1,8 +1,8 @@
 # AgentFlow 多媒体助手开发计划
 
-> 版本：v1.2 | 建立日期：2026-09-16 | 最近更新：2026-09-24
+> 版本：v1.3 | 建立日期：2026-09-16 | 最近更新：2026-09-24
 >
-> 当前结论：多媒体助手采用“模型负责理解与生成、成熟媒体工具负责精确执行、AgentFlow 负责调度与可靠交付”的路线。AI 调度台现可识别图片编辑意图或 `@图片助手`，将原话带入既有图片工作区；该交接不导入图片、不创建 revision、不调用模型，仍由用户选择当前版本后主动提交。现有图片工作区保留为工程底座并停止横向扩建；MM-2 已完成固定 36 项真实模型输出的开发质量回读。当前不继续建设通用图片编辑器；正式独立复核只在准备对外发布时补充，不阻塞内部开发结论。
+> 当前结论：多媒体助手采用“模型负责理解与生成、成熟媒体工具负责精确执行、AgentFlow 负责调度与可靠交付”的路线。AI 调度台现可识别图片编辑意图或 `@图片助手`，将原话带入既有图片工作区；该交接不导入图片、不创建 revision、不调用模型，仍由用户选择当前版本后主动提交。现有图片工作区保留为工程底座并停止横向扩建；MM-2 已完成固定 36 项真实模型输出的开发质量回读。MM-4 已完成语音转写的模型路由、离线协议底座和一次程序生成短音频真实探针，尚未形成音视频导入、任务、界面或 FFmpeg 闭环。当前不继续建设通用图片编辑器；正式独立复核只在准备对外发布时补充，不阻塞内部开发结论。
 >
 > 当前门槛：`G0-DEV`（图片模型内部开发准入）、`L1-DEV`（最薄媒体底座开发准入）和 `G2-DEV`（AI 修图开发质量准入）已满足；正式 `G2` 为待独立复核，`G3` 尚未运行。配套评测见[多媒体助手评测与验证方案](MULTIMEDIA_AGENT_EVALUATION.md)。
 
@@ -98,7 +98,7 @@ AI 修图：图片 + 提示词 + 可选蒙版 -> 图片编辑模型 -> 局部合
 | `media_vision` | 画面理解或结果辅助检查 | 只有任务确实需要看图时才接入 | 不阻塞首个修图闭环 |
 | `media_segmentation` | 自动生成对象蒙版 | 对象选择质量和资源可接受 | 可选，SAM 不阻塞 MM-2 |
 | `media_matting` | 发丝、半透明边缘 alpha | 抠图质量和资源可接受 | 可选，Lite Matting 不阻塞 MM-2 |
-| `media_transcription` | 带时间戳转写 | 语言、时间戳粒度和时长限制可验证 | 阻塞 MM-4 |
+| `media_transcription` | 带时间戳转写 | 当前固定 `qwen_audio / qwen-audio-3.1-asr-flash`，短音频可取得稳定句/词时间戳；长媒体仍待受控存储与异步链路 | 阻塞 MM-4 |
 | `media_translation` | 字幕翻译 | 结构化字幕段、术语和专名可约束 | 阻塞 MM-6 |
 | `media_speech` | 分段 TTS | 声音、语言、时长和使用条款明确 | 阻塞 MM-6 |
 
@@ -109,6 +109,14 @@ AI 修图：图片 + 提示词 + 可选蒙版 -> 图片编辑模型 -> 局部合
 `media_image_edit` 的当前默认路线是 `qwen-image-3.0-pro`。依据 [Qwen Image 3.0 官方 API 参考](https://help.aliyun.com/zh/model-studio/qwen-image-generation-and-editing-api-reference)，图生图输入建议宽高各为 `384-2048` 像素、文件不超过 `10 MB`；指定输出尺寸时，总像素需在 `512 x 512` 到 `2048 x 2048` 之间。工作区为保证 revision 可审计，会请求并回读与当前版本完全相同的输出，不接受 Provider 返回后静默拉伸。因此在调用前按上述交集检查当前版本，避免付费请求后才得到参数错误。
 
 “调整尺寸”是 Pillow 在本地创建的新 revision，不调用 AI 模型；预览画布仅随工作区大小自适应显示，不会改变文件像素。该操作必须提交 `resize_width` 和 `resize_height`，裁剪同样必须提交 `crop_*` 字段，客户端不得以 UI 内部的通用 `width/height` 字段直接越过 API 契约。
+
+### 4.2 MM-4 首期语音转写边界
+
+`media_transcription` 已新增独立的 `qwen_audio / qwen-audio-3.1-asr-flash` Profile 和 Adapter；它复用用户已保存的 Qwen Provider 密钥，但 Base URL、模型选择和路由审计彼此独立。首期选用该模型，是因为官方 HTTP 接口可直接返回稳定的句级、词级时间戳；`qwen3-asr-flash` 的 OpenAI-Compatible 路径不返回时间戳，不能作为剪辑时间线的基础。模型能力与接口边界以 [Qwen ASR 模型说明](https://help.aliyun.com/zh/model-studio/asr-model) 和 [Qwen Audio 3.x ASR HTTP API](https://help.aliyun.com/en/model-studio/fun-asr-flash-recorded-speech-recognition-http-api) 为准。
+
+- 当前 Adapter 只接收内存中的 WAV/MP3 字节，原始输入上限 `7 MiB`，编码为 Base64 后直接请求 Provider；不传本机路径，不上传到公共 OSS，也不把 Base64 写入任务、聊天、长期记忆或日志。
+- 不足一分钟时解析 Provider 返回的 JSON 终态，较长音频解析 SSE；两条路径都只接受已稳定的句级结果及其词级时间戳。显式拒绝、限流等结果可明确呈现，网络/5xx 导致结果未知时不自动重试付费请求。
+- 视频音轨提取、长媒体分片、Filetrans/OSS、受控素材区、任务/checkpoint、字幕交付和 Qt 工作区尚未实现。它们需要先补齐 FFmpeg/ffprobe、私有存储或上传边界、异步恢复和费用审计，不能因为模型路由已出现就对用户宣称“已支持视频转写”。
 
 确定性工具优先采用成熟依赖：
 
@@ -161,7 +169,7 @@ AI 修图：图片 + 提示词 + 可选蒙版 -> 图片编辑模型 -> 局部合
 | MM-1 最薄媒体底座 | 受控导入、原图保护、新 revision、撤销、回读导出、Runtime/Artifact | `L1-DEV`：足以承载模型结果 | 已满足并冻结。已有额外蒙版/图层能力不再继续扩建 |
 | MM-2 AI 修图纵向闭环 | 调度台安全交接指令，工作区由用户选择当前 revision 后提交图片与提示词，调用 `media_image_edit`，写入新 revision，预览、继续修改、撤销和导出 | `G2-DEV`：固定真实样本的最低效果通过；正式 `G2` 再补独立主观复核 | `media_agent` 已具备 manifest、动作准入和 Node Contract；调度台可识别图片编辑并预填工作区指令，不会隐式调用模型。Qt 图片工作区已接入状态和异步结果轮询；后端受控字节输入、失败分类、版本提交、取消与重启对账均有离线验证。36 项真实结果已全部通过开发质量回读；正式独立复核和完整客户端发布流程仍待后续按需执行 |
 | MM-3 图片发布准入 | 权限、费用、取消恢复、Qt 完整流程、DPI、原功能回归和用户可理解错误 | `G3`：AI 修图可正式对用户开放 | 未开始 |
-| MM-4 视频技术闭环 | ASR 时间戳、LLM 生成 EDL、FFmpeg 渲染一个真实视频 | `G4`：转写、EDL、同步和导出可验证 | 未开始 |
+| MM-4 视频技术闭环 | ASR 时间戳、LLM 生成 EDL、FFmpeg 渲染一个真实视频 | `G4`：转写、EDL、同步和导出可验证 | 已开始模型/协议底座：`media_transcription` 路由与受控短音频 Adapter 已有离线回归，并完成一次程序生成 WAV 的真实转写探针；尚无素材导入、任务、FFmpeg 或 UI，G4 未运行 |
 | MM-5 对话式剪辑 | 连续修改片段/字幕、增量失效和可靠交付 | `G5`：语义选段、边界、同步和恢复通过 | 未开始 |
 | MM-6 翻译与配音 | ASR -> 翻译 -> TTS -> 对齐/混音/封装 | `G6`：字幕和配音分别通过质量、成本与失败验收 | 未开始 |
 | MM-7 整合发行 | 跨 Agent 素材协作、升级与整体回归 | `G7`：已准入能力联合发布 | 未开始 |
@@ -185,6 +193,13 @@ MM-2 已完成下列工程项；后续只在准备发布时执行正式独立复
 6. 已通过 `backend/scripts/verify_live_media_ai_edit.py --live` 发起一次程序生成的 `1024 x 768` 图片请求。`qwen_image / qwen-image-3.0-pro` 在约 `49.243 s` 后返回 1 张同尺寸 PNG；结果已回读并登记为 `ai_image_edit` revision，Provider usage 为输入/输出各 1 张，逐请求金额为 `unknown`。脱敏 manifest 位于忽略目录 `data/media_evaluations/live_media_ai_edit_20260923T025239Z/`。
 7. 已落地 G2 质量集离线数据契约：`verify_media_g2_quality_suite.py` 会拒绝非 `12` 来源、开发/留出集非 `8/4`、非 `36` 任务、跨 split 复用来源、类别配额失衡或评审协议缺失的 suite。2026-09-23 已用 12 个公开来源冻结真实 suite，并通过 `probe_qwen_image_g2_quality.py` 对 `qwen_image / qwen-image-3.0-pro` 执行 36 项各一次的真实调用；全部回读为同尺寸 PNG，未发生自动重试。2026-09-24 的 `evaluate_media_g2_development_quality.py` 仅回读这些既有输出，以本地 OCR 和类别效果规则得到换背景 `12/12`、移物 `12/12`、改字 `12/12`，开发集 `24/24`、留出集 `12/12`，因此 `G2-DEV` 已满足。`verify_media_g2_review_packet.py` 的两份空白表只表示正式独立复核待进行，不再阻塞当前开发或被误报为失败。
 8. 已注册 `media_agent` 并补齐 `open_media_workspace` 的动作准入和 Node Contract。调度台识别图片编辑词或 `@图片助手` 后，只传递本轮文字到图片工作区；`verify_media_dispatch_handoff.py` 固定验证无材料范围、无权限、无 Provider 调用和 PPT 路由优先级，Windows GUI 冒烟验证指令预填且未选择 revision 时“开始修图”保持禁用。
+
+MM-4 当前只完成下列起步项，不能提前计为视频功能：
+
+1. 已新增 `media_transcription` 路由、`qwen_audio` Profile 和 `qwen-audio-3.1-asr-flash` Adapter；路由可独立配置模型，安全复用已保存的 Qwen 密钥。
+2. 已用 HTTP MockTransport 验证 Base64 请求、短音频 JSON 与 SSE 稳定时间戳归一化、usage/request ID、明确 Provider 拒绝、未知结果不自动重试和本地输入上限。
+3. 已执行 `probe_qwen_audio_transcription.py --live` 的一次真实调用：Windows SAPI 生成的 `3.314 s` 英文 WAV 经 `qwen_audio / qwen-audio-3.1-asr-flash` 在约 `2.348 s` 返回正确文本、1 个稳定句段和 5 个词级时间戳；Provider usage 为输入 `138`、输出 `6`、总计 `144` tokens，逐请求金额为 `unknown`。夹具与脱敏 manifest 位于忽略目录 `data/media_evaluations/qwen_audio_transcription_20260924T031159Z/`。
+4. 下一步先设计受控音视频 `MediaAsset`、`ffprobe` 探测和受限音轨提取；这次短音频探针不等于视频、字幕、EDL 或 G4。
 
 本阶段完成标准不是“新增了多少按钮”，而是用户输入一张图和一句自然语言后，能得到一张经过真实模型处理、可追踪、可撤销、可继续修改且可下载的图片。
 

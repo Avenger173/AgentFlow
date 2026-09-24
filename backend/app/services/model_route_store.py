@@ -84,6 +84,13 @@ MODEL_ROUTE_DEFINITIONS: dict[str, tuple[str, str, tuple[str, ...], bool, ModelG
         True,
         ModelGenerationParameters(),
     ),
+    "media_transcription": (
+        "语音转写",
+        "多媒体助手的短音频/视频转写；显式提交后将生成带时间戳的字幕基础数据。",
+        ("audio_transcription",),
+        True,
+        ModelGenerationParameters(),
+    ),
 }
 
 

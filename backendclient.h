@@ -1014,6 +1014,7 @@ struct ModelProviderInfo
     bool supportsFrequencyPenalty = false;
     bool supportsVisualGeneration = false;
     bool supportsImageEdit = false;
+    bool supportsAudioTranscription = false;
     bool apiKeyConfigured = false;
     QString configuredBaseUrl;
     QString configuredModel;

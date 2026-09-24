@@ -256,10 +256,12 @@ void ModelRouteDialog::updateEditor()
     const QString provider = route->mode == QStringLiteral("configured") ? route->provider : route->resolvedProvider;
     const bool visualRoute = route->requiredCapabilities.contains(QStringLiteral("visual_generation"))
         || route->requiredCapabilities.contains(QStringLiteral("image_edit"));
+    const bool audioRoute = route->requiredCapabilities.contains(QStringLiteral("audio_transcription"));
     ui->providerCombo->clear();
     for (const ModelProviderInfo &item : providers) {
         if ((visualRoute && item.modelKind == QStringLiteral("image"))
-            || (!visualRoute && item.modelKind != QStringLiteral("image"))) {
+            || (audioRoute && item.modelKind == QStringLiteral("audio"))
+            || (!visualRoute && !audioRoute && item.modelKind == QStringLiteral("chat"))) {
             ui->providerCombo->addItem(item.label, item.provider);
         }
     }
@@ -448,6 +450,8 @@ QString ModelRouteDialog::capabilityLabel(const QStringList &capabilities) const
             labels.append(QStringLiteral("需要视觉生成"));
         } else if (capability == QStringLiteral("image_edit")) {
             labels.append(QStringLiteral("需要图片编辑"));
+        } else if (capability == QStringLiteral("audio_transcription")) {
+            labels.append(QStringLiteral("需要语音转写"));
         }
     }
     return labels.isEmpty() ? QStringLiteral("能力要求由后端校验") : labels.join(QStringLiteral(" · "));
