@@ -78,6 +78,7 @@ from app.services.data_transformation_delivery import (
 from app.services.media_export_delivery import cancel_media_export_task
 from app.services.media_edit_delivery import cancel_media_edit_task
 from app.services.media_ai_edit_delivery import cancel_media_ai_edit_task
+from app.services.media_transcription_delivery import cancel_media_transcription_task
 from app.services.commander_memory_proposals import ensure_completed_task_memory_proposals
 from app.services.long_term_memory import (
     LongTermMemorySafetyError,
@@ -982,6 +983,8 @@ async def cancel_task(task_id: str) -> TaskControlResponse:
     response = await cancel_media_edit_task(task_id)
     if response is None:
         response = await cancel_media_ai_edit_task(task_id)
+    if response is None:
+        response = await cancel_media_transcription_task(task_id)
     if response is None:
         response = await cancel_media_export_task(task_id)
     if response is None:

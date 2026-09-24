@@ -1,12 +1,14 @@
-"""多媒体 Agent 的图片工作区 API。
+"""多媒体 Agent 的受控图片与短媒体转写 API。
 
-首版只开放确定性图片操作；模型生成或局部重绘必须在后续通过受控 revision
-提交路径接入，不能绕过源图、版本和导出回读校验。
+图片操作仍走不可变 revision；音视频转写必须先转入私有源文件、提取固定 WAV，再通过
+一次性任务写入可回读 JSON。两条路径都不能绕过项目范围、任务历史或交付验证。
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import logging
 from typing import Literal
 from uuid import uuid4
@@ -35,6 +37,15 @@ from app.schemas.media_workspace import (
     MediaProjectDetailResponse,
     MediaProjectInfo,
     MediaProjectListResponse,
+)
+from app.schemas.media_source import (
+    MediaProbeInfo,
+    MediaSourceImportRequest,
+    MediaSourceInfo,
+    MediaTranscriptionPreparationResponse,
+    MediaTranscriptionRequest,
+    MediaTranscriptionStartResponse,
+    MediaTranscriptionTaskResultResponse,
 )
 from app.services.media_workspace import (
     MediaWorkspaceConflictError,
@@ -66,6 +77,18 @@ from app.services.media_ai_edit_delivery import (
     get_media_ai_edit_task_result,
     run_media_ai_edit_task,
 )
+from app.services.media_source_preparation import (
+    MediaSourcePreparationError,
+    extract_primary_audio_for_transcription,
+    get_media_source,
+    import_media_source_bytes,
+    probe_media_source,
+)
+from app.services.media_transcription_delivery import (
+    create_media_transcription_queued_run,
+    get_media_transcription_task_result,
+    run_media_transcription_task,
+)
 from app.services.task_event_stream import (
     finish_live_task_event_stream,
     has_live_task_event_stream,
@@ -80,6 +103,7 @@ logger = logging.getLogger(__name__)
 _BACKGROUND_MEDIA_EXPORT_TASKS: set[asyncio.Task[None]] = set()
 _BACKGROUND_MEDIA_EDIT_TASKS: set[asyncio.Task[None]] = set()
 _BACKGROUND_MEDIA_AI_EDIT_TASKS: set[asyncio.Task[None]] = set()
+_BACKGROUND_MEDIA_TRANSCRIPTION_TASKS: set[asyncio.Task[None]] = set()
 
 
 @router.get("/projects", response_model=MediaProjectListResponse)
@@ -118,6 +142,130 @@ async def import_media_image_endpoint(
         )
     except MediaWorkspaceError as exc:
         raise _media_error_to_http(exc) from exc
+
+
+@router.post("/projects/{project_id}/media-sources", response_model=MediaSourceInfo, status_code=201)
+async def import_media_source_endpoint(project_id: str, request: MediaSourceImportRequest) -> MediaSourceInfo:
+    """导入音视频副本；调用方永远不能提供本机媒体路径。"""
+
+    try:
+        await asyncio.to_thread(get_media_project, project_id)
+        content = await asyncio.to_thread(_decode_media_source_base64, request.content_base64)
+        return await asyncio.to_thread(
+            import_media_source_bytes,
+            project_scope=project_id,
+            filename=request.filename,
+            content=content,
+        )
+    except MediaWorkspaceError as exc:
+        raise _media_error_to_http(exc) from exc
+    except MediaSourcePreparationError as exc:
+        raise _media_source_error_to_http(exc) from exc
+
+
+@router.get("/projects/{project_id}/media-sources/{source_id}", response_model=MediaSourceInfo)
+async def get_media_source_endpoint(project_id: str, source_id: str) -> MediaSourceInfo:
+    try:
+        await asyncio.to_thread(get_media_project, project_id)
+        return await asyncio.to_thread(
+            get_media_source,
+            source_id,
+            expected_project_scope=project_id,
+        )
+    except MediaWorkspaceError as exc:
+        raise _media_error_to_http(exc) from exc
+    except MediaSourcePreparationError as exc:
+        raise _media_source_error_to_http(exc) from exc
+
+
+@router.post("/projects/{project_id}/media-sources/{source_id}/probe", response_model=MediaProbeInfo)
+async def probe_media_source_endpoint(project_id: str, source_id: str) -> MediaProbeInfo:
+    try:
+        await asyncio.to_thread(get_media_project, project_id)
+        return await asyncio.to_thread(
+            probe_media_source,
+            source_id=source_id,
+            expected_project_scope=project_id,
+        )
+    except MediaWorkspaceError as exc:
+        raise _media_error_to_http(exc) from exc
+    except MediaSourcePreparationError as exc:
+        raise _media_source_error_to_http(exc) from exc
+
+
+@router.post(
+    "/projects/{project_id}/media-sources/{source_id}/transcription-audio",
+    response_model=MediaTranscriptionPreparationResponse,
+)
+async def prepare_media_source_transcription_audio_endpoint(
+    project_id: str,
+    source_id: str,
+) -> MediaTranscriptionPreparationResponse:
+    """仅允许从受控源导出固定 ASR WAV，不能提交任意 ffmpeg 参数。"""
+
+    try:
+        await asyncio.to_thread(get_media_project, project_id)
+        source, audio = await asyncio.to_thread(_prepare_transcription_audio, project_id, source_id)
+        return MediaTranscriptionPreparationResponse(source=source, audio=audio)
+    except MediaWorkspaceError as exc:
+        raise _media_error_to_http(exc) from exc
+    except MediaSourcePreparationError as exc:
+        raise _media_source_error_to_http(exc) from exc
+
+
+@router.post(
+    "/projects/{project_id}/transcriptions/start",
+    response_model=MediaTranscriptionStartResponse,
+    status_code=202,
+)
+async def start_media_transcription_endpoint(
+    project_id: str,
+    request: MediaTranscriptionRequest,
+) -> MediaTranscriptionStartResponse:
+    """受理一次显式提交的受控 WAV 转写，不在 API 线程中直接等待 Provider。"""
+
+    task_id = f"task_media_transcription_{uuid4().hex[:12]}"
+    try:
+        await asyncio.to_thread(get_media_project, project_id)
+        await asyncio.to_thread(
+            create_media_transcription_queued_run,
+            task_id=task_id,
+            project_id=project_id,
+            request=request,
+        )
+    except MediaWorkspaceError as exc:
+        raise _media_error_to_http(exc) from exc
+    open_live_task_event_stream(task_id)
+    await publish_live_task_event(
+        task_id=task_id,
+        event="task_queued",
+        agent_id="media_agent",
+        message="媒体转写已受理，尚未向模型 Provider 发送音频。",
+    )
+    task = asyncio.create_task(
+        _run_media_transcription_background(task_id=task_id, project_id=project_id, request=request)
+    )
+    _BACKGROUND_MEDIA_TRANSCRIPTION_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_MEDIA_TRANSCRIPTION_TASKS.discard)
+    return MediaTranscriptionStartResponse(task_id=task_id)
+
+
+@router.get(
+    "/transcriptions/{task_id}/result",
+    response_model=MediaTranscriptionTaskResultResponse,
+)
+async def get_media_transcription_result_endpoint(task_id: str) -> MediaTranscriptionTaskResultResponse:
+    result = get_media_transcription_task_result(task_id)
+    if result is not None:
+        return result
+    if has_live_task_event_stream(task_id) and not live_task_event_stream_finished(task_id):
+        return MediaTranscriptionTaskResultResponse(
+            task_id=task_id,
+            status="running",
+            summary="媒体转写正在执行。",
+            message="正在等待语音模型并回读结构化转写交付。",
+        )
+    raise HTTPException(status_code=404, detail=f"Media transcription task '{task_id}' was not found.")
 
 
 @router.get(
@@ -525,6 +673,30 @@ async def _run_media_ai_edit_background(
         await finish_live_task_event_stream(task_id)
 
 
+async def _run_media_transcription_background(
+    *,
+    task_id: str,
+    project_id: str,
+    request: MediaTranscriptionRequest,
+) -> None:
+    """模型或文件回读异常都必须关闭实时流，客户端不会永久等待。"""
+
+    try:
+        await run_media_transcription_task(task_id=task_id, project_id=project_id, request=request)
+    except Exception:  # pragma: no cover - 服务层应已落终态，这里仅兜住事件流生命周期。
+        logger.exception("Media transcription task ended unexpectedly: %s", task_id)
+        await publish_live_task_event(
+            task_id=task_id,
+            event="task_failed",
+            agent_id="media_agent",
+            step_id="media_transcription",
+            level="error",
+            message="媒体转写异常结束，请在任务历史中查看记录。",
+        )
+    finally:
+        await finish_live_task_event_stream(task_id)
+
+
 def _media_error_to_http(exc: MediaWorkspaceError) -> HTTPException:
     detail = str(exc)
     if isinstance(exc, MediaWorkspaceConflictError):
@@ -532,3 +704,23 @@ def _media_error_to_http(exc: MediaWorkspaceError) -> HTTPException:
     else:
         status_code = 404 if detail.startswith("未找到") else 400
     return HTTPException(status_code=status_code, detail=detail)
+
+
+def _media_source_error_to_http(exc: MediaSourcePreparationError) -> HTTPException:
+    detail = str(exc)
+    # 不以 400 透露另一个项目的 source_id 是否存在。
+    status_code = 404 if "未找到" in detail or "不属于指定项目范围" in detail else 400
+    return HTTPException(status_code=status_code, detail=detail)
+
+
+def _decode_media_source_base64(value: str) -> bytes:
+    try:
+        return base64.b64decode(value.encode("ascii"), validate=True)
+    except (UnicodeEncodeError, ValueError, binascii.Error) as exc:
+        raise MediaSourcePreparationError("媒体内容不是有效的 Base64 编码。") from exc
+
+
+def _prepare_transcription_audio(project_id: str, source_id: str):  # type: ignore[no-untyped-def]
+    source = get_media_source(source_id, expected_project_scope=project_id)
+    audio = extract_primary_audio_for_transcription(source_id=source_id, expected_project_scope=project_id)
+    return source, audio

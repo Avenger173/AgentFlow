@@ -79,6 +79,16 @@ MM-0 只建立足以判断模型路线可行的代表样本和 INTENT 小集；�
 
 E1 只证明本地编解码命令与受控文件协议可以闭环，仍不构成 `MODEL-05`、转写任务、字幕交付或 `G4` 通过。
 
+### 2.1.7 MM-4 转写任务交付基线
+
+2026-09-24 已新增 `media.transcribe_audio` 单步骤 Runtime：用户先提交受控 `source_id + audio_id`，服务会重新验证项目范围、源哈希、派生 WAV 哈希和 `16 kHz` 单声道规格，再提交一次 `media_transcription` 路由。Provider 返回后只有通过 JSON 原子写入、Pydantic 回读、SHA-256 登记和 `WorkflowArtifact` 受控路径校验，任务才转为 completed；执行前取消不会发送音频，未知结果或服务重启时没有已验证 JSON 则不会自动重放。任务审计仅含 Provider/模型、请求 ID 哈希、usage 和结构化转写交付，不保存路径、Key、音频正文或 Provider 原始响应。
+
+`verify_media_transcription_delivery.py` 在临时 SQLite 与内存替身中覆盖成功、跨项目隔离、Provider 明确拒绝、超时未知结果、执行前取消、任务 Artifact 文本预览、JSON 已提交后的重启对账，以及没有 JSON 时的“结果未知”收束；不读取用户媒体或真实 Key，也不调用网络。
+
+随后 `probe_live_media_transcription_delivery.py --live` 仅执行一次真实请求：Windows SAPI 生成的英文短句被封装为 `3.869 s`、AAC 单音轨 MP4，真实 `ffprobe` 识别音轨后，真实 `ffmpeg` 提取为 `16 kHz` 单声道 WAV（`123,880` bytes）。`qwen_audio / qwen-audio-3.1-asr-flash` 在约 `4,435.671 ms` 后产出 `1` 个稳定句段和 `7` 个词级时间戳，任务 JSON 回读为 `2,491` bytes，生成夹具与转写文本按大小写/标点归一后一致；Provider usage 为 `145/8/153` input/output/total tokens，金额为 `unknown`。证据位于忽略目录 `data/media_evaluations/live_media_transcription_delivery_20260924T072426Z/`。
+
+该证据说明“受控视频源 -> WAV -> 一次模型请求 -> 结构化 JSON 交付 -> 任务恢复”可运行，但仍不构成 `MODEL-05` 或 `G4` 通过：没有授权视频集、人工转写标注、CER/WER、时间戳偏差统计、长媒体策略、字幕/EDL 交付或客户 UI 验收。
+
 ### 2.1.2 当前 Qwen Image 探针记录
 
 2026-09-18 已对 `Qwen Image / DashScope · qwen-image-2.0-pro` 执行一次受控真实请求。探针只构造了本地 `1024 x 768` 几何图，并要求“将中心红色圆形改为绿色，其他内容不变”。请求返回 1 张同尺寸 PNG，下载后可由 Pillow 成功回读，中心 RGB 采样由 `(228, 83, 76)` 变为 `(32, 149, 77)`，用时约 18 秒。输入、结果与不含临时签名 URL 的 manifest 存在本机忽略目录 `data/media_evaluations/qwen_image_probe_20260918T020938Z/`。

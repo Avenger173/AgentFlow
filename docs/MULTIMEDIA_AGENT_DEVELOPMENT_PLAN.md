@@ -202,7 +202,9 @@ MM-4 当前只完成下列起步项，不能提前计为视频功能：
 3. 已执行 `probe_qwen_audio_transcription.py --live` 的一次真实调用：Windows SAPI 生成的 `3.314 s` 英文 WAV 经 `qwen_audio / qwen-audio-3.1-asr-flash` 在约 `2.348 s` 返回正确文本、1 个稳定句段和 5 个词级时间戳；Provider usage 为输入 `138`、输出 `6`、总计 `144` tokens，逐请求金额为 `unknown`。夹具与脱敏 manifest 位于忽略目录 `data/media_evaluations/qwen_audio_transcription_20260924T031159Z/`。
 4. 已新增私有 `media_source_preparation`：上层只能传内存字节，`source_id` 绑定项目范围和源哈希；`ffprobe` 的容器/流解析、`ffmpeg` 首音轨 `16 kHz` 单声道 WAV 命令白名单、派生文件回读/哈希/上限/复用均由临时夹具覆盖。`/health` 仍会报告未显式配置的 FFmpeg 依赖，不能把开发机安装误判为用户运行时已就绪。
 5. 已用 `probe_media_source_preparation.py --execute` 对程序生成的 `2 s` 黑色视频与 `880 Hz` 音调执行一次真实 `ffprobe -> ffmpeg -> WAV 回读`。受控源探测为 MP4/MPEG-4 + AAC（第 1 条音轨，`48 kHz` 单声道），派生 WAV 回读为 `16 kHz` 单声道 PCM、`32,000` frames、`64,078` bytes，源与派生哈希均一致。开发机验证使用 `Gyan.FFmpeg.Essentials 9.0.1` 的显式路径，证据位于忽略目录 `data/media_evaluations/media_source_preparation_e1_20260924T065700Z/`；它不修改应用配置，也不包含用户媒体或模型请求。
-6. 下一步才是把已验证的受控 WAV 接入一次性、可恢复的转写任务。当前短音频探针和 E1 不等于视频、字幕、EDL 或 G4。
+6. 已将受控 WAV 接入 `media.transcribe_audio` 一次性任务：API 只接受项目内 `source_id + audio_id`，任务在模型提交前登记，读取时再次校验项目范围、源/派生哈希和 WAV 规格；模型结果必须写为 JSON、原子替换并 Pydantic 回读后，才登记 `agentflow-output://runtime/...` Artifact。任务历史只保存脱敏路由、Provider usage、请求 ID 哈希和转写结果，不保存音频正文、路径、Key 或 Provider 原始响应；执行前可取消，重启后仅对账已回读 JSON，其他中断一律标记结果未知且不自动重放。
+7. `verify_media_transcription_delivery.py` 已用临时 SQLite、FFmpeg/Qwen 内存替身覆盖成功、跨项目拒绝、明确拒绝、未知结果不重放、执行前取消、JSON Artifact 预览及“文件已提交/任务未完成”重启对账。`probe_live_media_transcription_delivery.py --live` 已对 SAPI 生成的 `3.869 s` 英文语音视频执行一次真实端到端闭环：MP4/AAC 经真实 FFmpeg 提取为 `16 kHz` 单声道 WAV 后，由 `qwen_audio / qwen-audio-3.1-asr-flash` 在约 `4.436 s` 完成转写，生成 `1` 个稳定句段、`7` 个词级时间戳和 `145/8/153` input/output/total tokens；回读 JSON 为 `2,491` bytes，夹具文本归一化后匹配，逐请求金额为 `unknown`。证据位于忽略目录 `data/media_evaluations/live_media_transcription_delivery_20260924T072426Z/`。
+8. 当前短音频探针、E1 和一次任务闭环仍不等于视频、字幕、EDL 或 G4。下一步应先冻结授权视频夹具与 CER/WER、时间戳偏差及失败恢复口径，再讨论字幕交付，不提前扩展翻译、配音或剪辑界面。
 
 本阶段完成标准不是“新增了多少按钮”，而是用户输入一张图和一句自然语言后，能得到一张经过真实模型处理、可追踪、可撤销、可继续修改且可下载的图片。
 
