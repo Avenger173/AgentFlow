@@ -73,7 +73,11 @@ MM-0 只建立足以判断模型路线可行的代表样本和 INTENT 小集；�
 
 2026-09-24 已新增 `media_source_preparation`，将音视频原件与既有图片 revision 隔离。它只接收上层已读入的内存字节，使用 `source_id` 绑定项目范围、文件哈希和受控私有目录；`ffprobe`/`ffmpeg` 仅取得服务端由 ID 解析的路径，命令没有来自模型或客户端的 codec、filter、路径或 Shell 参数。提取固定为首条已探测音轨、`16 kHz` 单声道 PCM WAV，并在不超过 `7 MiB`、WAV 回读和 SHA-256 一致后登记为可交给 ASR 的派生音频。
 
-`verify_media_source_preparation.py` 使用临时目录与工具替身覆盖范围拒绝、源篡改拒绝、ffprobe 容器/音视频流解析、固定 `-map 0:<stream>`/`-vn`/`-ac 1`/`-ar 16000`/`pcm_s16le` 命令、派生 WAV 回读和同输入复用；不运行真实系统工具、不会读取用户媒体或调用模型。当前开发机未发现 `ffprobe` 和 `ffmpeg`，`/health` 会返回缺失状态，因此真实 E1 编解码结果和 `G4` 仍为未运行。
+`verify_media_source_preparation.py` 使用临时目录与工具替身覆盖范围拒绝、源篡改拒绝、ffprobe 容器/音视频流解析、固定 `-map 0:<stream>`/`-vn`/`-ac 1`/`-ar 16000`/`pcm_s16le` 命令、派生 WAV 回读和同输入复用；不运行真实系统工具、不会读取用户媒体或调用模型。
+
+2026-09-24 已以 `probe_media_source_preparation.py --execute` 运行一次真实 E1：夹具为程序生成的 `2 s` 黑色视频与 `880 Hz` 音调，使用显式传入的 `Gyan.FFmpeg.Essentials 9.0.1` 可执行文件。真实 `ffprobe` 识别出 `320x240/25 fps` MPEG-4 视频和第 `1` 条 `48 kHz` 单声道 AAC 音轨；真实 `ffmpeg` 经固定命令提取出 `16 kHz` 单声道 PCM WAV，回读为 `32,000` frames、`64,078` bytes、`2.000 s`，派生文件 SHA-256 与登记值一致。证据位于忽略目录 `data/media_evaluations/media_source_preparation_e1_20260924T065700Z/`，只含生成夹具、受控副本和不含绝对路径的 manifest；模型/Provider 请求数为 `0`。应用服务尚未配置 `AGENTFLOW_FFMPEG_PATH` / `AGENTFLOW_FFPROBE_PATH`，故 `/health` 仍会诚实显示未就绪。
+
+E1 只证明本地编解码命令与受控文件协议可以闭环，仍不构成 `MODEL-05`、转写任务、字幕交付或 `G4` 通过。
 
 ### 2.1.2 当前 Qwen Image 探针记录
 
