@@ -35,6 +35,17 @@ _ZH_CER_LIMIT = 0.15
 _EN_WER_LIMIT = 0.20
 _TIMESTAMP_P95_LIMIT_MS = 500
 _TIMESTAMP_MAX_LIMIT_MS = 1_500
+_COMPLETED_STATUS = "completed"
+_INCOMPLETE_STATUSES = {"failed", "cancelled", "outcome_unknown", "not_started"}
+_FAILURE_CATEGORIES = {
+    "validation_failed",
+    "provider_rejected",
+    "provider_outcome_unknown",
+    "delivery_verification_failed",
+    "cancelled",
+    "unexpected",
+    "batch_halted",
+}
 
 
 class QualityContractError(ValueError):
@@ -127,9 +138,17 @@ def evaluate_run(
 
     metric_records: list[dict[str, object]] = []
     incomplete_cases: list[str] = []
+    incomplete_case_statuses: list[dict[str, str]] = []
     for case in case_records:
-        if case["status"] != "completed":
+        if case["status"] != _COMPLETED_STATUS:
             incomplete_cases.append(str(case["fixture_id"]))
+            incomplete_case_statuses.append(
+                {
+                    "fixture_id": str(case["fixture_id"]),
+                    "status": str(case["status"]),
+                    "failure_category": str(case["failure_category"]),
+                }
+            )
             continue
         fixture = fixtures[str(case["fixture_id"])]
         metric_records.append(_score_completed_case(case, fixture))
@@ -161,6 +180,7 @@ def evaluate_run(
             "network_calls_by_evaluator": 0,
         },
         "incomplete_case_ids": incomplete_cases,
+        "incomplete_case_statuses": incomplete_case_statuses,
         "metrics": metric_summary,
         "cases": metric_records,
         "content_handling": "reports retain hashes and numeric scores only; no transcript text is emitted",
@@ -251,28 +271,45 @@ def _read_cases(
             raise QualityContractError(f"run case has unknown or duplicate fixture_id: {fixture_id}")
         seen.add(fixture_id)
         status = _required_string(raw, "status", fixture_id)
-        if status not in {"completed", "failed", "cancelled", "outcome_unknown"}:
+        if status != _COMPLETED_STATUS and status not in _INCOMPLETE_STATUSES:
             raise QualityContractError(f"run case {fixture_id} has unsupported status")
         provider_call_count = raw.get("provider_call_count")
         if not isinstance(provider_call_count, int) or provider_call_count < 0 or provider_call_count > 1:
             raise QualityContractError(f"run case {fixture_id} must record zero or one Provider call")
-        artifact_file = _safe_file(root, _relative_path(raw, "artifact_file", fixture_id), fixture_id, "artifact")
-        artifact_sha256 = _sha256_value(raw, "artifact_sha256", fixture_id)
-        # 结果 Artifact 是评分唯一允许读取的模型输出，必须始终回读并哈希校验。
-        _verify_file_sha256(artifact_file, artifact_sha256, fixture_id, "artifact")
-        if status == "completed":
+        if status == _COMPLETED_STATUS:
             if provider_call_count != 1:
                 raise QualityContractError(f"completed case {fixture_id} must record exactly one Provider call")
+            artifact_file = _safe_file(root, _relative_path(raw, "artifact_file", fixture_id), fixture_id, "artifact")
+            artifact_sha256 = _sha256_value(raw, "artifact_sha256", fixture_id)
+            # 结果 Artifact 是评分唯一允许读取的模型输出，必须始终回读并哈希校验。
+            _verify_file_sha256(artifact_file, artifact_sha256, fixture_id, "artifact")
             transcript = _read_artifact_transcript(artifact_file, fixture=fixtures[fixture_id])
+            failure_category: str | None = None
         else:
-            if provider_call_count > 1:
-                raise QualityContractError(f"failed case {fixture_id} cannot replay a paid request")
+            failure_category = _required_string(raw, "failure_category", fixture_id)
+            if failure_category not in _FAILURE_CATEGORIES:
+                raise QualityContractError(f"run case {fixture_id} has unsupported failure_category")
+            if "artifact_file" in raw or "artifact_sha256" in raw:
+                raise QualityContractError(f"incomplete case {fixture_id} must not claim an Artifact")
+            if status == "cancelled" and (failure_category != "cancelled" or provider_call_count != 0):
+                raise QualityContractError(f"cancelled case {fixture_id} must not submit a Provider request")
+            if status == "outcome_unknown" and (failure_category != "provider_outcome_unknown" or provider_call_count != 1):
+                raise QualityContractError(f"outcome_unknown case {fixture_id} must record one unknown Provider request")
+            if status == "not_started" and (failure_category != "batch_halted" or provider_call_count != 0):
+                raise QualityContractError(f"not_started case {fixture_id} must remain an unsubmitted batch remainder")
+            if status == "failed":
+                expected_call_count = 0 if failure_category == "validation_failed" else 1
+                if failure_category in {"cancelled", "batch_halted", "provider_outcome_unknown"}:
+                    raise QualityContractError(f"failed case {fixture_id} has an incompatible failure_category")
+                if provider_call_count != expected_call_count:
+                    raise QualityContractError(f"failed case {fixture_id} has an inconsistent Provider call count")
             transcript = None
         records.append(
             {
                 "fixture_id": fixture_id,
                 "status": status,
                 "provider_call_count": provider_call_count,
+                "failure_category": failure_category,
                 "transcript": transcript,
             }
         )

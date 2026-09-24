@@ -74,8 +74,44 @@ def _run_self_test() -> dict[str, object]:
         low_quality_report = evaluate_run(suite_path, low_quality_path, verify_files=False)
         if low_quality_report["quality_gate_passed"] is not False:
             raise AssertionError("quality evaluator accepted an unrelated transcript and late timestamp as passing")
+        incomplete = json.loads(run_path.read_text(encoding="utf-8"))
+        incomplete["cases"][0] = {
+            "fixture_id": incomplete["cases"][0]["fixture_id"],
+            "status": "outcome_unknown",
+            "failure_category": "provider_outcome_unknown",
+            "provider_call_count": 1,
+        }
+        incomplete_path = root / "incomplete_run.json"
+        incomplete_path.write_text(json.dumps(incomplete, ensure_ascii=False), encoding="utf-8")
+        incomplete_report = evaluate_run(suite_path, incomplete_path, verify_files=False)
+        if incomplete_report["quality_gate_passed"] is not False:
+            raise AssertionError("quality evaluator accepted an unknown Provider outcome as passing")
+        if incomplete_report["incomplete_case_statuses"] != [
+            {
+                "fixture_id": incomplete["cases"][0]["fixture_id"],
+                "status": "outcome_unknown",
+                "failure_category": "provider_outcome_unknown",
+            }
+        ]:
+            raise AssertionError("quality evaluator did not report the incomplete Provider outcome")
+        inconsistent = json.loads(run_path.read_text(encoding="utf-8"))
+        inconsistent["cases"][0] = {
+            "fixture_id": inconsistent["cases"][0]["fixture_id"],
+            "status": "failed",
+            "failure_category": "provider_rejected",
+            "provider_call_count": 0,
+        }
+        inconsistent_path = root / "inconsistent_run.json"
+        inconsistent_path.write_text(json.dumps(inconsistent, ensure_ascii=False), encoding="utf-8")
+        try:
+            evaluate_run(suite_path, inconsistent_path, verify_files=False)
+        except QualityContractError as exc:
+            if "inconsistent Provider call count" not in str(exc):
+                raise
+        else:
+            raise AssertionError("quality evaluator accepted an underreported rejected Provider call")
     report["self_test"] = True
-    report["negative_contract_check"] = "provider_replay_and_low_quality_output_rejected"
+    report["negative_contract_check"] = "provider_replay_low_quality_unknown_and_underreported_failure_rejected"
     return report
 
 

@@ -59,6 +59,8 @@ MM-0 只建立足以判断模型路线可行的代表样本和 INTENT 小集；�
 
 `prepare_media_transcription_quality_fixtures.py` 是夹具准备器，不是数据下载器。它只接受位于同一目录的本地计划 JSON、已经取得的公开授权音频和参考文本，并要求调用者显式提供 `ffmpeg.exe`、`ffprobe.exe`；输出只能写入被 Git 忽略的 `data/` 目录。它为每段音频生成黑底 MP4、回读音视频流与时长、生成来源/哈希清单和候选 `suite.json`。没有人工段落标注时，它仅写入 `pending_human_review` 的单段草案并保持两个 review 标记为 `false`；质量校验器将明确拒绝该候选，而不是生成虚假的通过结果。计划最小字段为 `source_catalog`（数据集名/ID、HTTPS 来源页、许可证、人工权利确认）和 `8` 个 fixture（ID、split、`zh/en`、相对音频路径、相对参考文本路径、可选人工段落 JSON 与 review 标记）。
 
+`run_media_transcription_quality.py --suite <suite.json>` 只回读上述冻结契约和哈希，模型调用数始终为 `0`。只有显式传入 `--execute --output-dir <data/...> --ffmpeg-path <...> --ffprobe-path <...>` 才会按质量集顺序发起一次固定批量：先对全部 `8` 个源视频用 FFprobe 检查音视频流和时长，再逐例导入、提取受控 WAV 并调用 `media_transcription`；每例最多提交一次，绝不自动重试。任何一例出现验证失败、Provider 拒绝、取消、未知结果或 JSON 回读失败，执行器立即停止，后续样本写为 `not_started`，并在 `run.json` 留下不含正文的失败类别和 `0/1` 调用数。已完成样本才可携带回读 Artifact；评分器明确拒绝失败样本伪造 Artifact 或调用数。`run.json` 与 Artifact 只写入忽略的证据目录，随后由离线评分器读取；本执行器的自测只验证停止/留痕契约，不构成真实模型质量结果。
+
 ### 2.1.1 模型 Profile 选型探针
 
 模型 Provider 返回 HTTP 200、能生成一张图片或能输出一段文本都不构成发布准入。每个实际启用的 Profile 都要建立独立记录，包含模型/权重版本、Provider/端点、许可、输入输出限制、设备或实际费用、超时/重试策略和固定参数。`media_planning` 与 `media_image_edit` 是 MM-2 的 required；`media_matting`、`media_segmentation` 和 `media_vision` 只有进入实际方案时才转为 required；`media_transcription` 在 G4 前补齐，`media_translation`/`media_speech` 在 G6 前补齐。
