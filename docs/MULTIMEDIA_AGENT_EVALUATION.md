@@ -69,6 +69,8 @@ MM-0 只建立足以判断模型路线可行的代表样本和 INTENT 小集；�
 
 2026-09-28 的 `media_edl_candidate_v1` 只验证候选 EDL 的模型契约，不评价 ASR、剪辑内容质量或视频交付。经用户确认后，以程序生成的中文转写夹具调用 `media_planning -> deepseek / deepseek-v4-pro` 共 `1` 次；模型返回通过 JSON 契约和句段白名单校验的 `3` 段候选，总时长 `9,400 ms`，耗时 `3,369 ms`，Provider usage 为 `338/148/486` input/output/total tokens。回读 manifest 确认为没有原始模型正文、夹具文本、媒体导入、FFmpeg 或输出文件。此前一次因本地 usage 序列化错误而证据不完整的请求保留为 incomplete，未重试。此次通过仅证明当前模型路由可支持受限“转写上下文 -> 待确认 EDL”决策；不改变 `G4-ASR-DEV`、`G4`、字幕或真实素材质量门槛状态。
 
+下一段 MM-4 客户闭环的内部验收需把调度台与专业页作为同一条路径核对：以一句真实中文剪辑需求和一份明确选中的短视频，验证 Commander 识别剪辑意图、绑定正确素材、展示待确认片段，确认后调用受限渲染，并在会话和任务历史中返回同一份已回读 MP4；无素材时澄清，视频主题 PPT 与图片编辑仍走原路由。专业页还需完成受控导入、转写/候选查看、确认与产物打开的最短 GUI 冒烟。该内部验收不替代完整 `G4` 的时间质量、真实素材听看复核及发布级客户端验证；上述入口尚未实施，当前状态为 `not_run`。
+
 ### 2.1.1 模型 Profile 选型探针
 
 模型 Provider 返回 HTTP 200、能生成一张图片或能输出一段文本都不构成发布准入。每个实际启用的 Profile 都要建立独立记录，包含模型/权重版本、Provider/端点、许可、输入输出限制、设备或实际费用、超时/重试策略和固定参数。`media_planning` 与 `media_image_edit` 是 MM-2 的 required；`media_matting`、`media_segmentation` 和 `media_vision` 只有进入实际方案时才转为 required；`media_transcription` 在 G4 前补齐，`media_translation`/`media_speech` 在 G6 前补齐。
