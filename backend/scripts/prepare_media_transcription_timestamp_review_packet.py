@@ -1,6 +1,6 @@
 """生成公开转写文本的人工时间标注审核包。
 
-FLEURS 质量集的发布文本可用于 CER/WER，却没有独立的句段时间真值。
+FLEURS 质量集的发布文本可用于 CER/WER，却没有独立的源级语音包络真值。
 本脚本只复制冻结的公开媒体和参考文本，并将待审核的时间字段留空；它既不读取
 Provider Artifact，也不调用模型，避免模型时间戳反向污染人工参考答案。
 """
@@ -23,7 +23,7 @@ from media_transcription_quality import (
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-REVIEW_PACKET_TYPE = "agentflow-mm4-asr-timestamp-review-packet-v1"
+REVIEW_PACKET_TYPE = "agentflow-mm4-asr-timestamp-review-packet-v2"
 REVIEW_HEADERS = [
     "fixture_id",
     "segment_index",
@@ -103,25 +103,22 @@ def build_review_packet(
         source_text_sha256 = _suite_sha256_value(source_payload, fixture.fixture_id, "reference_text_sha256")
         if text_sha256 != source_text_sha256:
             raise RuntimeError(f"{fixture.fixture_id} copied reference text hash mismatch")
-        expected_segments: list[dict[str, object]] = []
-        for index, segment in enumerate(fixture.reference_segments, start=1):
-            reference_text = str(segment["text"])
-            reference_text_sha256 = _sha256_text(reference_text)
-            rows.append(
-                {
-                    "fixture_id": fixture.fixture_id,
-                    "segment_index": str(index),
-                    "language": fixture.language,
-                    "reference_text": reference_text,
-                    "reference_text_sha256": reference_text_sha256,
-                    "begin_ms": "",
-                    "end_ms": "",
-                    "reviewer_id": "",
-                    "review_status": "pending",
-                    "note": "",
-                }
-            )
-            expected_segments.append({"segment_index": index, "reference_text_sha256": reference_text_sha256})
+        # G4 当前只比较每段源媒体的首尾语音包络，不要求人工伪造逐句字幕边界。
+        reference_text_sha256 = _sha256_text(fixture.reference_text)
+        rows.append(
+            {
+                "fixture_id": fixture.fixture_id,
+                "segment_index": "1",
+                "language": fixture.language,
+                "reference_text": fixture.reference_text,
+                "reference_text_sha256": reference_text_sha256,
+                "begin_ms": "",
+                "end_ms": "",
+                "reviewer_id": "",
+                "review_status": "pending",
+                "note": "",
+            }
+        )
         manifest_fixtures.append(
             {
                 "fixture_id": fixture.fixture_id,
@@ -136,7 +133,7 @@ def build_review_packet(
                 "source_reference_segments_sha256": _suite_sha256_value(
                     source_payload, fixture.fixture_id, "reference_segments_sha256"
                 ),
-                "expected_segments": expected_segments,
+                "expected_segments": [{"segment_index": 1, "reference_text_sha256": reference_text_sha256}],
             }
         )
     review_csv = output_dir / "review.csv"
@@ -149,6 +146,7 @@ def build_review_packet(
         "source_suite_type": source_payload["suite_type"],
         "review_contract": {
             "reference_provenance": "published_benchmark",
+            "annotation_scope": "source_speech_envelope",
             "time_values_initial_state": "blank",
             "provider_or_model_output_included": False,
             "model_call_count": 0,
@@ -269,11 +267,11 @@ def _sha256_text(value: str) -> str:
 def _review_instructions() -> str:
     return """# G4-ASR-DEV 人工时间标注说明
 
-本审核包只用于为已发布的 FLEURS 参考文本补充独立的句段时间真值。`review.csv` 的时间字段在创建时为空，包内不含 Qwen 或其他模型的转写、句段或时间戳。
+本审核包只用于为已发布的 FLEURS 参考文本补充独立的源级语音包络真值。当前 G4 指标只比较每段媒体的首个可听词开始和最后一个可听词结束，不是逐句字幕对齐；因此 `review.csv` 每段媒体只有一行。时间字段在创建时为空，包内不含 Qwen 或其他模型的转写、句段或时间戳。
 
-1. 逐行播放 `media/` 内同名媒体，按 `reference_text` 对应的语音填写 `begin_ms` 和 `end_ms`。数值为整数毫秒；开始取首个可听词，结束取最后一个可听词的结尾。
-2. 只编辑 `review.csv` 的 `begin_ms`、`end_ms`、`reviewer_id`、`review_status` 和可选 `note`。不要改动 `fixture_id`、句段索引、语言、文本或文本哈希。
-3. 每一行完成后设置 `review_status=accepted` 并填写审核人标识。每条必须满足 `0 <= begin_ms < end_ms <= 该媒体时长`；同一媒体按句段索引不可重叠，句间静音可以保留。
+1. 逐行播放 `media/` 内同名媒体，按完整 `reference_text` 对应的语音填写 `begin_ms` 和 `end_ms`。数值为整数毫秒；开始取整段媒体首个可听词，结束取最后一个可听词的结尾。
+2. 只编辑 `review.csv` 的 `begin_ms`、`end_ms`、`reviewer_id`、`review_status` 和可选 `note`。不要改动 `fixture_id`、固定为 `1` 的索引、语言、文本或文本哈希。
+3. 每一行完成后设置 `review_status=accepted` 并填写审核人标识。每条必须满足 `0 <= begin_ms < end_ms <= 该媒体时长`。
 4. 审核人不能参照模型输出、Provider 时间戳或此前的拼接容器边界。独立性由项目负责人在审核记录外确认；脚本只能验证文件、范围、完整性和一致性，不能验证人的真实身份。
 5. 完成后使用原始冻结质量集运行校验器。校验通过只说明时间参考可进入后续冻结步骤，不会自动将完整 G4-ASR-DEV 标记为通过，也不会发起新的模型调用。
 """
@@ -297,6 +295,8 @@ def _run_self_test() -> dict[str, object]:
         if report["review_state"] != "incomplete" or report["model_call_count"] != 0:
             raise AssertionError("new timestamp review packet must start empty without model calls")
         review_rows = _read_review_rows(packet_dir / "review.csv")
+        if len(review_rows) != 8:
+            raise AssertionError("source-envelope review packet must require exactly one row per source media")
         if any(row["begin_ms"] or row["end_ms"] or row["review_status"] != "pending" for row in review_rows):
             raise AssertionError("new timestamp review packet prefilled a reference time boundary")
         if "Provider" in (packet_dir / "review.csv").read_text(encoding="utf-8"):

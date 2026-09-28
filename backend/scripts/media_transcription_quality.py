@@ -128,15 +128,22 @@ def evaluate_run(
     *,
     verify_files: bool,
 ) -> dict[str, object]:
-    """离线计算冻结运行的 CER/WER 与句段时间包络偏差。"""
+    """离线计算冻结运行的 CER/WER 与源级语音时间包络偏差。"""
 
     suite_report, fixtures = validate_suite(suite_path, verify_files=verify_files)
+    suite_payload = _read_json(suite_path.resolve(), label="quality suite")
     run_path = run_path.resolve()
     run = _read_json(run_path, label="quality run")
     if run.get("run_type") != RUN_TYPE:
         raise QualityContractError(f"run_type must be {RUN_TYPE}")
-    if str(run.get("suite_sha256") or "").lower() != str(suite_report["suite_sha256"]):
-        raise QualityContractError("quality run does not match the frozen suite hash")
+    run_suite_sha256 = str(run.get("suite_sha256") or "").lower()
+    if run_suite_sha256 == str(suite_report["suite_sha256"]):
+        run_suite_binding = "exact_suite"
+    elif run_suite_sha256 == _reviewed_time_source_suite_sha256(suite_payload):
+        # 模型运行早于独立时间审核且与同一源媒体绑定时，可离线复用 Artifact，避免重复付费调用。
+        run_suite_binding = "pre_annotation_source_suite"
+    else:
+        raise QualityContractError("quality run does not match the frozen suite or its reviewed-time source suite")
     route = _required_string(run, "route", "quality run")
     if route != "media_transcription":
         raise QualityContractError("quality run must use the media_transcription route")
@@ -198,6 +205,7 @@ def evaluate_run(
             "provider": str(run["provider"]),
             "model": str(run["model"]),
             "route": route,
+            "suite_binding": run_suite_binding,
             "provider_call_count": sum(int(case["provider_call_count"]) for case in case_records),
             "network_calls_by_evaluator": 0,
         },
@@ -574,6 +582,8 @@ def _validate_independent_time_review(raw: dict[str, object], fixture_id: str) -
     review = raw.get("independent_time_annotation_review")
     if not isinstance(review, dict) or review.get("provenance") != "independent_human_review":
         raise QualityContractError(f"fixture {fixture_id} reviewed published timing lacks independent review provenance")
+    if review.get("annotation_scope") != "source_speech_envelope":
+        raise QualityContractError(f"fixture {fixture_id} reviewed published timing has an unsupported annotation scope")
     for field in (
         "source_suite_sha256",
         "review_packet_manifest_sha256",
@@ -589,6 +599,31 @@ def _validate_independent_time_review(raw: dict[str, object], fixture_id: str) -
             character not in "0123456789abcdef" for character in reviewer_hash
         ):
             raise QualityContractError(f"fixture {fixture_id} independent time review has an invalid reviewer hash")
+
+
+def _reviewed_time_source_suite_sha256(suite_payload: dict[str, object]) -> str:
+    """仅允许冻结器产出的已审时间集复用盲审前的固定模型 Artifact。"""
+
+    summary = suite_payload.get("reviewed_time_annotation_summary")
+    if not isinstance(summary, dict):
+        return ""
+    source_suite_sha256 = summary.get("source_suite_sha256")
+    if not isinstance(source_suite_sha256, str):
+        return ""
+    source_suite_sha256 = source_suite_sha256.lower()
+    if len(source_suite_sha256) != 64 or any(character not in "0123456789abcdef" for character in source_suite_sha256):
+        return ""
+    raw_fixtures = suite_payload.get("fixtures")
+    if not isinstance(raw_fixtures, list) or not raw_fixtures:
+        return ""
+    for raw in raw_fixtures:
+        if not isinstance(raw, dict):
+            return ""
+        review = raw.get("independent_time_annotation_review")
+        review_source_suite_sha256 = review.get("source_suite_sha256") if isinstance(review, dict) else None
+        if not isinstance(review_source_suite_sha256, str) or review_source_suite_sha256.lower() != source_suite_sha256:
+            return ""
+    return source_suite_sha256
 
 
 def _relative_path(record: dict[str, object], field: str, location: str) -> str:

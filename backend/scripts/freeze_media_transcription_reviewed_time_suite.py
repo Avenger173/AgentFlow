@@ -92,6 +92,7 @@ def freeze_reviewed_time_suite(
     reviewer_hashes = sorted({_hash_identifier(str(row["reviewer_id"])) for row in review_rows})
     review_metadata = {
         "provenance": "independent_human_review",
+        "annotation_scope": "source_speech_envelope",
         "source_suite_sha256": source_report["suite_sha256"],
         "review_packet_manifest_sha256": packet_manifest_sha256,
         "review_csv_sha256": review_csv_sha256,

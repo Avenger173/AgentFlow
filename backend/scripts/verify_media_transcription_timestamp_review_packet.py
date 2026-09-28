@@ -61,6 +61,9 @@ def verify_review_packet(packet_dir: Path, source_suite: Path) -> dict[str, obje
     manifest = _read_json(packet_dir / "packet.json", label="timestamp review packet manifest")
     if manifest.get("packet_type") != REVIEW_PACKET_TYPE:
         raise QualityContractError("timestamp review packet has an unsupported packet_type")
+    review_contract = manifest.get("review_contract")
+    if not isinstance(review_contract, dict) or review_contract.get("annotation_scope") != "source_speech_envelope":
+        raise QualityContractError("timestamp review packet must use the source speech envelope review scope")
     if manifest.get("source_suite_sha256") != source_report["suite_sha256"]:
         raise QualityContractError("timestamp review packet does not match the frozen source suite")
     if manifest.get("fixture_count") != len(fixtures):
@@ -143,20 +146,19 @@ def _verify_packet_fixtures(
         _verify_file_sha256(media_path, fixture.media_sha256, fixture_id, "copied media")
         _verify_file_sha256(text_path, source_text_sha256, fixture_id, "copied reference text")
         segments = raw.get("expected_segments")
-        if not isinstance(segments, list) or len(segments) != len(fixture.reference_segments):
-            raise QualityContractError(f"{fixture_id} packet segment count does not match frozen source")
-        for index, expected in enumerate(fixture.reference_segments, start=1):
-            segment = segments[index - 1]
-            if not isinstance(segment, dict) or segment.get("segment_index") != index:
-                raise QualityContractError(f"{fixture_id} packet segment ordering is invalid")
-            text_sha256 = _sha256_text(str(expected["text"]))
-            if segment.get("reference_text_sha256") != text_sha256:
-                raise QualityContractError(f"{fixture_id} packet segment text hash does not match frozen source")
-            expected_rows[(fixture_id, index)] = {
-                "fixture": fixture,
-                "text": str(expected["text"]),
-                "reference_text_sha256": text_sha256,
-            }
+        if not isinstance(segments, list) or len(segments) != 1:
+            raise QualityContractError(f"{fixture_id} packet must contain exactly one source speech envelope")
+        segment = segments[0]
+        text_sha256 = _sha256_text(fixture.reference_text)
+        if not isinstance(segment, dict) or segment.get("segment_index") != 1:
+            raise QualityContractError(f"{fixture_id} packet source envelope index is invalid")
+        if segment.get("reference_text_sha256") != text_sha256:
+            raise QualityContractError(f"{fixture_id} packet source envelope text hash does not match frozen source")
+        expected_rows[(fixture_id, 1)] = {
+            "fixture": fixture,
+            "text": fixture.reference_text,
+            "reference_text_sha256": text_sha256,
+        }
     return expected_rows
 
 
@@ -328,7 +330,7 @@ def _run_self_test() -> dict[str, object]:
         "self_test": True,
         "model_call_count": 0,
         "network_call_count": 0,
-        "negative_contract_check": "incomplete_review_altered_reference_and_out_of-band_time_reference_rejected",
+        "negative_contract_check": "one_source_envelope_per_media_incomplete_review_altered_reference_and_out_of-band_time_reference_rejected",
     }
 
 

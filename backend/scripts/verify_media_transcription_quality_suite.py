@@ -77,6 +77,7 @@ def _run_self_test() -> dict[str, object]:
             fixture["time_annotations_reviewed"] = True
             fixture["independent_time_annotation_review"] = {
                 "provenance": "independent_human_review",
+                "annotation_scope": "source_speech_envelope",
                 "source_suite_sha256": "a" * 64,
                 "review_packet_manifest_sha256": "b" * 64,
                 "review_csv_sha256": "c" * 64,
