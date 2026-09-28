@@ -67,6 +67,8 @@ MM-0 只建立足以判断模型路线可行的代表样本和 INTENT 小集；�
 
 先前按原拼接句段拆出的 `59` 行审核包超出了当前门槛所需，已保留在忽略目录中但不再作为有效输入。现行 `fleurs_g4_asr_envelope_review_20260928` 审核包从冻结质量集复制 `8` 段公开媒体和发布参考文本，`review.csv` 每段媒体只保留 `1` 条源级语音包络，且不含 Qwen 或其他模型的文本、句段和时间戳。`verify_media_transcription_timestamp_review_packet.py` 必须同时对照原始 `suite.json`，会拒绝媒体/文本哈希变动、漏行、越界和参考文本改写。中文 `4` 条已经完成独立试听；和既有 Artifact 对照后，开发集时间包络 P95/最大误差为 `760 ms`，未达到原 P95 `<=500 ms` 阈值，留出集为 `500 ms`。项目决定不再填写英语 `4` 条，也不改变阈值伪造完整 `G4-ASR-DEV` 通过；该双语质量门槛转为后续视频发布验证。它不再阻塞当前中文优先的候选 EDL 开发，但候选必须显式确认后才允许调用已有受限渲染工具。审核包和冻结器不调用网络或模型；若未来恢复完整门槛，仍须完成审核、冻结并在源 suite 哈希、媒体哈希和独立审核摘要均匹配时离线复用原 `run.json`，不重复调用 Provider。
 
+2026-09-28 的 `media_edl_candidate_v1` 只验证候选 EDL 的模型契约，不评价 ASR、剪辑内容质量或视频交付。经用户确认后，以程序生成的中文转写夹具调用 `media_planning -> deepseek / deepseek-v4-pro` 共 `1` 次；模型返回通过 JSON 契约和句段白名单校验的 `3` 段候选，总时长 `9,400 ms`，耗时 `3,369 ms`，Provider usage 为 `338/148/486` input/output/total tokens。回读 manifest 确认为没有原始模型正文、夹具文本、媒体导入、FFmpeg 或输出文件。此前一次因本地 usage 序列化错误而证据不完整的请求保留为 incomplete，未重试。此次通过仅证明当前模型路由可支持受限“转写上下文 -> 待确认 EDL”决策；不改变 `G4-ASR-DEV`、`G4`、字幕或真实素材质量门槛状态。
+
 ### 2.1.1 模型 Profile 选型探针
 
 模型 Provider 返回 HTTP 200、能生成一张图片或能输出一段文本都不构成发布准入。每个实际启用的 Profile 都要建立独立记录，包含模型/权重版本、Provider/端点、许可、输入输出限制、设备或实际费用、超时/重试策略和固定参数。`media_planning` 与 `media_image_edit` 是 MM-2 的 required；`media_matting`、`media_segmentation` 和 `media_vision` 只有进入实际方案时才转为 required；`media_transcription` 在 G4 前补齐，`media_translation`/`media_speech` 在 G6 前补齐。
