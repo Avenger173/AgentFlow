@@ -65,7 +65,7 @@ MM-0 只建立足以判断模型路线可行的代表样本和 INTENT 小集；�
 
 2026-09-28 已从 [Google FLEURS](https://huggingface.co/datasets/google/fleurs) 的 CC-BY 4.0 公开文本/音频记录冻结 `8` 段中英文短媒体（开发/留出 `5/3`、总时长 `573.440 s`），并在用户确认后固定顺序调用 `media_transcription -> qwen_audio / qwen-audio-3.1-asr-flash` 共 `8` 次；8/8 完成，无自动重试，Provider 未返回金额，记为 `unknown`。离线结果为：中文 CER 开发 `2.6455%`、留出 `5.1724%`，英文 WER 开发 `3.2787%`、留出 `1.9553%`，均满足文本门槛，因此 `G4-ASR-TEXT-DEV` 通过。该数据集没有独立时间标注，时间戳状态为 `not_evaluated`，完整 `G4-ASR-DEV` 和 `G4` 仍未通过。全部原始夹具、Artifact、哈希与脱敏清单仅位于忽略的 `data/` 证据目录。
 
-同日已生成 `fleurs_g4_asr_timestamp_review_20260928` 人工时间标注审核包：它从冻结质量集复制 `8` 段公开媒体和发布参考文本，`review.csv` 含 `59` 条待审核句段，但起止时间全部为空，且不含 Qwen 或其他模型的文本、句段和时间戳。`verify_media_transcription_timestamp_review_packet.py` 必须同时对照原始 `suite.json`，会拒绝媒体/文本哈希变动、漏行、越界、重叠和参考文本改写；当前 `0/59` 完成，`--require-complete` 返回非零是对“尚无人工作标注”的准确报告，不是模型或接口失败。审核人按包内说明独立填写后，仍需先冻结新的已审时间参考，再决定是否值得执行新的固定 ASR 批量；审核包本身不调用网络或模型，也不让完整 `G4-ASR-DEV` 自动通过。
+同日已生成 `fleurs_g4_asr_timestamp_review_20260928` 人工时间标注审核包：它从冻结质量集复制 `8` 段公开媒体和发布参考文本，`review.csv` 含 `59` 条待审核句段，但起止时间全部为空，且不含 Qwen 或其他模型的文本、句段和时间戳。`verify_media_transcription_timestamp_review_packet.py` 必须同时对照原始 `suite.json`，会拒绝媒体/文本哈希变动、漏行、越界、重叠和参考文本改写；当前 `0/59` 完成，`--require-complete` 返回非零是对“尚无人工作标注”的准确报告，不是模型或接口失败。审核人按包内说明独立填写后，`freeze_media_transcription_reviewed_time_suite.py` 才会接受项目负责人提供的非个人确认标识，复制冻结媒体和文本并生成新的已审时间质量集；新集保留 `published_benchmark` 文本来源，同时记录审核包哈希与匿名审核标识哈希。该冻结器已对当前空包实际拒绝且未产生输出。审核包和冻结器都不调用网络或模型，也不会让完整 `G4-ASR-DEV` 自动通过；只有新质量集完成一次新的固定 ASR 运行后才可评分。
 
 ### 2.1.1 模型 Profile 选型探针
 

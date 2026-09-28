@@ -64,6 +64,8 @@ class FixtureRecord:
     duration_ms: int
     normalized_audio_duration_ms: int
     reference_provenance: Literal["local_human_review", "published_benchmark"]
+    reference_transcript_reviewed: bool
+    time_annotations_reviewed: bool
     reference_text: str
     reference_segments: list[dict[str, object]]
 
@@ -95,7 +97,7 @@ def validate_suite(suite_path: Path, *, verify_files: bool) -> tuple[dict[str, o
     if any(split_languages[(split, language)] < 1 for split in SPLITS for language in LANGUAGES):
         raise QualityContractError("both splits must include Chinese and English source videos")
     total_duration_ms = sum(record.duration_ms for record in fixtures.values())
-    timestamp_reference_ready = all(record.reference_provenance == "local_human_review" for record in fixtures.values())
+    timestamp_reference_ready = all(record.time_annotations_reviewed for record in fixtures.values())
     if total_duration_ms < MIN_TOTAL_DURATION_MS:
         raise QualityContractError("short-media ASR suite must provide at least eight minutes of source video")
 
@@ -112,7 +114,7 @@ def validate_suite(suite_path: Path, *, verify_files: bool) -> tuple[dict[str, o
         "short_media_audio_limit_ms": MAX_NORMALIZED_AUDIO_DURATION_MS,
         "timestamp_reference_status": "ready" if timestamp_reference_ready else "not_available_for_published_text_only_suite",
         "quality_claim": (
-            "none; this validates G4-ASR-DEV fixture provenance and reviewed timestamp prerequisites only"
+            "none; this validates G4-ASR-DEV fixture provenance and independently reviewed timestamp prerequisites only"
             if timestamp_reference_ready
             else "none; this validates published transcript provenance for text-only ASR assessment, not timestamp quality"
         ),
@@ -146,7 +148,7 @@ def evaluate_run(
         raise QualityContractError("quality run must contain exactly one result for every frozen fixture")
     case_records = _read_cases(raw_cases, fixtures=fixtures, root=run_path.parent, verify_files=verify_files)
 
-    timestamp_reference_ready = all(record.reference_provenance == "local_human_review" for record in fixtures.values())
+    timestamp_reference_ready = all(record.time_annotations_reviewed for record in fixtures.values())
     metric_records: list[dict[str, object]] = []
     incomplete_cases: list[str] = []
     incomplete_case_statuses: list[dict[str, str]] = []
@@ -251,7 +253,7 @@ def _index_fixtures(value: object, *, root: Path, verify_files: bool) -> dict[st
         # 人工校对文本和时间标注属于质量集本体，不能因跳过媒体二进制回读而缺席。
         _verify_file_sha256(text_path, text_sha256, fixture_id, "reference text")
         _verify_file_sha256(segments_path, segments_sha256, fixture_id, "reference segments")
-        reference_provenance = _reference_provenance(raw, fixture_id)
+        reference_provenance, reference_transcript_reviewed, time_annotations_reviewed = _reference_review_flags(raw, fixture_id)
         reference_text = _read_text(text_path, fixture_id)
         reference_segments = _read_reference_segments(segments_path, fixture_id, duration_ms)
         if _normalize_characters(reference_text) != _normalize_characters(
@@ -268,6 +270,8 @@ def _index_fixtures(value: object, *, root: Path, verify_files: bool) -> dict[st
             duration_ms=duration_ms,
             normalized_audio_duration_ms=normalized_audio_duration_ms,
             reference_provenance=reference_provenance,  # type: ignore[arg-type]
+            reference_transcript_reviewed=reference_transcript_reviewed,
+            time_annotations_reviewed=time_annotations_reviewed,
             reference_text=reference_text,
             reference_segments=reference_segments,
         )
@@ -542,20 +546,49 @@ def _read_text(path: Path, fixture_id: str) -> str:
     return value
 
 
-def _reference_provenance(raw: dict[str, object], fixture_id: str) -> str:
-    """本地试听与发布基准分别记账，不能用模型产物伪造参考答案。"""
+def _reference_review_flags(raw: dict[str, object], fixture_id: str) -> tuple[str, bool, bool]:
+    """分别记录文本来源与时间真值，避免把发布文本伪装成本地人工转写。"""
 
     provenance = str(raw.get("reference_provenance") or "").strip() or "local_human_review"
     if provenance not in _REFERENCE_PROVENANCE:
         raise QualityContractError(f"fixture {fixture_id} has unsupported reference_provenance")
+    transcript_reviewed = raw.get("reference_transcript_reviewed")
+    time_reviewed = raw.get("time_annotations_reviewed")
+    if not isinstance(transcript_reviewed, bool) or not isinstance(time_reviewed, bool):
+        raise QualityContractError(f"fixture {fixture_id} must declare boolean transcript and time review states")
     if provenance == "local_human_review":
-        if raw.get("reference_transcript_reviewed") is not True or raw.get("time_annotations_reviewed") is not True:
+        if transcript_reviewed is not True or time_reviewed is not True:
             raise QualityContractError(f"fixture {fixture_id} must have reviewed transcript and time annotations")
     else:
         source_url = _required_string(raw, "reference_provenance_url", fixture_id)
         if not source_url.startswith("https://"):
             raise QualityContractError(f"fixture {fixture_id} published benchmark reference must provide an HTTPS source")
-    return provenance
+        if time_reviewed:
+            _validate_independent_time_review(raw, fixture_id)
+    return provenance, transcript_reviewed, time_reviewed
+
+
+def _validate_independent_time_review(raw: dict[str, object], fixture_id: str) -> None:
+    """发布文本可保留其来源，但人工补录的时间真值必须保留可追溯摘要。"""
+
+    review = raw.get("independent_time_annotation_review")
+    if not isinstance(review, dict) or review.get("provenance") != "independent_human_review":
+        raise QualityContractError(f"fixture {fixture_id} reviewed published timing lacks independent review provenance")
+    for field in (
+        "source_suite_sha256",
+        "review_packet_manifest_sha256",
+        "review_csv_sha256",
+        "owner_approval_id_hash",
+    ):
+        _sha256_value(review, field, f"fixture {fixture_id} independent time review")
+    reviewer_hashes = review.get("reviewer_id_hashes")
+    if not isinstance(reviewer_hashes, list) or not reviewer_hashes:
+        raise QualityContractError(f"fixture {fixture_id} independent time review requires reviewer hash evidence")
+    for reviewer_hash in reviewer_hashes:
+        if not isinstance(reviewer_hash, str) or len(reviewer_hash) != 64 or any(
+            character not in "0123456789abcdef" for character in reviewer_hash
+        ):
+            raise QualityContractError(f"fixture {fixture_id} independent time review has an invalid reviewer hash")
 
 
 def _relative_path(record: dict[str, object], field: str, location: str) -> str:

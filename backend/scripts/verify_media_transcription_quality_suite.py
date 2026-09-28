@@ -60,8 +60,36 @@ def _run_self_test() -> dict[str, object]:
         published_report, _ = validate_suite(published_path, verify_files=True)
         if published_report["fixture_reference_provenance_counts"] != {"published_benchmark": 8}:
             raise AssertionError("quality suite did not retain published benchmark reference provenance")
+        published_with_unproven_timing = json.loads(published_path.read_text(encoding="utf-8"))
+        for fixture in published_with_unproven_timing["fixtures"]:
+            fixture["time_annotations_reviewed"] = True
+        unproven_timing_path = root / "published_unproven_timing_suite.json"
+        unproven_timing_path.write_text(json.dumps(published_with_unproven_timing, ensure_ascii=False), encoding="utf-8")
+        try:
+            validate_suite(unproven_timing_path, verify_files=False)
+        except QualityContractError as exc:
+            if "independent review provenance" not in str(exc):
+                raise
+        else:
+            raise AssertionError("published text with unproven timing was accepted as timestamp-ready")
+        published_with_timing = json.loads(published_path.read_text(encoding="utf-8"))
+        for fixture in published_with_timing["fixtures"]:
+            fixture["time_annotations_reviewed"] = True
+            fixture["independent_time_annotation_review"] = {
+                "provenance": "independent_human_review",
+                "source_suite_sha256": "a" * 64,
+                "review_packet_manifest_sha256": "b" * 64,
+                "review_csv_sha256": "c" * 64,
+                "reviewer_id_hashes": ["d" * 64],
+                "owner_approval_id_hash": "e" * 64,
+            }
+        timed_path = root / "published_reviewed_timing_suite.json"
+        timed_path.write_text(json.dumps(published_with_timing, ensure_ascii=False), encoding="utf-8")
+        timed_report, _ = validate_suite(timed_path, verify_files=True)
+        if timed_report["timestamp_reference_status"] != "ready":
+            raise AssertionError("published benchmark text with independent timing was not timestamp-ready")
     report["self_test"] = True
-    report["negative_contract_check"] = "program_generated_fixture_rejected_and_published_reference_is_traceable"
+    report["negative_contract_check"] = "program_generated_fixture_and_unproven_published_timing_rejected_independent_time_review_traceable"
     return report
 
 

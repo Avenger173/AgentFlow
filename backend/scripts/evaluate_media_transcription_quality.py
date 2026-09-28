@@ -68,6 +68,32 @@ def _run_self_test() -> dict[str, object]:
             or published_report["timestamp_gate_status"] != "not_evaluated_without_independent_time_annotations"
         ):
             raise AssertionError("published text-only suite was allowed to claim timestamp quality")
+        timed_published_suite = json.loads(published_suite_path.read_text(encoding="utf-8"))
+        for fixture in timed_published_suite["fixtures"]:
+            fixture["time_annotations_reviewed"] = True
+            fixture["independent_time_annotation_review"] = {
+                "provenance": "independent_human_review",
+                "source_suite_sha256": "a" * 64,
+                "review_packet_manifest_sha256": "b" * 64,
+                "review_csv_sha256": "c" * 64,
+                "reviewer_id_hashes": ["d" * 64],
+                "owner_approval_id_hash": "e" * 64,
+            }
+        timed_published_suite_path = root / "published_timed_suite.json"
+        timed_published_suite_path.write_text(json.dumps(timed_published_suite, ensure_ascii=False), encoding="utf-8")
+        timed_published_run = json.loads(published_run_path.read_text(encoding="utf-8"))
+        timed_published_run["suite_sha256"] = hashlib.sha256(
+            json.dumps(timed_published_suite, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        timed_published_run_path = root / "published_timed_run.json"
+        timed_published_run_path.write_text(json.dumps(timed_published_run, ensure_ascii=False), encoding="utf-8")
+        timed_published_report = evaluate_run(timed_published_suite_path, timed_published_run_path, verify_files=True)
+        if (
+            timed_published_report["quality_gate"] != "G4-ASR-DEV"
+            or timed_published_report["full_asr_gate_passed"] is not True
+            or timed_published_report["timestamp_gate_status"] != "scored"
+        ):
+            raise AssertionError("published text with independent time review was not scored as full ASR quality")
         invalid = json.loads(run_path.read_text(encoding="utf-8"))
         invalid["cases"][0]["provider_call_count"] = 2
         invalid_path = root / "invalid_run.json"
@@ -133,7 +159,7 @@ def _run_self_test() -> dict[str, object]:
         else:
             raise AssertionError("quality evaluator accepted an underreported rejected Provider call")
     report["self_test"] = True
-    report["negative_contract_check"] = "published_text_cannot_claim_timestamp_quality_or_provider_replay_low_quality_unknown_underreported_failure"
+    report["negative_contract_check"] = "published_text_without_review_cannot_claim_timestamp_quality_but_independently_reviewed_time_can_score_provider_replay_low_quality_unknown_underreported_failure"
     return report
 
 
