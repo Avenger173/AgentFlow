@@ -237,6 +237,17 @@ class Settings:
         ).resolve()
 
     @property
+    def media_edl_output_dir(self) -> Path:
+        """返回受限 EDL 渲染 MP4 的固定交付目录。"""
+
+        return Path(
+            os.getenv(
+                "AGENTFLOW_MEDIA_EDL_OUTPUT_DIR",
+                self.output_dir / "media_edl",
+            )
+        ).resolve()
+
+    @property
     def data_analysis_output_dir(self) -> Path:
         """返回数据工作台正式 Excel 交付物的固定输出目录。
 

@@ -47,6 +47,11 @@ from app.schemas.media_source import (
     MediaTranscriptionStartResponse,
     MediaTranscriptionTaskResultResponse,
 )
+from app.schemas.media_edl import (
+    MediaEditDecisionList,
+    MediaEdlRenderStartResponse,
+    MediaEdlRenderTaskResultResponse,
+)
 from app.services.media_workspace import (
     MediaWorkspaceConflictError,
     MediaWorkspaceError,
@@ -89,6 +94,12 @@ from app.services.media_transcription_delivery import (
     get_media_transcription_task_result,
     run_media_transcription_task,
 )
+from app.services.media_edl_delivery import (
+    create_media_edl_queued_run,
+    get_media_edl_task_result,
+    resolve_media_edl_download_path,
+    run_media_edl_task,
+)
 from app.services.task_event_stream import (
     finish_live_task_event_stream,
     has_live_task_event_stream,
@@ -104,6 +115,7 @@ _BACKGROUND_MEDIA_EXPORT_TASKS: set[asyncio.Task[None]] = set()
 _BACKGROUND_MEDIA_EDIT_TASKS: set[asyncio.Task[None]] = set()
 _BACKGROUND_MEDIA_AI_EDIT_TASKS: set[asyncio.Task[None]] = set()
 _BACKGROUND_MEDIA_TRANSCRIPTION_TASKS: set[asyncio.Task[None]] = set()
+_BACKGROUND_MEDIA_EDL_TASKS: set[asyncio.Task[None]] = set()
 
 
 @router.get("/projects", response_model=MediaProjectListResponse)
@@ -266,6 +278,74 @@ async def get_media_transcription_result_endpoint(task_id: str) -> MediaTranscri
             message="正在等待语音模型并回读结构化转写交付。",
         )
     raise HTTPException(status_code=404, detail=f"Media transcription task '{task_id}' was not found.")
+
+
+@router.post(
+    "/projects/{project_id}/edl-renders/start",
+    response_model=MediaEdlRenderStartResponse,
+    status_code=202,
+)
+async def start_media_edl_render_endpoint(
+    project_id: str,
+    request: MediaEditDecisionList,
+) -> MediaEdlRenderStartResponse:
+    """Accept only a constrained EDL; local paths and FFmpeg flags are never API input."""
+
+    task_id = f"task_media_edl_{uuid4().hex[:12]}"
+    try:
+        await asyncio.to_thread(get_media_project, project_id)
+        await asyncio.to_thread(
+            create_media_edl_queued_run,
+            task_id=task_id,
+            project_id=project_id,
+            edl=request,
+        )
+    except MediaWorkspaceError as exc:
+        raise _media_error_to_http(exc) from exc
+    open_live_task_event_stream(task_id)
+    await publish_live_task_event(
+        task_id=task_id,
+        event="task_queued",
+        agent_id="media_agent",
+        message="EDL render accepted; it will use only the controlled imported source.",
+    )
+    task = asyncio.create_task(
+        _run_media_edl_background(task_id=task_id, project_id=project_id, edl=request)
+    )
+    _BACKGROUND_MEDIA_EDL_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_MEDIA_EDL_TASKS.discard)
+    return MediaEdlRenderStartResponse(task_id=task_id)
+
+
+@router.get(
+    "/edl-renders/{task_id}/result",
+    response_model=MediaEdlRenderTaskResultResponse,
+)
+async def get_media_edl_render_result_endpoint(task_id: str) -> MediaEdlRenderTaskResultResponse:
+    result = get_media_edl_task_result(task_id)
+    if result is not None:
+        return result
+    if has_live_task_event_stream(task_id) and not live_task_event_stream_finished(task_id):
+        return MediaEdlRenderTaskResultResponse(
+            task_id=task_id,
+            status="running",
+            summary="EDL MP4 render is running.",
+            message="Rendering constrained media ranges and validating the output MP4.",
+        )
+    raise HTTPException(status_code=404, detail=f"Media EDL render task '{task_id}' was not found.")
+
+
+@router.get("/projects/{project_id}/edl-renders/{task_id}/download")
+async def download_media_edl_render_endpoint(project_id: str, task_id: str) -> FileResponse:
+    try:
+        path, filename = await asyncio.to_thread(
+            resolve_media_edl_download_path,
+            project_id=project_id,
+            task_id=task_id,
+        )
+        return FileResponse(path, media_type="video/mp4", filename=filename)
+    except MediaSourcePreparationError as exc:
+        raise _media_source_error_to_http(exc) from exc
 
 
 @router.get(
@@ -692,6 +772,30 @@ async def _run_media_transcription_background(
             step_id="media_transcription",
             level="error",
             message="媒体转写异常结束，请在任务历史中查看记录。",
+        )
+    finally:
+        await finish_live_task_event_stream(task_id)
+
+
+async def _run_media_edl_background(
+    *,
+    task_id: str,
+    project_id: str,
+    edl: MediaEditDecisionList,
+) -> None:
+    """Close the live stream even if the deterministic render fails unexpectedly."""
+
+    try:
+        await run_media_edl_task(task_id=task_id, project_id=project_id, edl=edl)
+    except Exception:  # pragma: no cover - service persists a terminal outcome where possible
+        logger.exception("Media EDL render task ended unexpectedly: %s", task_id)
+        await publish_live_task_event(
+            task_id=task_id,
+            event="task_failed",
+            agent_id="media_agent",
+            step_id="media_edl_render",
+            level="error",
+            message="EDL render ended unexpectedly; inspect the task history for details.",
         )
     finally:
         await finish_live_task_event_stream(task_id)

@@ -31,10 +31,13 @@ from app.schemas.media_source import (
     MediaTranscriptionAudioInfo,
     MediaVideoStreamInfo,
 )
+from app.schemas.media_edl import MediaEditDecisionList, MediaEdlRenderInfo
 
 
 MAX_MEDIA_SOURCE_BYTES = 256 * 1024 * 1024
 MAX_TRANSCRIPTION_AUDIO_BYTES = 7 * 1024 * 1024
+MAX_EDL_RENDER_BYTES = 256 * 1024 * 1024
+EDL_RENDER_DURATION_TOLERANCE_MS = 500
 _SOURCE_ID_PATTERN = re.compile(r"^ms_[0-9a-f]{16}$")
 _DERIVED_AUDIO_ID_PATTERN = re.compile(r"^mda_[0-9a-f]{16}$")
 _SAFE_SCOPE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
@@ -314,6 +317,100 @@ def read_transcription_audio_bytes(
     raise MediaSourcePreparationError("未找到指定的受控转写音频。")
 
 
+def render_media_edl(
+    *,
+    edl: MediaEditDecisionList,
+    expected_project_scope: str,
+    output_path: Path,
+    root_dir: Path | None = None,
+    ffprobe_executable: str | Path | None = None,
+    ffmpeg_executable: str | Path | None = None,
+    command_runner: MediaCommandRunner | None = None,
+) -> MediaEdlRenderInfo:
+    """Render a constrained single-source EDL into a verified MP4 artifact."""
+
+    final_path = _validate_edl_output_path(output_path)
+    temporary_path = final_path.with_name(f".{final_path.stem}.{uuid4().hex}.tmp.mp4")
+    with _source_write_lock(edl.source_id):
+        source_dir, manifest = _load_source_manifest(edl.source_id, root_dir=root_dir)
+        _require_project_scope(manifest, expected_project_scope)
+        source_path = _verified_source_path(source_dir, manifest)
+        probe = _load_or_probe_locked(
+            source_id=edl.source_id,
+            source_dir=source_dir,
+            manifest=manifest,
+            ffprobe_executable=ffprobe_executable,
+            command_runner=command_runner,
+        )
+        _validate_edl_against_source(edl=edl, probe=probe)
+        video_stream = probe.video_streams[0]
+        audio_stream = probe.audio_streams[0]
+        executable = _resolve_media_tool(
+            "ffmpeg",
+            explicit=ffmpeg_executable,
+            allow_fixture=command_runner is not None,
+        )
+        temporary_path.parent.mkdir(parents=True, exist_ok=True)
+        command = _build_edl_render_command(
+            executable=executable,
+            source_path=source_path,
+            video_stream_index=video_stream.stream_index,
+            audio_stream_index=audio_stream.stream_index,
+            edl=edl,
+            output_path=temporary_path,
+        )
+        try:
+            result = (command_runner or _run_media_command)(command, 180.0)
+            if result.returncode != 0:
+                raise MediaToolExecutionError("FFmpeg 无法渲染指定的受限剪辑片段。")
+            info = _verify_edl_render_output(
+                path=temporary_path,
+                edl=edl,
+                source_sha256=manifest["source_sha256"],
+                ffprobe_executable=ffprobe_executable,
+                command_runner=command_runner,
+            )
+            os.replace(temporary_path, final_path)
+            return info
+        except Exception:
+            temporary_path.unlink(missing_ok=True)
+            final_path.unlink(missing_ok=True)
+            raise
+
+
+def verify_media_edl_render(
+    *,
+    edl: MediaEditDecisionList,
+    expected_project_scope: str,
+    output_path: Path,
+    root_dir: Path | None = None,
+    ffprobe_executable: str | Path | None = None,
+    command_runner: MediaCommandRunner | None = None,
+) -> MediaEdlRenderInfo:
+    """Re-read a completed MP4 without re-running FFmpeg."""
+
+    final_path = _validate_edl_output_path(output_path)
+    with _source_write_lock(edl.source_id):
+        source_dir, manifest = _load_source_manifest(edl.source_id, root_dir=root_dir)
+        _require_project_scope(manifest, expected_project_scope)
+        _verified_source_path(source_dir, manifest)
+        probe = _load_or_probe_locked(
+            source_id=edl.source_id,
+            source_dir=source_dir,
+            manifest=manifest,
+            ffprobe_executable=ffprobe_executable,
+            command_runner=command_runner,
+        )
+        _validate_edl_against_source(edl=edl, probe=probe)
+        return _verify_edl_render_output(
+            path=final_path,
+            edl=edl,
+            source_sha256=manifest["source_sha256"],
+            ffprobe_executable=ffprobe_executable,
+            command_runner=command_runner,
+        )
+
+
 def _load_or_probe_locked(
     *,
     source_id: str,
@@ -395,6 +492,122 @@ def _parse_probe_result(*, source_id: str, source_sha256: str, stdout: str) -> M
         video_streams=video_streams,
         probed_at=_utc_now(),
     )
+
+
+def _validate_edl_output_path(path: Path) -> Path:
+    resolved = path.resolve()
+    if resolved.suffix.lower() != ".mp4":
+        raise MediaSourcePreparationError("EDL 渲染交付物只能是 MP4 文件。")
+    return resolved
+
+
+def _validate_edl_against_source(*, edl: MediaEditDecisionList, probe: MediaProbeInfo) -> None:
+    if probe.duration_seconds is None:
+        raise MediaSourcePreparationError("FFprobe 未返回可用时长，无法安全渲染剪辑片段。")
+    if not probe.video_streams or not probe.audio_streams:
+        raise MediaSourcePreparationError("EDL 首版只支持同时包含视频和音频轨的素材。")
+    source_duration_ms = int(round(probe.duration_seconds * 1000))
+    if any(clip.end_ms > source_duration_ms for clip in edl.clips):
+        raise MediaSourcePreparationError("EDL 片段超出了已探测的源素材时长。")
+
+
+def _build_edl_render_command(
+    *,
+    executable: str,
+    source_path: Path,
+    video_stream_index: int,
+    audio_stream_index: int,
+    edl: MediaEditDecisionList,
+    output_path: Path,
+) -> tuple[str, ...]:
+    filters: list[str] = []
+    concat_inputs: list[str] = []
+    for index, clip in enumerate(edl.clips):
+        begin = _edl_seconds(clip.begin_ms)
+        end = _edl_seconds(clip.end_ms)
+        video_label = f"v{index}"
+        audio_label = f"a{index}"
+        filters.append(
+            f"[0:{video_stream_index}]trim=start={begin}:end={end},setpts=PTS-STARTPTS[{video_label}]"
+        )
+        filters.append(
+            f"[0:{audio_stream_index}]atrim=start={begin}:end={end},asetpts=PTS-STARTPTS[{audio_label}]"
+        )
+        concat_inputs.extend((f"[{video_label}]", f"[{audio_label}]"))
+    filters.append(f"{''.join(concat_inputs)}concat=n={len(edl.clips)}:v=1:a=1[vout][aout]")
+    return (
+        executable,
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(source_path),
+        "-filter_complex",
+        ";".join(filters),
+        "-map",
+        "[vout]",
+        "-map",
+        "[aout]",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "23",
+        "-c:a",
+        "aac",
+        "-movflags",
+        "+faststart",
+        str(output_path),
+    )
+
+
+def _verify_edl_render_output(
+    *,
+    path: Path,
+    edl: MediaEditDecisionList,
+    source_sha256: str,
+    ffprobe_executable: str | Path | None,
+    command_runner: MediaCommandRunner | None,
+) -> MediaEdlRenderInfo:
+    if not path.is_file() or path.stat().st_size < 1 or path.stat().st_size > MAX_EDL_RENDER_BYTES:
+        raise MediaSourcePreparationError("EDL 渲染结果不存在、为空或超过交付上限。")
+    executable = _resolve_media_tool("ffprobe", explicit=ffprobe_executable, allow_fixture=command_runner is not None)
+    result = (command_runner or _run_media_command)(
+        (executable, "-v", "error", "-show_format", "-show_streams", "-of", "json", str(path)),
+        30.0,
+    )
+    if result.returncode != 0:
+        raise MediaToolExecutionError("FFprobe 无法回读 EDL 渲染交付物。")
+    probe = _parse_probe_result(source_id=edl.source_id, source_sha256=source_sha256, stdout=result.stdout)
+    if probe.duration_seconds is None or not probe.video_streams or not probe.audio_streams:
+        raise MediaSourcePreparationError("EDL 渲染结果缺少可验证的时长、视频或音频轨。")
+    video = probe.video_streams[0]
+    if video.width is None or video.height is None:
+        raise MediaSourcePreparationError("EDL 渲染结果缺少视频尺寸。")
+    rendered_duration_ms = int(round(probe.duration_seconds * 1000))
+    if abs(rendered_duration_ms - edl.requested_duration_ms) > EDL_RENDER_DURATION_TOLERANCE_MS:
+        raise MediaSourcePreparationError("EDL 渲染结果与剪辑单时长不一致，已拒绝交付。")
+    return MediaEdlRenderInfo(
+        source_id=edl.source_id,
+        source_sha256=source_sha256,
+        clip_count=len(edl.clips),
+        requested_duration_ms=edl.requested_duration_ms,
+        rendered_duration_ms=rendered_duration_ms,
+        sha256=_sha256_file(path),
+        size_bytes=path.stat().st_size,
+        width=video.width,
+        height=video.height,
+        video_codec=video.codec_name,
+        audio_codec=probe.audio_streams[0].codec_name,
+        created_at=_utc_now(),
+    )
+
+
+def _edl_seconds(value_ms: int) -> str:
+    return f"{value_ms // 1000}.{value_ms % 1000:03d}"
 
 
 def _find_verified_derived_audio(
