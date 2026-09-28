@@ -37,6 +37,7 @@ _TIMESTAMP_P95_LIMIT_MS = 500
 _TIMESTAMP_MAX_LIMIT_MS = 1_500
 _COMPLETED_STATUS = "completed"
 _INCOMPLETE_STATUSES = {"failed", "cancelled", "outcome_unknown", "not_started"}
+_REFERENCE_PROVENANCE = {"local_human_review", "published_benchmark"}
 _FAILURE_CATEGORIES = {
     "validation_failed",
     "provider_rejected",
@@ -62,6 +63,7 @@ class FixtureRecord:
     media_sha256: str
     duration_ms: int
     normalized_audio_duration_ms: int
+    reference_provenance: Literal["local_human_review", "published_benchmark"]
     reference_text: str
     reference_segments: list[dict[str, object]]
 
@@ -86,12 +88,14 @@ def validate_suite(suite_path: Path, *, verify_files: bool) -> tuple[dict[str, o
     if split_counts != Counter({"development": 5, "holdout": 3}):
         raise QualityContractError("suite must contain exactly 5 development and 3 holdout source videos")
     language_counts = Counter(record.language for record in fixtures.values())
+    reference_provenance_counts = Counter(record.reference_provenance for record in fixtures.values())
     if any(language_counts[language] < 3 for language in LANGUAGES):
         raise QualityContractError("suite must contain at least three Chinese and three English source videos")
     split_languages = Counter((record.split, record.language) for record in fixtures.values())
     if any(split_languages[(split, language)] < 1 for split in SPLITS for language in LANGUAGES):
         raise QualityContractError("both splits must include Chinese and English source videos")
     total_duration_ms = sum(record.duration_ms for record in fixtures.values())
+    timestamp_reference_ready = all(record.reference_provenance == "local_human_review" for record in fixtures.values())
     if total_duration_ms < MIN_TOTAL_DURATION_MS:
         raise QualityContractError("short-media ASR suite must provide at least eight minutes of source video")
 
@@ -103,9 +107,15 @@ def validate_suite(suite_path: Path, *, verify_files: bool) -> tuple[dict[str, o
         "fixture_count": len(fixtures),
         "fixture_split_counts": dict(sorted(split_counts.items())),
         "fixture_language_counts": dict(sorted(language_counts.items())),
+        "fixture_reference_provenance_counts": dict(sorted(reference_provenance_counts.items())),
         "total_source_duration_ms": total_duration_ms,
         "short_media_audio_limit_ms": MAX_NORMALIZED_AUDIO_DURATION_MS,
-        "quality_claim": "none; this validates G4-ASR-DEV fixture provenance and annotation prerequisites only",
+        "timestamp_reference_status": "ready" if timestamp_reference_ready else "not_available_for_published_text_only_suite",
+        "quality_claim": (
+            "none; this validates G4-ASR-DEV fixture provenance and reviewed timestamp prerequisites only"
+            if timestamp_reference_ready
+            else "none; this validates published transcript provenance for text-only ASR assessment, not timestamp quality"
+        ),
     }
     return report, fixtures
 
@@ -136,6 +146,7 @@ def evaluate_run(
         raise QualityContractError("quality run must contain exactly one result for every frozen fixture")
     case_records = _read_cases(raw_cases, fixtures=fixtures, root=run_path.parent, verify_files=verify_files)
 
+    timestamp_reference_ready = all(record.reference_provenance == "local_human_review" for record in fixtures.values())
     metric_records: list[dict[str, object]] = []
     incomplete_cases: list[str] = []
     incomplete_case_statuses: list[dict[str, str]] = []
@@ -151,20 +162,29 @@ def evaluate_run(
             )
             continue
         fixture = fixtures[str(case["fixture_id"])]
-        metric_records.append(_score_completed_case(case, fixture))
+        metric_records.append(_score_completed_case(case, fixture, score_timestamps=timestamp_reference_ready))
 
-    metric_summary = _summarize_metrics(metric_records)
-    metric_gate_passed = not incomplete_cases and _metrics_pass(metric_summary)
+    metric_summary = _summarize_metrics(metric_records, timestamps_available=timestamp_reference_ready)
+    text_gate_passed = not incomplete_cases and _text_metrics_pass(metric_summary)
+    full_asr_gate_passed = text_gate_passed and timestamp_reference_ready and _timestamp_metrics_pass(metric_summary)
+    quality_gate = "G4-ASR-DEV" if timestamp_reference_ready else "G4-ASR-TEXT-DEV"
     return {
         "ok": True,
         "assessment": "agentflow-mm4-g4-asr-development-v1",
-        "quality_gate": "G4-ASR-DEV",
-        "quality_gate_passed": metric_gate_passed,
+        "quality_gate": quality_gate,
+        "quality_gate_passed": full_asr_gate_passed if timestamp_reference_ready else text_gate_passed,
+        "full_asr_gate_passed": full_asr_gate_passed,
+        "timestamp_gate_status": "scored" if timestamp_reference_ready else "not_evaluated_without_independent_time_annotations",
         "quality_gate_meaning": (
-            "Frozen short-media ASR fixtures passed the text and timestamp development thresholds. "
+            "Frozen short-media ASR fixtures passed text and timestamp development thresholds. "
             "This is not full G4, subtitle, EDL, long-media, sync, UI, or release approval."
-            if metric_gate_passed
-            else "At least one fixture is incomplete or failed its frozen text/timestamp threshold; inspect case IDs and metrics."
+            if full_asr_gate_passed
+            else (
+                "Frozen published-text fixtures passed text recognition thresholds, but lack independent timestamp annotations; "
+                "this is not a timestamp or full G4-ASR-DEV pass."
+                if text_gate_passed and not timestamp_reference_ready
+                else "At least one fixture is incomplete or failed its applicable quality threshold; inspect case IDs and metrics."
+            )
         ),
         "suite": {
             "path": str(suite_path.resolve()),
@@ -231,8 +251,7 @@ def _index_fixtures(value: object, *, root: Path, verify_files: bool) -> dict[st
         # 人工校对文本和时间标注属于质量集本体，不能因跳过媒体二进制回读而缺席。
         _verify_file_sha256(text_path, text_sha256, fixture_id, "reference text")
         _verify_file_sha256(segments_path, segments_sha256, fixture_id, "reference segments")
-        if raw.get("reference_transcript_reviewed") is not True or raw.get("time_annotations_reviewed") is not True:
-            raise QualityContractError(f"fixture {fixture_id} must have reviewed transcript and time annotations")
+        reference_provenance = _reference_provenance(raw, fixture_id)
         reference_text = _read_text(text_path, fixture_id)
         reference_segments = _read_reference_segments(segments_path, fixture_id, duration_ms)
         if _normalize_characters(reference_text) != _normalize_characters(
@@ -248,6 +267,7 @@ def _index_fixtures(value: object, *, root: Path, verify_files: bool) -> dict[st
             media_sha256=media_sha256,
             duration_ms=duration_ms,
             normalized_audio_duration_ms=normalized_audio_duration_ms,
+            reference_provenance=reference_provenance,  # type: ignore[arg-type]
             reference_text=reference_text,
             reference_segments=reference_segments,
         )
@@ -334,7 +354,9 @@ def _read_artifact_transcript(path: Path, *, fixture: FixtureRecord) -> dict[str
     return {"text": artifact.transcript.text, "segments": segments}
 
 
-def _score_completed_case(case: dict[str, object], fixture: FixtureRecord) -> dict[str, object]:
+def _score_completed_case(
+    case: dict[str, object], fixture: FixtureRecord, *, score_timestamps: bool
+) -> dict[str, object]:
     transcript = case["transcript"]
     assert isinstance(transcript, dict)
     actual_text = str(transcript["text"])
@@ -353,10 +375,7 @@ def _score_completed_case(case: dict[str, object], fixture: FixtureRecord) -> di
     if not reference_tokens:
         raise QualityContractError(f"fixture {fixture.fixture_id} has no scoreable reference tokens")
     error_rate = distance / len(reference_tokens)
-    start_error_ms, end_error_ms = _timestamp_envelope_error(
-        transcript.get("segments"), fixture.reference_segments, fixture.fixture_id
-    )
-    return {
+    record: dict[str, object] = {
         "fixture_id": fixture.fixture_id,
         "split": fixture.split,
         "language": fixture.language,
@@ -370,14 +389,25 @@ def _score_completed_case(case: dict[str, object], fixture: FixtureRecord) -> di
         "error_rate": round(error_rate, 6),
         "error_rate_limit": metric_limit,
         "text_metric_passed": error_rate <= metric_limit,
-        "timestamp_start_abs_error_ms": start_error_ms,
-        "timestamp_end_abs_error_ms": end_error_ms,
-        "timestamp_case_max_abs_error_ms": max(start_error_ms, end_error_ms),
-        "timestamp_case_passed": max(start_error_ms, end_error_ms) <= _TIMESTAMP_MAX_LIMIT_MS,
     }
+    if not score_timestamps:
+        record["timestamp_status"] = "not_evaluated_without_independent_time_annotations"
+        return record
+    start_error_ms, end_error_ms = _timestamp_envelope_error(
+        transcript.get("segments"), fixture.reference_segments, fixture.fixture_id
+    )
+    record.update(
+        {
+            "timestamp_start_abs_error_ms": start_error_ms,
+            "timestamp_end_abs_error_ms": end_error_ms,
+            "timestamp_case_max_abs_error_ms": max(start_error_ms, end_error_ms),
+            "timestamp_case_passed": max(start_error_ms, end_error_ms) <= _TIMESTAMP_MAX_LIMIT_MS,
+        }
+    )
+    return record
 
 
-def _summarize_metrics(records: list[dict[str, object]]) -> dict[str, object]:
+def _summarize_metrics(records: list[dict[str, object]], *, timestamps_available: bool) -> dict[str, object]:
     groups: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
     for record in records:
         groups[(str(record["split"]), str(record["language"]))].append(record)
@@ -393,15 +423,8 @@ def _summarize_metrics(records: list[dict[str, object]]) -> dict[str, object]:
             references = sum(int(record["reference_token_count"]) for record in records_for_group)
             metric_name = str(records_for_group[0]["text_metric"])
             metric_limit = float(records_for_group[0]["error_rate_limit"])
-            timestamp_values = sorted(
-                int(value)
-                for record in records_for_group
-                for value in (record["timestamp_start_abs_error_ms"], record["timestamp_end_abs_error_ms"])
-            )
             aggregate_rate = errors / references if references else 1.0
-            p95 = _percentile(timestamp_values, 0.95)
-            maximum = max(timestamp_values)
-            split_summary[language] = {
+            group_summary: dict[str, object] = {
                 "status": "scored",
                 "fixture_count": len(records_for_group),
                 metric_name: round(aggregate_rate, 6),
@@ -409,17 +432,32 @@ def _summarize_metrics(records: list[dict[str, object]]) -> dict[str, object]:
                 "edit_distance": errors,
                 "metric_limit": metric_limit,
                 "text_metric_passed": aggregate_rate <= metric_limit,
-                "timestamp_p95_abs_error_ms": p95,
-                "timestamp_max_abs_error_ms": maximum,
-                "timestamp_p95_limit_ms": _TIMESTAMP_P95_LIMIT_MS,
-                "timestamp_max_limit_ms": _TIMESTAMP_MAX_LIMIT_MS,
-                "timestamp_metric_passed": p95 <= _TIMESTAMP_P95_LIMIT_MS and maximum <= _TIMESTAMP_MAX_LIMIT_MS,
             }
+            if timestamps_available:
+                timestamp_values = sorted(
+                    int(value)
+                    for record in records_for_group
+                    for value in (record["timestamp_start_abs_error_ms"], record["timestamp_end_abs_error_ms"])
+                )
+                p95 = _percentile(timestamp_values, 0.95)
+                maximum = max(timestamp_values)
+                group_summary.update(
+                    {
+                        "timestamp_p95_abs_error_ms": p95,
+                        "timestamp_max_abs_error_ms": maximum,
+                        "timestamp_p95_limit_ms": _TIMESTAMP_P95_LIMIT_MS,
+                        "timestamp_max_limit_ms": _TIMESTAMP_MAX_LIMIT_MS,
+                        "timestamp_metric_passed": p95 <= _TIMESTAMP_P95_LIMIT_MS and maximum <= _TIMESTAMP_MAX_LIMIT_MS,
+                    }
+                )
+            else:
+                group_summary["timestamp_metric_status"] = "not_evaluated_without_independent_time_annotations"
+            split_summary[language] = group_summary
         summary[split] = split_summary
     return summary
 
 
-def _metrics_pass(summary: dict[str, object]) -> bool:
+def _text_metrics_pass(summary: dict[str, object]) -> bool:
     for split in SPLITS:
         split_summary = summary.get(split)
         if not isinstance(split_summary, dict):
@@ -430,7 +468,17 @@ def _metrics_pass(summary: dict[str, object]) -> bool:
                 return False
             if group.get("status") != "scored" or group.get("text_metric_passed") is not True:
                 return False
-            if group.get("timestamp_metric_passed") is not True:
+    return True
+
+
+def _timestamp_metrics_pass(summary: dict[str, object]) -> bool:
+    for split in SPLITS:
+        split_summary = summary.get(split)
+        if not isinstance(split_summary, dict):
+            return False
+        for language in LANGUAGES:
+            group = split_summary.get(language)
+            if not isinstance(group, dict) or group.get("timestamp_metric_passed") is not True:
                 return False
     return True
 
@@ -492,6 +540,22 @@ def _read_text(path: Path, fixture_id: str) -> str:
     if not value:
         raise QualityContractError(f"fixture {fixture_id} reference text is empty")
     return value
+
+
+def _reference_provenance(raw: dict[str, object], fixture_id: str) -> str:
+    """本地试听与发布基准分别记账，不能用模型产物伪造参考答案。"""
+
+    provenance = str(raw.get("reference_provenance") or "").strip() or "local_human_review"
+    if provenance not in _REFERENCE_PROVENANCE:
+        raise QualityContractError(f"fixture {fixture_id} has unsupported reference_provenance")
+    if provenance == "local_human_review":
+        if raw.get("reference_transcript_reviewed") is not True or raw.get("time_annotations_reviewed") is not True:
+            raise QualityContractError(f"fixture {fixture_id} must have reviewed transcript and time annotations")
+    else:
+        source_url = _required_string(raw, "reference_provenance_url", fixture_id)
+        if not source_url.startswith("https://"):
+            raise QualityContractError(f"fixture {fixture_id} published benchmark reference must provide an HTTPS source")
+    return provenance
 
 
 def _relative_path(record: dict[str, object], field: str, location: str) -> str:

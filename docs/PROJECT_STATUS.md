@@ -1,6 +1,6 @@
 # AgentFlow 项目状态
 
-最后更新：2026-09-24
+最后更新：2026-09-28
 
 ## 当前仓库状态
 
@@ -24,12 +24,14 @@
 - `docs/AGENT_MEMORY_DEVELOPMENT_PLAN.md`：记忆系统 MEM-0 至 MEM-7 的目标架构、数据契约、量化验收和回退门禁。
 - `docs/AGENT_SPECIFICATIONS.md`：记录每个内置 Agent 的方案确认表；正式实现 Agent 前必须先讨论并确认。
 - [多媒体助手开发计划](MULTIMEDIA_AGENT_DEVELOPMENT_PLAN.md)：整合 AI 修图、对话式剪辑、视频翻译配音及后续扩展，按 MM-0 至 MM-7 推进。
-- [多媒体助手评测与验证方案](MULTIMEDIA_AGENT_EVALUATION.md)：固定素材、真实口语任务、质量/恢复/性能指标与分层准入证据；当前 `G0-DEV + L1-DEV + G2-DEV` 已满足，正式 G2 待独立复核，G3 尚未运行。
+- [多媒体助手评测与验证方案](MULTIMEDIA_AGENT_EVALUATION.md)：固定素材、真实口语任务、质量/恢复/性能指标与分层准入证据；当前 `G0-DEV + L1-DEV + G2-DEV + G4-ASR-TEXT-DEV` 已满足，正式 G2 待独立复核，完整 G4 尚未运行。
 - `docs/KNOWLEDGE_BASE_PRODUCT_SPEC.md`：记录已批准的本地知识库产品边界、Retrieval 架构、K0-K5 门槛和验收；知识库开发前必须阅读。
 - `docs/KNOWLEDGE_BASE_K0_ADR.md`：记录 K0 的固定夹具、Windows 技术试验、依赖取舍和未决风险；进入 K1 前必须阅读。
 - `docs/飞书文档.txt`：用户提供的原始参考资料，不作为每轮必读文档，也不在未确认前删除。
 
 ## 当前阶段
+
+> **2026-09-28 MM-4 真实 ASR 文本质量运行：**已从 Google FLEURS 的 CC-BY 4.0 公开中英文记录冻结 `8` 段短媒体（开发/留出 `5/3`、总 `573.440 s`），完成来源、许可证、哈希、音视频流和时长回读。经用户确认，固定 `media_transcription -> qwen_audio / qwen-audio-3.1-asr-flash` 顺序提交 `8` 次，8/8 完成且无自动重试；Provider 没有返回逐请求金额，记录为 `unknown`。离线 Artifact 评分中，中文 CER 为开发 `2.6455%`、留出 `5.1724%`，英文 WER 为开发 `3.2787%`、留出 `1.9553%`，`G4-ASR-TEXT-DEV` 通过。FLEURS 没有独立句段时间标注，评分器已明确将时间戳标为 `not_evaluated_without_independent_time_annotations`；完整 `G4-ASR-DEV`、字幕、EDL、同步、长媒体和 Qt 视频工作区仍未通过或未实现。证据仅位于忽略的 `data/` 目录，未写入用户媒体、Key、转写正文或 Provider 原始响应。
 
 > **2026-09-24 多媒体助手 MM-4 受控媒体源、音轨与转写任务：**已新增独立于图片 revision 的 `media_source_preparation` 和 `media.transcribe_audio`。音视频上层只能提交内存字节；服务以 `source_id` 绑定项目范围、文件名、哈希和有限 MIME 元数据，`ffprobe`/`ffmpeg` 只接收由 ID 解析的内部路径，并固定将首条音轨提取为 `16 kHz` 单声道 PCM WAV。转写任务会在提交前重新校验项目范围、源/派生哈希和 WAV 规格，模型结果只有经原子 JSON 写入、Pydantic 回读和 Artifact 登记才完成；未知结果绝不自动重放，重启时只对账已验证 JSON。API 已具备受控媒体导入、探测、音轨准备、异步转写、结果查询与任务取消入口，任务历史可预览 JSON，且不暴露路径、Key、音频正文、Provider 原始响应或原始请求 ID。离线回归覆盖隔离、拒绝、未知、取消、Artifact 和重启对账；`probe_live_media_transcription_delivery.py --live` 已用 SAPI 生成的 `3.869 s` 语音视频跑通一次真实 `ffprobe -> ffmpeg -> qwen-audio-3.1-asr-flash -> JSON`：约 `4.436 s`，`1` 个稳定句段、`7` 个词级时间戳、`145/8/153` tokens、`2,491` byte JSON，归一化文本与夹具一致，金额 `unknown`。证据在忽略目录。开发机验证使用 `Gyan.FFmpeg.Essentials 9.0.1` 的显式路径，应用运行时尚未配置工具路径，`/health` 仍会如实显示未就绪。当前没有字幕、EDL 或 Qt 页面；G4 尚未运行，下一步是先冻结授权视频评测集和转写质量门槛。
 

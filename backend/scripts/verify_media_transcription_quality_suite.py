@@ -49,8 +49,19 @@ def _run_self_test() -> dict[str, object]:
                 raise
         else:
             raise AssertionError("quality suite accepted a program-generated fixture as content-quality evidence")
+        published = json.loads(suite_path.read_text(encoding="utf-8"))
+        for fixture in published["fixtures"]:
+            fixture["reference_transcript_reviewed"] = False
+            fixture["time_annotations_reviewed"] = False
+            fixture["reference_provenance"] = "published_benchmark"
+            fixture["reference_provenance_url"] = "https://example.invalid/published-asr-benchmark"
+        published_path = root / "published_benchmark_suite.json"
+        published_path.write_text(json.dumps(published, ensure_ascii=False), encoding="utf-8")
+        published_report, _ = validate_suite(published_path, verify_files=True)
+        if published_report["fixture_reference_provenance_counts"] != {"published_benchmark": 8}:
+            raise AssertionError("quality suite did not retain published benchmark reference provenance")
     report["self_test"] = True
-    report["negative_contract_check"] = "program_generated_fixture_rejected"
+    report["negative_contract_check"] = "program_generated_fixture_rejected_and_published_reference_is_traceable"
     return report
 
 

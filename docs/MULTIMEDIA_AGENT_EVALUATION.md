@@ -1,8 +1,8 @@
 # AgentFlow 多媒体助手评测与验证方案
 
-> 版本：v2.0 | 建立日期：2026-09-16 | 最近更新：2026-09-24
+> 版本：v2.1 | 建立日期：2026-09-16 | 最近更新：2026-09-28
 >
-> 状态：评测门槛已按“内部开发准入”和“用户发布准入”重新拆分。现有 `qwen-image-3.0-pro`、规划模型、失败语义、用量字段、媒体版本及导出证据已满足 `G0-DEV + L1-DEV + G2-DEV`：固定质量集的 `36/36` 真实输出已通过文件完整性和类别最低效果检查。独立人工复核、费用核对、真实 Windows DPI 和客户端完整流程仍属于正式 `G2/G3`；它们目前是**待评审/未运行**，不是模型质量“未通过”。Lite Matting 与 SAM 是可选增强，不再阻塞不依赖它们的首个 AI 修图闭环。
+> 状态：评测门槛已按“内部开发准入”和“用户发布准入”重新拆分。现有 `qwen-image-3.0-pro`、规划模型、失败语义、用量字段、媒体版本及导出证据已满足 `G0-DEV + L1-DEV + G2-DEV`：固定质量集的 `36/36` 真实输出已通过文件完整性和类别最低效果检查。`qwen-audio-3.1-asr-flash` 的公开中英文固定集已通过 `G4-ASR-TEXT-DEV`；独立时间标注尚缺，完整 `G4-ASR-DEV` 不得标通过。独立人工复核、费用核对、真实 Windows DPI 和客户端完整流程仍属于正式 `G2/G3`；它们目前是**待评审/未运行**，不是模型质量“未通过”。Lite Matting 与 SAM 是可选增强，不再阻塞不依赖它们的首个 AI 修图闭环。
 >
 > 配套文件：[开发计划](MULTIMEDIA_AGENT_DEVELOPMENT_PLAN.md)。以下数值是拟定准入目标，不是当前成绩。
 
@@ -51,15 +51,19 @@ MM-0 只建立足以判断模型路线可行的代表样本和 INTENT 小集；�
 
 ### 2.1.8 G4-ASR-DEV 短媒体质量集契约
 
-完整 `VIDEO` 集仍服务于 `G4/G5` 的 EDL、同步和渲染验收，不能被当前短媒体转写能力替代。为避免把一条 SAPI 演示误写成 ASR 质量，先建立更小的 `G4-ASR-DEV` 前置集：固定 `8` 段人工权利确认的公开授权源视频，按源级 `5/3` 分为开发/留出集，两个 split 都包含中文和英文，合计源时长至少 `8 min`。每段必须具有 HTTPS 来源页、许可证链接、来源录音唯一标识、视频 SHA-256、人工校对参考文本、人工复核的单调句段时间标注及对应哈希；相同录音、相邻裁片或二次编码不能跨 split 复用。
+完整 `VIDEO` 集仍服务于 `G4/G5` 的 EDL、同步和渲染验收，不能被当前短媒体转写能力替代。短媒体评测分为两个不可互相替代的子门槛：`G4-ASR-TEXT-DEV` 使用公开授权的已发布转写文本验证识别质量；`G4-ASR-DEV` 还要求独立的句段时间标注，才可评价时间戳。两者都固定 `8` 段源级 `5/3` 开发/留出素材、两个 split 均覆盖中英文、总时长至少 `8 min`，并要求 HTTPS 来源页、许可证、来源录音唯一标识、视频 SHA-256 和来源不复用。
+
+发布基准的文本可标为 `reference_provenance=published_benchmark`，但它只能进入文本门槛；不能因为音频是一句一条，便把整段 `0 ms` 至文件结尾伪装成语音起止或句段时间标注。完整 `G4-ASR-DEV` 仍需人工复核的单调句段时间标注及其哈希。纯能量/VAD 检测只能帮助排查媒体，不得在评测中替代独立时间参考，因为低音量语音和静音的阈值会随素材变化。
 
 当前音轨会固定提取为 `16 kHz` 单声道 PCM WAV，单段派生音频不得超过 `200 s`，为 `7 MiB` 传输上限保留余量。Windows SAPI 或其它程序生成媒体可继续用于 FFmpeg、任务恢复、JSON/Artifact 和 UI 工程测试，但 `verify_media_transcription_quality_suite.py` 会拒绝把 `source_kind=program_generated` 写入内容质量集。推荐从带转写文本和明确许可的公开语音资料建立候选，例如 [Mozilla Common Voice 数据集目录](https://commonvoice.mozilla.org/cv/datasets)所列 CC0 ASR 数据；其正式下载需要独立 MDC API Key，不能复用 Qwen Key，也不能因数据集免费而跳过来源条款或扬声器反识别限制。下载、选段、转为项目测试视频和人工复核后，仍需在本地忽略目录冻结自己的来源和标注，不能用网页宣传或模型自动转写替代人工参考答案。
 
-`backend/scripts/verify_media_transcription_quality_suite.py --suite <suite.json> --verify-media-files` 只验证来源、拆分、参考标注、短媒体输入界限和哈希，不会调用模型或联网。`backend/scripts/evaluate_media_transcription_quality.py --suite <suite.json> --run <run.json> --verify-media-files` 只读取已回读的 `MediaTranscriptionArtifactPayload`：每例最多一条 Provider 调用，任何未知/失败/取消都保留为未完成而不自动重放；报告仅保留 fixture ID、哈希、调用数、聚合分数和时间偏差，不输出转写正文。两份 `--self-test` 仅验证脚本，不构成真实质量证据。
+`backend/scripts/verify_media_transcription_quality_suite.py --suite <suite.json> --verify-media-files` 只验证来源、拆分、参考文本、短媒体输入界限和哈希，不会调用模型或联网。`backend/scripts/evaluate_media_transcription_quality.py --suite <suite.json> --run <run.json> --verify-media-files` 只读取已回读的 `MediaTranscriptionArtifactPayload`：每例最多一条 Provider 调用，任何未知/失败/取消都保留为未完成而不自动重放。若 suite 使用发布文本但没有独立时间标注，评分器只输出 CER/WER，并明确返回 `G4-ASR-TEXT-DEV` 与 `timestamp_gate_status=not_evaluated_without_independent_time_annotations`；不会生成虚假的时间偏差。两份 `--self-test` 仅验证脚本，不构成真实质量证据。
 
 `prepare_media_transcription_quality_fixtures.py` 是夹具准备器，不是数据下载器。它只接受位于同一目录的本地计划 JSON、已经取得的公开授权音频和参考文本，并要求调用者显式提供 `ffmpeg.exe`、`ffprobe.exe`；输出只能写入被 Git 忽略的 `data/` 目录。它为每段音频生成黑底 MP4、回读音视频流与时长、生成来源/哈希清单和候选 `suite.json`。没有人工段落标注时，它仅写入 `pending_human_review` 的单段草案并保持两个 review 标记为 `false`；质量校验器将明确拒绝该候选，而不是生成虚假的通过结果。计划最小字段为 `source_catalog`（数据集名/ID、HTTPS 来源页、许可证、人工权利确认）和 `8` 个 fixture（ID、split、`zh/en`、相对音频路径、相对参考文本路径、可选人工段落 JSON 与 review 标记）。
 
 `run_media_transcription_quality.py --suite <suite.json>` 只回读上述冻结契约和哈希，模型调用数始终为 `0`。只有显式传入 `--execute --output-dir <data/...> --ffmpeg-path <...> --ffprobe-path <...>` 才会按质量集顺序发起一次固定批量：先对全部 `8` 个源视频用 FFprobe 检查音视频流和时长，再逐例导入、提取受控 WAV 并调用 `media_transcription`；每例最多提交一次，绝不自动重试。任何一例出现验证失败、Provider 拒绝、取消、未知结果或 JSON 回读失败，执行器立即停止，后续样本写为 `not_started`，并在 `run.json` 留下不含正文的失败类别和 `0/1` 调用数。已完成样本才可携带回读 Artifact；评分器明确拒绝失败样本伪造 Artifact 或调用数。`run.json` 与 Artifact 只写入忽略的证据目录，随后由离线评分器读取；本执行器的自测只验证停止/留痕契约，不构成真实模型质量结果。
+
+2026-09-28 已从 [Google FLEURS](https://huggingface.co/datasets/google/fleurs) 的 CC-BY 4.0 公开文本/音频记录冻结 `8` 段中英文短媒体（开发/留出 `5/3`、总时长 `573.440 s`），并在用户确认后固定顺序调用 `media_transcription -> qwen_audio / qwen-audio-3.1-asr-flash` 共 `8` 次；8/8 完成，无自动重试，Provider 未返回金额，记为 `unknown`。离线结果为：中文 CER 开发 `2.6455%`、留出 `5.1724%`，英文 WER 开发 `3.2787%`、留出 `1.9553%`，均满足文本门槛，因此 `G4-ASR-TEXT-DEV` 通过。该数据集没有独立时间标注，时间戳状态为 `not_evaluated`，完整 `G4-ASR-DEV` 和 `G4` 仍未通过。全部原始夹具、Artifact、哈希与脱敏清单仅位于忽略的 `data/` 证据目录。
 
 ### 2.1.1 模型 Profile 选型探针
 

@@ -43,6 +43,8 @@ class FixturePlan:
     reference_segments_path: Path | None
     reference_transcript_reviewed: bool
     time_annotations_reviewed: bool
+    reference_provenance: str
+    reference_provenance_url: str | None
 
 
 @dataclass(frozen=True)
@@ -130,17 +132,15 @@ def _prepare(
         suite_payload = {"suite_type": SUITE_TYPE, "fixtures": suite_fixtures}
         suite_path = output_dir / "suite.json"
         _write_json(suite_path, suite_payload)
-        annotations_complete = all(
-            item["reference_transcript_reviewed"] is True and item["time_annotations_reviewed"] is True
-            for item in suite_fixtures
-        )
+        text_reference_complete = all(_reference_is_quality_ready(item) for item in suite_fixtures)
+        timestamp_reference_complete = all(_timestamp_reference_is_quality_ready(item) for item in suite_fixtures)
         quality_contract: dict[str, object]
-        if annotations_complete:
+        if text_reference_complete:
             quality_contract, _ = validate_suite(suite_path, verify_files=True)
         else:
             quality_contract = {
                 "ready": False,
-                "reason": "reference_transcript_reviewed and time_annotations_reviewed must both be true for every fixture",
+                "reason": "every fixture must provide local human review or a traceable published benchmark text reference",
             }
         manifest = {
             "fixture_set": "agentflow-mm4-asr-prepared-candidate-v1",
@@ -156,6 +156,8 @@ def _prepare(
             },
             "fixtures": source_records,
             "quality_contract": quality_contract,
+            "text_quality_contract_ready": text_reference_complete,
+            "timestamp_quality_contract_ready": timestamp_reference_complete,
             "model_calls": 0,
             "network_calls": 0,
             "content_claim": "candidate preparation only; it is not an ASR quality result",
@@ -168,8 +170,10 @@ def _prepare(
         "ok": True,
         "output_dir": str(output_dir),
         "fixture_count": len(suite_fixtures),
-        "annotation_review_complete": annotations_complete,
-        "quality_contract_ready": annotations_complete,
+        "annotation_review_complete": timestamp_reference_complete,
+        "quality_contract_ready": text_reference_complete,
+        "text_quality_contract_ready": text_reference_complete,
+        "timestamp_quality_contract_ready": timestamp_reference_complete,
         "model_calls": 0,
         "network_calls": 0,
     }
@@ -205,6 +209,7 @@ def _prepare_fixture(
     text_name = f"{fixture.fixture_id.lower()}.txt"
     text_path = references_dir / text_name
     text_path.write_text(text, encoding="utf-8")
+    text_sha256 = hashlib.sha256(text_path.read_bytes()).hexdigest()
     segments_name = f"{fixture.fixture_id.lower()}.segments.json"
     segments_path = references_dir / segments_name
     if fixture.reference_segments_path is not None:
@@ -234,12 +239,15 @@ def _prepare_fixture(
         "duration_ms": video_duration_ms,
         "normalized_audio_duration_ms": video_duration_ms,
         "reference_text_file": relative_text,
-        "reference_text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        "reference_text_sha256": text_sha256,
         "reference_segments_file": relative_segments,
         "reference_segments_sha256": hashlib.sha256(segments_path.read_bytes()).hexdigest(),
         "reference_transcript_reviewed": fixture.reference_transcript_reviewed,
         "time_annotations_reviewed": fixture.time_annotations_reviewed,
+        "reference_provenance": fixture.reference_provenance,
     }
+    if fixture.reference_provenance_url is not None:
+        suite_record["reference_provenance_url"] = fixture.reference_provenance_url
     source_record = {
         "fixture_id": fixture.fixture_id,
         "split": fixture.split,
@@ -252,6 +260,7 @@ def _prepare_fixture(
         "prepared_video_duration_ms": video_duration_ms,
         "reference_transcript_reviewed": fixture.reference_transcript_reviewed,
         "time_annotations_reviewed": fixture.time_annotations_reviewed,
+        "reference_provenance": fixture.reference_provenance,
     }
     return suite_record, source_record
 
@@ -302,6 +311,12 @@ def _read_plan(payload: dict[str, object], *, root: Path) -> tuple[SourceCatalog
             segment_path = _existing_relative_file(root, raw, "reference_segments_file", fixture_id)
         if raw.get("time_annotations_reviewed") is True and segment_path is None:
             raise RuntimeError(f"fixture {fixture_id} cannot mark time annotations reviewed without a segment file")
+        reference_provenance = str(raw.get("reference_provenance") or "").strip() or "local_human_review"
+        if reference_provenance not in {"local_human_review", "published_benchmark"}:
+            raise RuntimeError(f"fixture {fixture_id} has unsupported reference_provenance")
+        reference_provenance_url: str | None = None
+        if reference_provenance == "published_benchmark":
+            reference_provenance_url = _require_https(raw, "reference_provenance_url", fixture_id)
         fixtures.append(
             FixturePlan(
                 fixture_id=fixture_id,
@@ -312,6 +327,8 @@ def _read_plan(payload: dict[str, object], *, root: Path) -> tuple[SourceCatalog
                 reference_segments_path=segment_path,
                 reference_transcript_reviewed=raw.get("reference_transcript_reviewed") is True,
                 time_annotations_reviewed=raw.get("time_annotations_reviewed") is True,
+                reference_provenance=reference_provenance,
+                reference_provenance_url=reference_provenance_url,
             )
         )
     return catalog, fixtures
@@ -476,6 +493,16 @@ def _read_json(path: Path, label: str) -> dict[str, object]:
     return value
 
 
+def _reference_is_quality_ready(record: dict[str, object]) -> bool:
+    if record.get("reference_provenance") == "published_benchmark":
+        return str(record.get("reference_provenance_url") or "").startswith("https://")
+    return record.get("reference_transcript_reviewed") is True and record.get("time_annotations_reviewed") is True
+
+
+def _timestamp_reference_is_quality_ready(record: dict[str, object]) -> bool:
+    return record.get("reference_provenance") == "local_human_review" and record.get("time_annotations_reviewed") is True
+
+
 def _write_json(path: Path, value: dict[str, object]) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
 
@@ -494,6 +521,11 @@ def _run_self_test(*, ffmpeg_path: Path, ffprobe_path: Path) -> dict[str, object
         )
         if report["annotation_review_complete"] is not False or report["quality_contract_ready"] is not False:
             raise AssertionError("unreviewed generated timing annotations were treated as quality-ready")
+        multiline_suite = _read_json(output_dir / "suite.json", "self-test suite")
+        multiline_record = next(item for item in multiline_suite["fixtures"] if item["fixture_id"] == "ASR-EN-DEV-01")
+        multiline_text = output_dir / str(multiline_record["reference_text_file"])
+        if hashlib.sha256(multiline_text.read_bytes()).hexdigest() != multiline_record["reference_text_sha256"]:
+            raise AssertionError("multiline reference text hash does not match its written bytes")
         invalid = _read_json(plan_path, "self-test plan")
         invalid["fixtures"][1]["audio_file"] = invalid["fixtures"][0]["audio_file"]
         invalid_path = root / "invalid_plan.json"
@@ -522,7 +554,7 @@ def _write_self_test_plan(root: Path) -> Path:
     inputs_dir.mkdir()
     fixture_rows = (
         ("ASR-ZH-DEV-01", "development", "zh", "这是仅用于验证夹具准备器的合成语音。"),
-        ("ASR-EN-DEV-01", "development", "en", "This synthetic speech only verifies fixture preparation."),
+        ("ASR-EN-DEV-01", "development", "en", "This synthetic speech only verifies fixture preparation.\nThe reference hash must match the bytes written on Windows."),
         ("ASR-ZH-DEV-02", "development", "zh", "时间标注在人工复核前不能参与质量评分。"),
         ("ASR-EN-DEV-02", "development", "en", "The prepared video keeps a deterministic audio stream."),
         ("ASR-ZH-DEV-03", "development", "zh", "公开来源和本地哈希会被记录到清单中。"),

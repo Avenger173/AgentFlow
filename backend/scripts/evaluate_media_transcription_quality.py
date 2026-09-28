@@ -46,6 +46,28 @@ def _run_self_test() -> dict[str, object]:
         report = evaluate_run(suite_path, run_path, verify_files=True)
         if report["quality_gate_passed"] is not True:
             raise AssertionError("valid synthetic scoring contract did not pass its own fixed thresholds")
+        published_suite = json.loads(suite_path.read_text(encoding="utf-8"))
+        for fixture in published_suite["fixtures"]:
+            fixture["reference_transcript_reviewed"] = False
+            fixture["time_annotations_reviewed"] = False
+            fixture["reference_provenance"] = "published_benchmark"
+            fixture["reference_provenance_url"] = "https://example.invalid/published-asr-benchmark"
+        published_suite_path = root / "published_text_suite.json"
+        published_suite_path.write_text(json.dumps(published_suite, ensure_ascii=False), encoding="utf-8")
+        published_run = json.loads(run_path.read_text(encoding="utf-8"))
+        published_run["suite_sha256"] = hashlib.sha256(
+            json.dumps(published_suite, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        published_run_path = root / "published_text_run.json"
+        published_run_path.write_text(json.dumps(published_run, ensure_ascii=False), encoding="utf-8")
+        published_report = evaluate_run(published_suite_path, published_run_path, verify_files=True)
+        if (
+            published_report["quality_gate"] != "G4-ASR-TEXT-DEV"
+            or published_report["quality_gate_passed"] is not True
+            or published_report["full_asr_gate_passed"] is not False
+            or published_report["timestamp_gate_status"] != "not_evaluated_without_independent_time_annotations"
+        ):
+            raise AssertionError("published text-only suite was allowed to claim timestamp quality")
         invalid = json.loads(run_path.read_text(encoding="utf-8"))
         invalid["cases"][0]["provider_call_count"] = 2
         invalid_path = root / "invalid_run.json"
@@ -111,7 +133,7 @@ def _run_self_test() -> dict[str, object]:
         else:
             raise AssertionError("quality evaluator accepted an underreported rejected Provider call")
     report["self_test"] = True
-    report["negative_contract_check"] = "provider_replay_low_quality_unknown_and_underreported_failure_rejected"
+    report["negative_contract_check"] = "published_text_cannot_claim_timestamp_quality_or_provider_replay_low_quality_unknown_underreported_failure"
     return report
 
 
