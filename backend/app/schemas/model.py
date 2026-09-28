@@ -22,6 +22,7 @@ ModelRouteScope = Literal[
     "visual_generation",
     "media_image_edit",
     "media_transcription",
+    "media_planning",
 ]
 ModelRouteMode = Literal["inherit_global", "configured"]
 ModelRouteAvailability = Literal["ready", "unavailable", "reserved"]

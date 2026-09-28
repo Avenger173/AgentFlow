@@ -91,6 +91,13 @@ MODEL_ROUTE_DEFINITIONS: dict[str, tuple[str, str, tuple[str, ...], bool, ModelG
         True,
         ModelGenerationParameters(),
     ),
+    "media_planning": (
+        "多媒体候选规划",
+        "多媒体助手依据已验证转写生成待确认的候选剪辑，不会自动渲染媒体文件。",
+        ("json_output",),
+        True,
+        ModelGenerationParameters(temperature=0.2),
+    ),
 }
 
 

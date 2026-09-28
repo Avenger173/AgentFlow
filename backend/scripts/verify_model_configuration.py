@@ -188,6 +188,8 @@ def _verify_http_and_runtime_configuration() -> None:
         assert routes["media_transcription"]["availability"] == "ready"
         assert routes["media_transcription"]["resolved"]["provider"] == "qwen_audio"
         assert routes["media_transcription"]["resolved"]["model"] == "qwen-audio-3.1-asr-flash"
+        assert routes["media_planning"]["availability"] == "ready"
+        assert routes["media_planning"]["resolved"]["parameters"]["temperature"] == 0.2
 
         route_save = client.put(
             "/api/models/routes/document_presentation",
@@ -208,6 +210,24 @@ def _verify_http_and_runtime_configuration() -> None:
         assert request_payload["temperature"] == 0.83
         assert request_payload["top_p"] == 0.88
         assert runtime.max_tokens == 6144
+
+        media_planning_save = client.put(
+            "/api/models/routes/media_planning",
+            json={
+                "mode": "configured",
+                "provider": "qwen",
+                "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "model": "qwen-plus",
+                "parameters": {"temperature": 0.0, "max_tokens": 720},
+            },
+        )
+        media_planning_save.raise_for_status()
+        assert media_planning_save.json()["resolved"]["provider"] == "qwen"
+        assert media_planning_save.json()["resolved"]["parameters"]["temperature"] == 0.0
+        media_planning_runtime = resolve_model_runtime_for_route("media_planning").runtime
+        assert media_planning_runtime.provider == "qwen"
+        assert media_planning_runtime.model == "qwen-plus"
+        assert media_planning_runtime.max_tokens == 720
 
         visual_runtime = resolve_visual_model_runtime_for_route().runtime
         assert visual_runtime.provider == "seedream"
