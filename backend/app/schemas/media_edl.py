@@ -89,3 +89,100 @@ class MediaEdlRenderTaskResultResponse(BaseModel):
         "unexpected",
     ] | None = None
     render: MediaEdlRenderInfo | None = None
+
+
+class MediaEdlCandidateRequest(BaseModel):
+    """Request a candidate EDL from one already-verified transcription task."""
+
+    transcription_task_id: str = Field(pattern=r"^task_media_transcription_[0-9a-f]{12}$")
+    goal: str = Field(min_length=2, max_length=1_200)
+
+    @model_validator(mode="after")
+    def normalize_goal(self) -> "MediaEdlCandidateRequest":
+        self.goal = " ".join(self.goal.split())
+        if len(self.goal) < 2:
+            raise ValueError("剪辑目标不能为空。")
+        return self
+
+
+class MediaEdlModelSelection(BaseModel):
+    """The planning model may reference only sentence IDs from the supplied transcript."""
+
+    start_sentence_id: int = Field(ge=0)
+    end_sentence_id: int = Field(ge=0)
+    reason: str = Field(min_length=1, max_length=240)
+
+    @model_validator(mode="after")
+    def validate_sentence_order(self) -> "MediaEdlModelSelection":
+        if self.end_sentence_id < self.start_sentence_id:
+            raise ValueError("候选片段结束句段不能早于开始句段。")
+        self.reason = " ".join(self.reason.split())
+        if not self.reason:
+            raise ValueError("候选片段需要简短理由。")
+        return self
+
+
+class MediaEdlModelCandidate(BaseModel):
+    """Strict model-only output; source IDs and millisecond ranges are Harness-owned."""
+
+    action: Literal["candidate", "clarify"]
+    selections: list[MediaEdlModelSelection] = Field(default_factory=list, max_length=MAX_EDL_CLIPS)
+    clarification_question: str = Field(default="", max_length=240)
+
+    @model_validator(mode="after")
+    def validate_action_shape(self) -> "MediaEdlModelCandidate":
+        self.clarification_question = " ".join(self.clarification_question.split())
+        if self.action == "candidate" and not self.selections:
+            raise ValueError("候选剪辑至少需要一个句段范围。")
+        if self.action == "candidate" and self.clarification_question:
+            raise ValueError("候选剪辑不能同时要求澄清。")
+        if self.action == "clarify" and (self.selections or not self.clarification_question):
+            raise ValueError("澄清结果只能包含问题，不能包含片段。")
+        return self
+
+
+class MediaEdlCandidateSelection(BaseModel):
+    start_sentence_id: int = Field(ge=0)
+    end_sentence_id: int = Field(ge=0)
+    begin_ms: int = Field(ge=0)
+    end_ms: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=240)
+
+    @model_validator(mode="after")
+    def validate_time_range(self) -> "MediaEdlCandidateSelection":
+        if self.end_ms <= self.begin_ms:
+            raise ValueError("候选片段结束时间必须晚于开始时间。")
+        return self
+
+
+class MediaEdlCandidateInfo(BaseModel):
+    """A reviewable candidate. Rendering always needs a separate explicit request."""
+
+    source_id: str = Field(pattern=r"^ms_[0-9a-f]{16}$")
+    transcription_task_id: str = Field(pattern=r"^task_media_transcription_[0-9a-f]{12}$")
+    goal: str = Field(min_length=2, max_length=1_200)
+    selections: list[MediaEdlCandidateSelection] = Field(min_length=1, max_length=MAX_EDL_CLIPS)
+    edl: MediaEditDecisionList
+    requires_confirmation: Literal[True] = True
+
+
+class MediaEdlCandidateStartResponse(BaseModel):
+    task_id: str = Field(pattern=r"^task_media_edl_plan_[0-9a-f]{12}$")
+    status: Literal["queued"] = "queued"
+
+
+class MediaEdlCandidateTaskResultResponse(BaseModel):
+    task_id: str = Field(pattern=r"^task_media_edl_plan_[0-9a-f]{12}$")
+    status: Literal["pending", "running", "completed", "failed", "cancelled"]
+    summary: str
+    message: str
+    failure_reason: Literal[
+        "validation_failed",
+        "provider_rejected",
+        "provider_outcome_unknown",
+        "contract_failed",
+        "cancelled",
+        "unexpected",
+    ] | None = None
+    candidate: MediaEdlCandidateInfo | None = None
+    clarification_question: str | None = None

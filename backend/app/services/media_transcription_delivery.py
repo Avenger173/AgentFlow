@@ -282,6 +282,23 @@ def get_media_transcription_task_result(task_id: str) -> MediaTranscriptionTaskR
     return _result_from_run(run)
 
 
+def load_verified_media_transcription_payload(
+    *, task_id: str, expected_project_id: str
+) -> MediaTranscriptionArtifactPayload:
+    """Return a completed transcript only after re-reading its controlled JSON artifact."""
+
+    run = load_workflow_run(task_id)
+    if not _is_media_transcription_run(run) or run is None or run.status != "completed":
+        raise MediaSourcePreparationError("指定媒体转写尚未完成或不存在。")
+    output = _step(run).output
+    if output.get("project_id") != expected_project_id:
+        raise MediaSourcePreparationError("指定媒体转写不属于当前项目范围。")
+    payload, _ = _load_verified_transcript_artifact(task_id=task_id, output=output)
+    if payload.project_id != expected_project_id:
+        raise MediaSourcePreparationError("媒体转写交付与当前项目范围不一致。")
+    return payload
+
+
 async def cancel_media_transcription_task(task_id: str) -> TaskControlResponse | None:
     """仅在模型提交前允许取消，不能把不可中断的 Provider 调用伪装为已取消。"""
 
