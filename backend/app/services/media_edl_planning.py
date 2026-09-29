@@ -126,13 +126,12 @@ def parse_media_edl_model_candidate(content: str) -> MediaEdlModelCandidate:
 def build_media_edl_candidate(
     *, context: MediaEdlPlanningContext, model_candidate: MediaEdlModelCandidate
 ) -> tuple[MediaEdlCandidateInfo | None, str | None]:
-    """Map sentence IDs to exact ranges and re-validate the constrained EDL."""
+    """Map sentence IDs to exact ranges, normalize harmless overlap, then validate the EDL."""
 
     if model_candidate.action == "clarify":
         return None, model_candidate.clarification_question
     by_sentence_id = {segment.sentence_id: segment for segment in context.segments}
     selections: list[MediaEdlCandidateSelection] = []
-    clips: list[MediaEdlClip] = []
     for selection in model_candidate.selections:
         first = by_sentence_id.get(selection.start_sentence_id)
         last = by_sentence_id.get(selection.end_sentence_id)
@@ -144,7 +143,6 @@ def build_media_edl_candidate(
             clip = MediaEdlClip(begin_ms=first.begin_ms, end_ms=last.end_ms)
         except ValueError as exc:
             raise MediaEdlPlanningError("模型引用的句段无法形成有效剪辑范围。") from exc
-        clips.append(clip)
         selections.append(
             MediaEdlCandidateSelection(
                 start_sentence_id=selection.start_sentence_id,
@@ -154,8 +152,13 @@ def build_media_edl_candidate(
                 reason=selection.reason,
             )
         )
+    normalized_selections = _normalize_candidate_selections(selections)
+    normalized_clips = [
+        MediaEdlClip(begin_ms=selection.begin_ms, end_ms=selection.end_ms)
+        for selection in normalized_selections
+    ]
     try:
-        edl = MediaEditDecisionList(source_id=context.source_id, clips=clips)
+        edl = MediaEditDecisionList(source_id=context.source_id, clips=normalized_clips)
     except ValueError as exc:
         raise MediaEdlPlanningError("模型候选的时间顺序或总时长不满足受限 EDL 规则。") from exc
     return (
@@ -163,11 +166,53 @@ def build_media_edl_candidate(
             source_id=context.source_id,
             transcription_task_id=context.request.transcription_task_id,
             goal=context.request.goal,
-            selections=selections,
+            selections=normalized_selections,
             edl=edl,
         ),
         None,
     )
+
+
+def _normalize_candidate_selections(
+    selections: list[MediaEdlCandidateSelection],
+) -> list[MediaEdlCandidateSelection]:
+    """Restore source-time order and remove repeated output from overlapping model ranges.
+
+    The model only chooses transcript sentence IDs. It has no authority to choose a playback
+    order, and this first EDL runtime cannot render overlapping clips. Sorting by harness-owned
+    millisecond bounds preserves every chosen source interval; overlapping intervals are merged
+    into their union so an accidental relevance-ordered list never duplicates source content.
+    Disjoint selections and the final three-minute budget remain strictly validated by the EDL.
+    """
+
+    ordered = sorted(
+        selections,
+        key=lambda item: (item.begin_ms, item.end_ms, item.start_sentence_id, item.end_sentence_id),
+    )
+    normalized: list[MediaEdlCandidateSelection] = []
+    for selection in ordered:
+        if not normalized or selection.begin_ms >= normalized[-1].end_ms:
+            normalized.append(selection)
+            continue
+
+        previous = normalized[-1]
+        extends_previous = selection.end_ms > previous.end_ms
+        normalized[-1] = MediaEdlCandidateSelection(
+            start_sentence_id=previous.start_sentence_id,
+            end_sentence_id=selection.end_sentence_id if extends_previous else previous.end_sentence_id,
+            begin_ms=previous.begin_ms,
+            end_ms=max(previous.end_ms, selection.end_ms),
+            reason=_merged_candidate_reason(previous.reason, selection.reason),
+        )
+    return normalized
+
+
+def _merged_candidate_reason(first: str, second: str) -> str:
+    """Keep a compact review reason when two selected ranges become one source interval."""
+
+    parts = [value.strip() for value in (first, second) if value.strip()]
+    unique_parts = list(dict.fromkeys(parts))
+    return "；".join(unique_parts)[:240]
 
 
 def build_media_edl_planning_system_prompt() -> str:
@@ -175,7 +220,7 @@ def build_media_edl_planning_system_prompt() -> str:
         "你是 AgentFlow 的受限视频剪辑候选规划器。只返回一个 JSON 对象，不要 Markdown、解释、推理过程或额外字段。"
         "你只根据用户目标和提供的转写句段选择片段；不能读取文件、不能调用工具、不能渲染视频、不能假设未提供的画面内容。"
         "只能引用给定的 sentence_id，不能编造毫秒时间、文件路径、模型名、字幕、费用或新素材。"
-        "候选必须按源时间顺序，最多 8 段，总时长不超过 180000 ms。目标不明确时请求澄清。"
+        "候选必须按给定 begin_ms 的升序列出，不能按相关性排序、重复或重叠；最多 8 段，总时长不超过 180000 ms。目标不明确时请求澄清。"
         "候选会等待用户单独确认，不会自动执行。\n"
         "JSON 契约："
         '{"action":"candidate|clarify","selections":[{"start_sentence_id":0,"end_sentence_id":0,"reason":""}],'

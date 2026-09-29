@@ -169,6 +169,38 @@ async def _run() -> dict[str, object]:
     assert "goal" not in calls[0].request
     assert not (VERIFY_ROOT / "output" / "media_edl").exists()
 
+    normalized_task_id = "task_media_edl_plan_abcdef012345"
+    create_media_edl_candidate_queued_run(
+        task_id=normalized_task_id,
+        project_id=project.project_id,
+        request=request,
+    )
+
+    async def relevance_ordered_planner(**_: object) -> MediaEdlModelCandidate:
+        # 模型可能按“认为重要”的顺序返回范围；Harness 必须按源时间顺序展示，且不能重复
+        # 交叠的句段内容。
+        return MediaEdlModelCandidate.model_validate(
+            {
+                "action": "candidate",
+                "selections": [
+                    {"start_sentence_id": 20, "end_sentence_id": 30, "reason": "保留产品能力。"},
+                    {"start_sentence_id": 10, "end_sentence_id": 20, "reason": "补足开场说明。"},
+                ],
+            }
+        )
+
+    normalized = await run_media_edl_candidate_task(
+        task_id=normalized_task_id,
+        project_id=project.project_id,
+        request=request,
+        runtime=object(),  # type: ignore[arg-type]
+        planner=relevance_ordered_planner,
+        context_loader=lambda **_: context,
+    )
+    assert normalized.status == "completed" and normalized.candidate is not None
+    assert [clip.model_dump() for clip in normalized.candidate.edl.clips] == [{"begin_ms": 0, "end_ms": 3_600}]
+    assert normalized.candidate.selections[0].reason == "补足开场说明。；保留产品能力。"
+
     invalid_task_id = "task_media_edl_plan_123456789abc"
     create_media_edl_candidate_queued_run(task_id=invalid_task_id, project_id=project.project_id, request=request)
 
@@ -225,7 +257,7 @@ async def _run() -> dict[str, object]:
         "ok": True,
         "model_used": False,
         "network_used": False,
-        "cases": ["source_binding", "cross_project", "candidate", "invalid_sentence", "api_result", "queued_cancel", "restart_no_replay"],
+        "cases": ["source_binding", "cross_project", "candidate", "relevance_order_normalized", "invalid_sentence", "api_result", "queued_cancel", "restart_no_replay"],
         "candidate_clip_count": 2,
         "output_files_created": 0,
     }
