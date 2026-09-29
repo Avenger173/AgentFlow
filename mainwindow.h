@@ -201,11 +201,17 @@ private:
     void requestVideoTranscriptionResult();
     void startVideoEdlCandidate();
     void requestVideoEdlCandidateResult();
+    void confirmVideoEdlRender();
+    void requestVideoEdlRenderResult();
+    void saveVideoEdlRender();
     void delegateVideoSourceToCommander();
     QString formatVideoTranscript(const MediaTranscriptionTaskResult &result) const;
     QString formatVideoEdlCandidate(const MediaEdlCandidateTaskResult &result) const;
+    QString formatVideoEdlRender(const MediaEdlRenderTaskResult &result) const;
     void resetVideoEdlCandidateUi();
+    void resetVideoEdlRenderUi();
     void updateVideoCandidateButton();
+    void updateVideoEdlRenderButton();
     void updateVideoPlaybackUi(qint64 positionMs = -1);
     void importDataDatasetFromFile();
     void refreshDataDatasets();
@@ -903,6 +909,15 @@ private:
     QString videoEdlCandidateTaskId;
     bool videoEdlCandidatePending = false;
     bool videoEdlCandidateRunning = false;
+    QList<MediaEdlClipInfo> videoEdlCandidateClips;
+    QString videoEdlCandidateGoal;
+    bool videoEdlCandidateReadyForRender = false;
+    QString videoEdlRenderTaskId;
+    bool videoEdlRenderPending = false;
+    bool videoEdlRenderRunning = false;
+    bool videoEdlRenderCompleted = false;
+    bool videoEdlRenderDownloadPending = false;
+    QString videoEdlRenderSavePath;
     QString currentDispatchKnowledgeAnswerChildTaskId;
     // 暂存请求同时冻结本轮显式路由偏好，避免后端启动期间客户编辑输入后改变已排队任务。
     QJsonArray pendingDispatchAgentHints;

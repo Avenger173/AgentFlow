@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from uuid import uuid4
 
 
@@ -177,6 +178,31 @@ async def _run() -> dict[str, object]:
         assert download_response.status_code == 200 and download_response.headers["content-type"].startswith("video/mp4")
         assert len(download_response.content) == success.render.size_bytes
 
+        # Qt 客户端在用户确认后走同一份受限 EDL 的“受理 -> 轮询 -> 下载”协议；
+        # 此处不复用已完成任务，确保 POST 路由和异步交付也确实可用。
+        started = client.post(
+            f"/api/agents/media_agent/projects/{project.project_id}/edl-renders/start",
+            json=edl.model_dump(mode="json"),
+        )
+        assert started.status_code == 202, started.text
+        api_task_id = started.json()["task_id"]
+        api_result: dict[str, object] | None = None
+        for _ in range(160):
+            response = client.get(f"/api/agents/media_agent/edl-renders/{api_task_id}/result")
+            assert response.status_code == 200, response.text
+            candidate = response.json()
+            if candidate["status"] == "completed":
+                api_result = candidate
+                break
+            assert candidate["status"] in {"pending", "running"}, candidate
+            time.sleep(0.1)
+        assert api_result is not None and api_result["render"]["source_id"] == source.source_id
+        api_download = client.get(
+            f"/api/agents/media_agent/projects/{project.project_id}/edl-renders/{api_task_id}/download"
+        )
+        assert api_download.status_code == 200 and api_download.headers["content-type"].startswith("video/mp4")
+        assert len(api_download.content) == api_result["render"]["size_bytes"]
+
     return {
         "ok": True,
         "network_used": False,
@@ -184,7 +210,15 @@ async def _run() -> dict[str, object]:
         "source_duration_ms": int(round(probe.duration_seconds * 1000)),
         "rendered_duration_ms": success.render.rendered_duration_ms,
         "clip_count": success.render.clip_count,
-        "cases": ["success", "source_bounds", "project_isolation", "queued_cancel", "restart_reconcile", "api_download"],
+        "cases": [
+            "success",
+            "source_bounds",
+            "project_isolation",
+            "queued_cancel",
+            "restart_reconcile",
+            "api_download",
+            "api_start_poll_download",
+        ],
     }
 
 

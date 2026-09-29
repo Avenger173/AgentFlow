@@ -531,6 +531,14 @@ struct MediaEdlCandidateSelectionInfo
     QString reason;
 };
 
+// 候选 EDL 和渲染请求共用同一个受限片段契约。Qt 只转交后端已返回的范围，
+// 不在客户端重建、排序或放宽模型提出的剪辑决策。
+struct MediaEdlClipInfo
+{
+    qint64 beginMs = 0;
+    qint64 endMs = 0;
+};
+
 struct MediaEdlCandidateTaskResult
 {
     QString taskId;
@@ -545,9 +553,39 @@ struct MediaEdlCandidateTaskResult
     bool hasCandidate = false;
     bool requiresConfirmation = false;
     QList<MediaEdlCandidateSelectionInfo> selections;
+    QList<MediaEdlClipInfo> edlClips;
 };
 
 Q_DECLARE_METATYPE(MediaEdlCandidateTaskResult)
+
+struct MediaEdlRenderInfo
+{
+    QString sourceId;
+    QString sourceSha256;
+    int clipCount = 0;
+    qint64 requestedDurationMs = 0;
+    qint64 renderedDurationMs = 0;
+    QString sha256;
+    qint64 sizeBytes = 0;
+    int width = 0;
+    int height = 0;
+    QString videoCodec;
+    QString audioCodec;
+    QString createdAt;
+};
+
+struct MediaEdlRenderTaskResult
+{
+    QString taskId;
+    QString status;
+    QString summary;
+    QString message;
+    QString failureReason;
+    bool hasRender = false;
+    MediaEdlRenderInfo render;
+};
+
+Q_DECLARE_METATYPE(MediaEdlRenderTaskResult)
 
 struct MediaAssetRevisionListResult
 {
@@ -1485,6 +1523,12 @@ public:
         const QString &transcriptionTaskId,
         const QString &goal);
     void requestMediaEdlCandidateResult(const QString &taskId);
+    void startMediaEdlRender(
+        const QString &projectId,
+        const QString &sourceId,
+        const QList<MediaEdlClipInfo> &clips);
+    void requestMediaEdlRenderResult(const QString &taskId);
+    void requestMediaEdlRenderDownload(const QString &projectId, const QString &taskId);
     void requestMediaAssetRevisions(const QString &projectId, const QString &assetId);
     void requestMediaImageLayerStack(
         const QString &projectId,
@@ -1887,6 +1931,11 @@ signals:
     void mediaEdlCandidateTaskStillRunning(const QString &taskId, const QString &status, const QString &summary);
     void mediaEdlCandidateTaskCompleted(const MediaEdlCandidateTaskResult &result);
     void mediaEdlCandidateTaskCancelled(const QString &taskId, const QString &message);
+    void mediaEdlRenderTaskStarted(const QString &taskId);
+    void mediaEdlRenderTaskStillRunning(const QString &taskId, const QString &status, const QString &summary);
+    void mediaEdlRenderTaskCompleted(const MediaEdlRenderTaskResult &result);
+    void mediaEdlRenderTaskCancelled(const QString &taskId, const QString &message);
+    void mediaEdlRenderDownloaded(const QString &projectId, const QString &taskId, const QByteArray &content);
     void mediaAssetRevisionsReceived(const MediaAssetRevisionListResult &result);
     void mediaImageLayerStackReceived(const MediaImageLayerStackResult &result);
     void mediaImageRevisionCreated(const MediaImageRevisionInfo &revision);
@@ -1997,6 +2046,9 @@ private:
     QUrl buildMediaAgentTranscriptionResultUrl(const QString &taskId) const;
     QUrl buildMediaAgentEdlCandidateStartUrl(const QString &projectId) const;
     QUrl buildMediaAgentEdlCandidateResultUrl(const QString &taskId) const;
+    QUrl buildMediaAgentEdlRenderStartUrl(const QString &projectId) const;
+    QUrl buildMediaAgentEdlRenderResultUrl(const QString &taskId) const;
+    QUrl buildMediaAgentEdlRenderDownloadUrl(const QString &projectId, const QString &taskId) const;
     QUrl buildMediaAgentAssetRevisionsUrl(const QString &projectId, const QString &assetId) const;
     QUrl buildMediaAgentRevisionLayerStackUrl(
         const QString &projectId,
@@ -2119,6 +2171,9 @@ private:
     void handleMediaTranscriptionResultReply(QNetworkReply *reply);
     void handleMediaEdlCandidateStartReply(QNetworkReply *reply);
     void handleMediaEdlCandidateResultReply(QNetworkReply *reply);
+    void handleMediaEdlRenderStartReply(QNetworkReply *reply);
+    void handleMediaEdlRenderResultReply(QNetworkReply *reply);
+    void handleMediaEdlRenderDownloadReply(QNetworkReply *reply);
     void handleMediaImageRevisionTaskStartReply(QNetworkReply *reply);
     void handleMediaImageRevisionTaskResultReply(QNetworkReply *reply);
     void handleMediaImageAiEditTaskStartReply(QNetworkReply *reply);

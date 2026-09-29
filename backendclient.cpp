@@ -663,8 +663,60 @@ MediaEdlCandidateTaskResult readMediaEdlCandidateTaskResult(const QJsonObject &p
             result.selections.append(selection);
         }
     }
+    const QJsonObject edl = candidate.value(QStringLiteral("edl")).toObject();
+    if (edl.value(QStringLiteral("source_id")).toString() == result.sourceId) {
+        const QJsonArray clips = edl.value(QStringLiteral("clips")).toArray();
+        result.edlClips.reserve(clips.size());
+        for (const QJsonValue &value : clips) {
+            if (!value.isObject()) {
+                continue;
+            }
+            const QJsonObject clipPayload = value.toObject();
+            MediaEdlClipInfo clip;
+            clip.beginMs = static_cast<qint64>(clipPayload.value(QStringLiteral("begin_ms")).toDouble());
+            clip.endMs = static_cast<qint64>(clipPayload.value(QStringLiteral("end_ms")).toDouble());
+            if (clip.endMs > clip.beginMs) {
+                result.edlClips.append(clip);
+            }
+        }
+    }
     result.hasCandidate = !result.sourceId.isEmpty() && !result.transcriptionTaskId.isEmpty()
-        && !result.goal.isEmpty() && result.requiresConfirmation && !result.selections.isEmpty();
+        && !result.goal.isEmpty() && result.requiresConfirmation && !result.selections.isEmpty()
+        && !result.edlClips.isEmpty();
+    return result;
+}
+
+MediaEdlRenderTaskResult readMediaEdlRenderTaskResult(const QJsonObject &payload)
+{
+    MediaEdlRenderTaskResult result;
+    result.taskId = payload.value(QStringLiteral("task_id")).toString();
+    result.status = payload.value(QStringLiteral("status")).toString();
+    result.summary = payload.value(QStringLiteral("summary")).toString();
+    result.message = payload.value(QStringLiteral("message")).toString();
+    result.failureReason = payload.value(QStringLiteral("failure_reason")).toString();
+
+    const QJsonObject render = payload.value(QStringLiteral("render")).toObject();
+    if (render.isEmpty()) {
+        return result;
+    }
+    result.render.sourceId = render.value(QStringLiteral("source_id")).toString();
+    result.render.sourceSha256 = render.value(QStringLiteral("source_sha256")).toString();
+    result.render.clipCount = render.value(QStringLiteral("clip_count")).toInt();
+    result.render.requestedDurationMs = static_cast<qint64>(
+        render.value(QStringLiteral("requested_duration_ms")).toDouble());
+    result.render.renderedDurationMs = static_cast<qint64>(
+        render.value(QStringLiteral("rendered_duration_ms")).toDouble());
+    result.render.sha256 = render.value(QStringLiteral("sha256")).toString();
+    result.render.sizeBytes = static_cast<qint64>(render.value(QStringLiteral("size_bytes")).toDouble());
+    result.render.width = render.value(QStringLiteral("width")).toInt();
+    result.render.height = render.value(QStringLiteral("height")).toInt();
+    result.render.videoCodec = render.value(QStringLiteral("video_codec")).toString();
+    result.render.audioCodec = render.value(QStringLiteral("audio_codec")).toString();
+    result.render.createdAt = render.value(QStringLiteral("created_at")).toString();
+    result.hasRender = !result.render.sourceId.isEmpty() && result.render.clipCount > 0
+        && result.render.requestedDurationMs > 0 && result.render.renderedDurationMs > 0
+        && result.render.sizeBytes > 0 && result.render.width > 0 && result.render.height > 0
+        && !result.render.videoCodec.isEmpty() && !result.render.audioCodec.isEmpty();
     return result;
 }
 
@@ -3047,6 +3099,70 @@ void BackendClient::requestMediaEdlCandidateResult(const QString &taskId)
     });
 }
 
+void BackendClient::startMediaEdlRender(
+    const QString &projectId,
+    const QString &sourceId,
+    const QList<MediaEdlClipInfo> &clips)
+{
+    if (projectId.trimmed().isEmpty() || sourceId.trimmed().isEmpty() || clips.isEmpty() || clips.size() > 8) {
+        emit mediaAgentFailed(QStringLiteral("start_edl_render"), QStringLiteral("确认渲染缺少有效的候选片段。"));
+        return;
+    }
+
+    QJsonArray clipPayloads;
+    qint64 previousEndMs = -1;
+    for (const MediaEdlClipInfo &clip : clips) {
+        if (clip.beginMs < 0 || clip.endMs <= clip.beginMs || clip.beginMs < previousEndMs) {
+            emit mediaAgentFailed(QStringLiteral("start_edl_render"), QStringLiteral("候选片段不满足单源顺序剪辑约束。"));
+            return;
+        }
+        previousEndMs = clip.endMs;
+        clipPayloads.append(QJsonObject{
+            {QStringLiteral("begin_ms"), clip.beginMs},
+            {QStringLiteral("end_ms"), clip.endMs},
+        });
+    }
+
+    const QJsonObject payload{
+        {QStringLiteral("source_id"), sourceId.trimmed()},
+        {QStringLiteral("clips"), clipPayloads},
+    };
+    QNetworkReply *reply = networkManager_.post(
+        createRequest(buildMediaAgentEdlRenderStartUrl(projectId.trimmed()), 10000),
+        QJsonDocument(payload).toJson(QJsonDocument::Compact));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        handleMediaEdlRenderStartReply(reply);
+    });
+}
+
+void BackendClient::requestMediaEdlRenderResult(const QString &taskId)
+{
+    if (taskId.trimmed().isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("edl_render_task_result"), QStringLiteral("MP4 渲染任务 ID 为空。"));
+        return;
+    }
+    QNetworkReply *reply = networkManager_.get(
+        createRequest(buildMediaAgentEdlRenderResultUrl(taskId.trimmed()), 10000));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        handleMediaEdlRenderResultReply(reply);
+    });
+}
+
+void BackendClient::requestMediaEdlRenderDownload(const QString &projectId, const QString &taskId)
+{
+    if (projectId.trimmed().isEmpty() || taskId.trimmed().isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("download_edl_render"), QStringLiteral("保存 MP4 缺少项目或渲染任务。"));
+        return;
+    }
+    QNetworkReply *reply = networkManager_.get(
+        createRequest(buildMediaAgentEdlRenderDownloadUrl(projectId.trimmed(), taskId.trimmed()), 5 * 60 * 1000));
+    reply->setProperty("media_edl_project_id", projectId.trimmed());
+    reply->setProperty("media_edl_task_id", taskId.trimmed());
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        handleMediaEdlRenderDownloadReply(reply);
+    });
+}
+
 void BackendClient::requestMediaAssetRevisions(const QString &projectId, const QString &assetId)
 {
     if (projectId.trimmed().isEmpty() || assetId.trimmed().isEmpty()) {
@@ -5212,6 +5328,31 @@ QUrl BackendClient::buildMediaAgentEdlCandidateResultUrl(const QString &taskId) 
     return url;
 }
 
+QUrl BackendClient::buildMediaAgentEdlRenderStartUrl(const QString &projectId) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/agents/media_agent/projects/%1/edl-renders/start")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(projectId))));
+    return url;
+}
+
+QUrl BackendClient::buildMediaAgentEdlRenderResultUrl(const QString &taskId) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/agents/media_agent/edl-renders/%1/result")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(taskId))));
+    return url;
+}
+
+QUrl BackendClient::buildMediaAgentEdlRenderDownloadUrl(const QString &projectId, const QString &taskId) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/agents/media_agent/projects/%1/edl-renders/%2/download")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(projectId)),
+                         QString::fromUtf8(QUrl::toPercentEncoding(taskId))));
+    return url;
+}
+
 QUrl BackendClient::buildMediaAgentAssetRevisionsUrl(
     const QString &projectId,
     const QString &assetId) const
@@ -6744,6 +6885,84 @@ void BackendClient::handleMediaEdlCandidateResultReply(QNetworkReply *reply)
     emit mediaAgentFailed(
         QStringLiteral("edl_candidate_task_result"),
         result.message.isEmpty() ? QStringLiteral("剪辑候选未完成，请在任务历史中查看原因。") : result.message);
+}
+
+void BackendClient::handleMediaEdlRenderStartReply(QNetworkReply *reply)
+{
+    if (reply->error() != QNetworkReply::NoError) {
+        const QString message = replyErrorMessage(reply);
+        reply->deleteLater();
+        emit mediaAgentFailed(QStringLiteral("start_edl_render"), message);
+        return;
+    }
+    const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+    reply->deleteLater();
+    const QJsonObject payload = document.object();
+    const QString taskId = payload.value(QStringLiteral("task_id")).toString().trimmed();
+    if (!document.isObject() || taskId.isEmpty()
+        || payload.value(QStringLiteral("status")).toString() != QStringLiteral("queued")) {
+        emit mediaAgentFailed(QStringLiteral("start_edl_render"), QStringLiteral("MP4 渲染任务未返回有效受理状态。"));
+        return;
+    }
+    emit mediaEdlRenderTaskStarted(taskId);
+}
+
+void BackendClient::handleMediaEdlRenderResultReply(QNetworkReply *reply)
+{
+    if (reply->error() != QNetworkReply::NoError) {
+        const QString message = replyErrorMessage(reply);
+        reply->deleteLater();
+        emit mediaAgentFailed(QStringLiteral("edl_render_task_result"), message);
+        return;
+    }
+    const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+    reply->deleteLater();
+    if (!document.isObject()) {
+        emit mediaAgentFailed(QStringLiteral("edl_render_task_result"), QStringLiteral("MP4 渲染结果响应格式无效。"));
+        return;
+    }
+    const MediaEdlRenderTaskResult result = readMediaEdlRenderTaskResult(document.object());
+    if (result.taskId.isEmpty() || result.status.isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("edl_render_task_result"), QStringLiteral("MP4 渲染结果缺少任务状态。"));
+        return;
+    }
+    if (result.status == QStringLiteral("queued") || result.status == QStringLiteral("pending")
+        || result.status == QStringLiteral("running")) {
+        emit mediaEdlRenderTaskStillRunning(result.taskId, result.status, result.summary);
+        return;
+    }
+    if (result.status == QStringLiteral("cancelled")) {
+        emit mediaEdlRenderTaskCancelled(
+            result.taskId,
+            result.message.isEmpty() ? QStringLiteral("MP4 渲染任务已取消，未生成交付文件。") : result.message);
+        return;
+    }
+    if (result.status == QStringLiteral("completed") && result.hasRender) {
+        emit mediaEdlRenderTaskCompleted(result);
+        return;
+    }
+    emit mediaAgentFailed(
+        QStringLiteral("edl_render_task_result"),
+        result.message.isEmpty() ? QStringLiteral("MP4 渲染未完成，请在任务历史中查看原因。") : result.message);
+}
+
+void BackendClient::handleMediaEdlRenderDownloadReply(QNetworkReply *reply)
+{
+    const QString projectId = reply->property("media_edl_project_id").toString();
+    const QString taskId = reply->property("media_edl_task_id").toString();
+    if (reply->error() != QNetworkReply::NoError) {
+        const QString message = replyErrorMessage(reply);
+        reply->deleteLater();
+        emit mediaAgentFailed(QStringLiteral("download_edl_render"), message);
+        return;
+    }
+    const QByteArray content = reply->readAll();
+    reply->deleteLater();
+    if (content.isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("download_edl_render"), QStringLiteral("已验证 MP4 的下载内容为空。"));
+        return;
+    }
+    emit mediaEdlRenderDownloaded(projectId, taskId, content);
 }
 
 void BackendClient::handleMediaImageRevisionTaskStartReply(QNetworkReply *reply)
