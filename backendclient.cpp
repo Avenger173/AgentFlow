@@ -3026,8 +3026,10 @@ void BackendClient::prepareMediaTranscriptionAudio(const QString &projectId, con
         emit mediaAgentFailed(QStringLiteral("prepare_transcription_audio"), QStringLiteral("转写准备缺少受控视频素材。"));
         return;
     }
-    QNetworkReply *reply = networkManager_.get(createRequest(
-        buildMediaAgentTranscriptionAudioUrl(projectId.trimmed(), sourceId.trimmed()), 5 * 60 * 1000));
+    // 后端会在受控副本中执行一次固定音轨提取，因此此接口是无正文的 POST，不能误用 GET。
+    QNetworkReply *reply = networkManager_.post(
+        createRequest(buildMediaAgentTranscriptionAudioUrl(projectId.trimmed(), sourceId.trimmed()), 5 * 60 * 1000),
+        QByteArray());
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         handleMediaTranscriptionAudioReply(reply);
     });

@@ -290,13 +290,31 @@ async def _run() -> None:
 
         from app.api import media_agent as media_api
 
+        original_preparer = media_api._prepare_transcription_audio
         original_runner = media_api.run_media_transcription_task
+
+        def api_preparer(request_project_id: str, request_source_id: str):  # type: ignore[no-untyped-def]
+            assert request_project_id == project.project_id
+            assert request_source_id == source.source_id
+            return source, audio
 
         async def api_runner(**kwargs: object):  # type: ignore[no-untyped-def]
             return await original_runner(**kwargs, runtime=_runtime(), transcriber=_success_transcriber)
 
+        media_api._prepare_transcription_audio = api_preparer
         media_api.run_media_transcription_task = api_runner
         try:
+            # 固定音轨提取会创建受控派生文件，因此 API 契约是无正文 POST；桌面端必须与此一致。
+            prepared = client.post(
+                f"/api/agents/media_agent/projects/{project.project_id}/media-sources/{source.source_id}/transcription-audio",
+            )
+            assert prepared.status_code == 200, prepared.text
+            assert prepared.json()["audio"]["audio_id"] == audio.audio_id
+            wrong_method = client.get(
+                f"/api/agents/media_agent/projects/{project.project_id}/media-sources/{source.source_id}/transcription-audio",
+            )
+            assert wrong_method.status_code == 405, wrong_method.text
+
             started = client.post(
                 f"/api/agents/media_agent/projects/{project.project_id}/transcriptions/start",
                 json=request.model_dump(),
@@ -315,6 +333,7 @@ async def _run() -> None:
             unified = client.get(f"/api/tasks/{api_task_id}")
             assert unified.status_code == 200 and unified.json()["steps"][0]["action"] == "media.transcribe_audio"
         finally:
+            media_api._prepare_transcription_audio = original_preparer
             media_api.run_media_transcription_task = original_runner
 
     # 恢复函数可重复调用，不会为终态任务创建第二份 Artifact 或第二次模型请求。
