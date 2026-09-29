@@ -5,7 +5,7 @@ project(AgentFlow LANGUAGES CXX)
 # 目录发行的运行时位置。客户目录只允许根级 AgentFlow.exe 作为启动入口。
 set(CMAKE_INSTALL_BINDIR "." CACHE PATH "AgentFlow directory release executable directory" FORCE)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Network WebSockets Widgets)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Network WebSockets Widgets Multimedia MultimediaWidgets)
 
 qt_standard_project_setup()
 
@@ -78,6 +78,8 @@ target_link_libraries(AgentFlow
         Qt::Network
         Qt::WebSockets
         Qt::Widgets
+        Qt::Multimedia
+        Qt::MultimediaWidgets
 )
 
 if(MSVC)

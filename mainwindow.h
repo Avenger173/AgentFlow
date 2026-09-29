@@ -26,6 +26,8 @@ class QAction;
 class QCheckBox;
 class QDialog;
 class QDoubleSpinBox;
+class QAudioOutput;
+class QMediaPlayer;
 class TaskActivityIndicator;
 class QLineEdit;
 class QListWidget;
@@ -125,6 +127,7 @@ private:
     bool isCurrentDispatchAutoReadOnlyTask() const;
     bool isCurrentDispatchPublicReferenceSearch() const;
     bool isCurrentDispatchMediaWorkspaceHandoff() const;
+    bool isCurrentDispatchVideoWorkspaceHandoff() const;
     bool isCurrentDispatchDirectConversation() const;
     QString currentDispatchAutoReadOnlyActivityText() const;
     QString currentDispatchKnowledgeBaseName() const;
@@ -189,7 +192,13 @@ private:
     void handleKnowledgeBaseDeletionFailed(const QString &message);
     void setupDataWorkspace();
     void setupMediaWorkspace();
+    void setupVideoWorkspace();
     void openMediaWorkspace(const QString &aiInstruction = QString());
+    void openVideoWorkspace(const QString &goal = QString(), const QString &sourceId = QString());
+    void chooseVideoSourceFile();
+    void importSelectedVideoSource();
+    void delegateVideoSourceToCommander();
+    void updateVideoPlaybackUi(qint64 positionMs = -1);
     void importDataDatasetFromFile();
     void refreshDataDatasets();
     void requestSelectedDataDatasetProfile();
@@ -870,6 +879,14 @@ private:
     QPointer<QPushButton> dispatchDeliveryDialogHistoryButton;
     QPointer<PresentationStudioDialog> dispatchPresentationDialog;
     QPointer<MediaWorkspaceDialog> mediaWorkspaceDialog;
+    QMediaPlayer *videoPlayer_ = nullptr;
+    QAudioOutput *videoAudioOutput_ = nullptr;
+    QString videoLocalSourcePath;
+    QString videoProjectId;
+    QString videoSourceId;
+    QString videoSourceDisplayName;
+    bool videoProjectCreationPending = false;
+    bool videoSourceImportPending = false;
     QString currentDispatchKnowledgeAnswerChildTaskId;
     // 暂存请求同时冻结本轮显式路由偏好，避免后端启动期间客户编辑输入后改变已排队任务。
     QJsonArray pendingDispatchAgentHints;
@@ -909,6 +926,8 @@ private:
     // 数据工作台只会把当前画像通过的一份受控相对引用带入调度台；同一会话后续追问会
     // 继续携带它。文件内容、预览行和绝对路径不会写进 Qt 状态。
     QString dispatchSelectedDatasetRef;
+    QString dispatchSelectedMediaSourceRef;
+    QString dispatchSelectedMediaSourceDisplayName;
     // 默认全局范围；项目范围只是记忆检索隔离标识，不能被解释成用户磁盘路径或 Runtime 授权。
     QString currentDispatchProjectScope = QStringLiteral("global");
     // 会话 ID 只是后端自动短期上下文的稳定指针。正文、文件内容和材料原文仍留在后端受控

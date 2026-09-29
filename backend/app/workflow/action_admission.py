@@ -130,6 +130,16 @@ ACTION_ADMISSIONS: dict[tuple[str, str], AgentActionAdmission] = {
         verification_scope="只传递客户本轮修图文字；不会读取本机文件、创建图片项目、发送 Provider 请求或生成图片版本。",
         recovery_hint="在图片工作区导入或选择图片的当前版本，核对预填指令后主动点击“开始修图”。",
     ),
+    ("media_agent", "open_video_workspace"): AgentActionAdmission(
+        agent_id="media_agent",
+        action="open_video_workspace",
+        execution_mode="guided_handoff",
+        requires_runtime_ready=False,
+        material_kind="media_source",
+        expected_output="已带入一段受控视频素材和剪辑目标的短视频工作区；尚未提交转写、候选片段或渲染。",
+        verification_scope="只传递已选 source_id 与客户目标；不读取本机路径、不发送模型请求，也不创建 MP4 交付物。",
+        recovery_hint="在音视频工坊复核素材和目标后，主动提交转写；候选片段必须确认后才会渲染。",
+    ),
     ("knowledge_agent", "answer_question"): AgentActionAdmission(
         agent_id="knowledge_agent",
         action="answer_question",
@@ -285,6 +295,7 @@ def evaluate_action_admission(
             "document": "文档",
             "dataset": "数据文件",
             "knowledge_base": "资料库",
+            "media_source": "音视频素材",
         }
         label = labels.get(admission.material_kind, "材料")
         return ActionAdmissionDecision(admission, "blocked", f"本步骤需要先明确绑定一份{label}。")

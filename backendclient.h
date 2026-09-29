@@ -478,6 +478,17 @@ struct MediaImageRevisionInfo
     QString createdAt;
 };
 
+struct MediaSourceInfo
+{
+    QString sourceId;
+    QString projectScope;
+    QString filename;
+    QString sourceSha256;
+    QString mimeType;
+    qint64 sizeBytes = 0;
+    QString createdAt;
+};
+
 struct MediaAssetRevisionListResult
 {
     MediaImageAssetInfo asset;
@@ -1401,6 +1412,7 @@ public:
     void createMediaProject(const QString &title);
     void requestMediaProject(const QString &projectId);
     void importMediaImage(const QString &projectId, const QString &filename, const QByteArray &content);
+    void importMediaSource(const QString &projectId, const QString &filePath);
     void requestMediaAssetRevisions(const QString &projectId, const QString &assetId);
     void requestMediaImageLayerStack(
         const QString &projectId,
@@ -1793,6 +1805,7 @@ signals:
     void mediaProjectCreated(const MediaProjectInfo &project);
     void mediaProjectReceived(const MediaProjectDetailResult &result);
     void mediaImageImported(const MediaImageAssetInfo &asset);
+    void mediaSourceImported(const MediaSourceInfo &source);
     void mediaAssetRevisionsReceived(const MediaAssetRevisionListResult &result);
     void mediaImageLayerStackReceived(const MediaImageLayerStackResult &result);
     void mediaImageRevisionCreated(const MediaImageRevisionInfo &revision);
@@ -1897,6 +1910,7 @@ private:
     QUrl buildMediaAgentProjectsUrl() const;
     QUrl buildMediaAgentProjectUrl(const QString &projectId) const;
     QUrl buildMediaAgentImagesUrl(const QString &projectId) const;
+    QUrl buildMediaAgentMediaSourceUploadUrl(const QString &projectId) const;
     QUrl buildMediaAgentAssetRevisionsUrl(const QString &projectId, const QString &assetId) const;
     QUrl buildMediaAgentRevisionLayerStackUrl(
         const QString &projectId,

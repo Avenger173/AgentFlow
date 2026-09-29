@@ -79,6 +79,10 @@ MEDIA_IMAGE_EDIT_ROUTE_KEYWORDS = (
     "ai修图", "ai 修图", "修图", "图片编辑", "图像编辑", "换背景", "替换背景", "背景换成", "背景替换",
     "去除背景", "去背景", "消除物体", "移除物体", "擦除物体", "图片换色", "局部改图",
 )
+MEDIA_VIDEO_EDIT_ROUTE_KEYWORDS = (
+    "视频剪辑", "剪视频", "剪出视频", "视频片段", "片段剪辑", "从视频中", "从视频里", "这段视频",
+    "保留视频", "保留介绍", "保留讲解",
+)
 KNOWLEDGE_ROUTE_KEYWORDS = (
     "知识库", "资料库", "根据资料", "查资料", "问资料", "引用来源",
 )
@@ -104,7 +108,7 @@ _AGENT_HINT_ALIASES: dict[str, tuple[str, ...]] = {
     "document_agent": ("文档助手", "文档", "document", "document_agent"),
     "data_agent": ("数据工作台", "数据", "data", "data_agent"),
     "knowledge_agent": ("知识库", "知识库助手", "knowledge", "knowledge_agent"),
-    "media_agent": ("图片助手", "多媒体助手", "修图", "image", "media", "media_agent"),
+    "media_agent": ("图片助手", "视频助手", "多媒体助手", "修图", "image", "media", "media_agent"),
 }
 # C6.4 的 Native 组合 Runtime 只接收已有正式子任务入口、只读边界与独立验证器的动作。
 # 这份规划期白名单与 Runtime 的二次核验必须保持一致；新增动作要先讨论并发、预算、
@@ -156,6 +160,7 @@ def create_commander_plan(
     document_refs = _material_refs(material_bindings, kind="document")
     dataset_refs = _material_refs(material_bindings, kind="dataset")
     knowledge_base_refs = _material_refs(material_bindings, kind="knowledge_base")
+    media_source_refs = _material_refs(material_bindings, kind="media_source")
     lowered = message.lower()
     # 语义候选来自受限 JSON 契约。它可以补足自然语言理解，但置信度不足时绝不覆盖
     # 确定性边界，更不能直接产生未准入的 Tool、路径或权限。
@@ -186,17 +191,28 @@ def create_commander_plan(
         and not fresh_external_information_requested
         and _matches_any(lowered, PUBLIC_REFERENCE_ROUTE_KEYWORDS)
     )
-    media_image_edit_requested = (
+    media_video_edit_requested = (
         not history_recall_requested
         and not presentation_requested
         and not fresh_external_information_requested
         and not public_reference_requested
         and (
-            _matches_any(lowered, MEDIA_IMAGE_EDIT_ROUTE_KEYWORDS)
-            or "media_agent" in hinted_agent_ids
+            _matches_any(lowered, MEDIA_VIDEO_EDIT_ROUTE_KEYWORDS)
+            or (bool(media_source_refs) and "media_agent" in hinted_agent_ids)
         )
     )
-    knowledge_intent_requested = not history_recall_requested and not media_image_edit_requested and (
+    media_image_edit_requested = (
+        not media_video_edit_requested
+        and not history_recall_requested
+        and not presentation_requested
+        and not fresh_external_information_requested
+        and not public_reference_requested
+        and (
+            _matches_any(lowered, MEDIA_IMAGE_EDIT_ROUTE_KEYWORDS)
+            or "@图片助手" in message
+        )
+    )
+    knowledge_intent_requested = not history_recall_requested and not (media_image_edit_requested or media_video_edit_requested) and (
         _matches_any(lowered, KNOWLEDGE_ROUTE_KEYWORDS)
         or knowledge_deep_requested
     )
@@ -206,10 +222,11 @@ def create_commander_plan(
         knowledge_intent_requested
         or public_reference_requested
         or fresh_external_information_requested
-        or media_image_edit_requested
+            or media_image_edit_requested
+            or media_video_edit_requested
     ) and _matches_any(lowered, DOCUMENT_ROUTE_KEYWORDS)
     data_intent_requested = not history_recall_requested and not (
-        public_reference_requested or fresh_external_information_requested or media_image_edit_requested
+        public_reference_requested or fresh_external_information_requested or media_image_edit_requested or media_video_edit_requested
     ) and (
         _matches_any(lowered, DATA_ROUTE_KEYWORDS)
     )
@@ -218,6 +235,7 @@ def create_commander_plan(
             presentation_requested,
             fresh_external_information_requested,
             public_reference_requested,
+            media_video_edit_requested,
             media_image_edit_requested,
             knowledge_intent_requested,
             document_intent_requested,
@@ -251,6 +269,7 @@ def create_commander_plan(
         fresh_external_information_requested
         or public_reference_requested
         or media_image_edit_requested
+        or media_video_edit_requested
         or knowledge_intent_requested
         or document_intent_requested
         or data_intent_requested
@@ -274,7 +293,7 @@ def create_commander_plan(
         dataset_refs=dataset_refs,
         knowledge_base_refs=knowledge_base_refs,
     )
-    knowledge_requested = not (presentation_requested or fresh_external_information_requested or media_image_edit_requested) and (
+    knowledge_requested = not (presentation_requested or fresh_external_information_requested or media_image_edit_requested or media_video_edit_requested) and (
         knowledge_intent_requested
         or (multi_material_composition_requested and bool(knowledge_base_refs))
         or (
@@ -295,7 +314,7 @@ def create_commander_plan(
     # C6.3 允许客户明确组合文档、资料库和数据集；材料引用优先于模糊关键词。
     # 只有没有资料库绑定时，才把“资料”等宽泛词当作普通文档意图，避免单独问资料库
     # 时额外产生“请选择文档”的噪声澄清。
-    document_requested = not (presentation_requested or fresh_external_information_requested or media_image_edit_requested) and (
+    document_requested = not (presentation_requested or fresh_external_information_requested or media_image_edit_requested or media_video_edit_requested) and (
         document_intent_requested
         or (multi_material_composition_requested and bool(document_refs))
         or (
@@ -313,7 +332,7 @@ def create_commander_plan(
             )
         )
     )
-    data_requested = not (presentation_requested or fresh_external_information_requested or media_image_edit_requested) and (
+    data_requested = not (presentation_requested or fresh_external_information_requested or media_image_edit_requested or media_video_edit_requested) and (
         data_intent_requested
         or (multi_material_composition_requested and bool(dataset_refs))
         or data_transform_intent_requested
@@ -404,7 +423,32 @@ def create_commander_plan(
             else:
                 clarifying_questions.append("公开资料连接当前未通过总指挥动作准入，请检查连接状态后重试。")
 
-    if media_image_edit_requested:
+    if media_video_edit_requested:
+        if not media_source_refs:
+            clarifying_questions.append("视频剪辑需要先在音视频工坊导入并选择一段视频素材；总指挥不会读取本机路径或自行上传文件。")
+        elif len(media_source_refs) != 1:
+            clarifying_questions.append("短视频剪辑首版一次只能使用一段已选择的视频素材，请保留最相关的一段后重试。")
+        else:
+            specialist_step_id = f"step_{next_index}"
+            decision = _append_admitted_step(
+                steps=steps,
+                step_id=specialist_step_id,
+                agent_id="media_agent",
+                action="open_video_workspace",
+                title="打开短视频剪辑工作区并带入目标",
+                depends_on=["step_1"],
+                step_input={"task_goal": message, "source_id": media_source_refs[0]},
+                reason="客户已显式选择一段受控视频素材；先在工作区复核素材与目标，再决定是否提交转写和候选片段生成。",
+                agents=available_agent_list,
+                materials=material_bindings,
+                timeout_ms=30_000,
+            )
+            if decision is not None:
+                specialist_step_ids.append(specialist_step_id)
+                next_index += 1
+            else:
+                clarifying_questions.append("短视频剪辑工作区当前未通过总指挥动作准入，请检查音视频工坊状态后重试。")
+    elif media_image_edit_requested:
         specialist_step_id = f"step_{next_index}"
         decision = _append_admitted_step(
             steps=steps,
@@ -1526,6 +1570,8 @@ def _safe_material_ref(value: str, *, kind: str) -> str | None:
     # 版本号或任意 SQLite 身份注入 Commander 计划。
     if kind == "knowledge_base":
         return candidate if re.fullmatch(r"kb_[a-z0-9]{8,32}", candidate) else None
+    if kind == "media_source":
+        return candidate if re.fullmatch(r"ms_[0-9a-f]{16}", candidate) else None
     # 先检查原始引用。不能在清理 './' 时把 '../private.txt' 悄悄变成可接受的名称。
     if ".." in PurePath(candidate).parts:
         return None
@@ -1681,6 +1727,8 @@ def _retry_policy_for_step(agent_id: str, action: str) -> WorkflowRetryPolicy:
         return WorkflowRetryPolicy(max_attempts=2, retryable=True, stop_condition="规划失败后转为澄清问题。")
     if agent_id == "media_agent" and action == "open_media_workspace":
         return WorkflowRetryPolicy(max_attempts=1, retryable=False, stop_condition="工作区引导失败时停止；不会自动导入图片或重发模型请求。")
+    if agent_id == "media_agent" and action == "open_video_workspace":
+        return WorkflowRetryPolicy(max_attempts=1, retryable=False, stop_condition="工作区引导失败时停止；不会自动导入视频、提交转写或渲染请求。")
     if agent_id == "document_agent" and action == "analyze_document":
         return WorkflowRetryPolicy(
             max_attempts=1,
@@ -1753,6 +1801,8 @@ def _success_criteria_for_step(agent_id: str, action: str) -> list[str]:
         return ["仅调用已启用的固定 MCP Tool", "来源 URL 与字段通过契约校验", "联网与 stdio 启动均记录权限和审计"]
     if agent_id == "media_agent" and action == "open_media_workspace":
         return ["图片工作区已打开", "修图指令已预填", "未读取图片、未调用 Provider"]
+    if agent_id == "media_agent" and action == "open_video_workspace":
+        return ["短视频剪辑工作区已打开", "已绑定一段受控视频与剪辑目标", "尚未提交转写或渲染"]
     if agent_id == COMMANDER_AGENT_ID:
         return ["给出可理解的直接答复或澄清问题"]
     if agent_id == "document_agent" and action == "read_text":
@@ -1832,6 +1882,8 @@ def _infer_intent(steps: list[WorkflowStep]) -> str:
         return "public_reference_search"
     if any(step.action == "open_media_workspace" for step in steps):
         return "media_image_edit"
+    if any(step.action == "open_video_workspace" for step in steps):
+        return "media_video_edit"
     agents = {step.agent for step in steps}
     if agents <= {COMMANDER_AGENT_ID}:
         return "direct_answer"
@@ -2036,6 +2088,8 @@ def _next_action(
             return "open_presentation_studio"
         if guided_handoff_action == "open_media_workspace":
             return "open_media_workspace"
+        if guided_handoff_action == "open_video_workspace":
+            return "open_video_workspace"
         return "open_data_workspace"
     if requires_confirmation:
         return "review_plan_and_confirm_permissions"
@@ -2047,7 +2101,7 @@ def _build_plan_summary(steps: list[WorkflowStep]) -> str:
         "document_agent": "文档助手",
         "data_agent": "数据工作台",
         "knowledge_agent": "知识库",
-        "media_agent": "图片助手",
+        "media_agent": "多媒体助手",
     }
     if any(step.action == "search_public_references" for step in steps):
         return "Commander 将在你确认联网与受控 stdio 服务启动后，检索有限的 Wikimedia 公开资料参考。"
@@ -2069,7 +2123,9 @@ def _build_plan_summary(steps: list[WorkflowStep]) -> str:
             + "、".join(parallel_names)
             + " 可在未来组合 Runtime 中并行处理，随后再汇总；当前仅供审阅，不会提前执行。"
         )
-    if any(step.action == "open_media_workspace" for step in steps):
+    if any(step.action == "open_video_workspace" for step in steps):
+        suffix = "短视频剪辑工作区会带入一段受控素材和目标；转写、候选片段与渲染仍需在工作区显式提交。"
+    elif any(step.action == "open_media_workspace" for step in steps):
         suffix = "图片工作区会带入修图指令；请选择图片当前版本后再主动提交，当前不会调用模型。"
     else:
         suffix = "其中数据工作台当前需要你继续确认材料与操作。" if guided else ""

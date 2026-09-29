@@ -149,6 +149,64 @@ def import_media_source_bytes(
     return _source_info(manifest)
 
 
+def import_media_source_staged_file(
+    *,
+    project_scope: str,
+    filename: str,
+    staged_path: Path,
+    root_dir: Path | None = None,
+) -> MediaSourceInfo:
+    """Atomically import a server-staged upload without loading the media into memory.
+
+    ``staged_path`` is created by the API in a private directory and is never derived
+    from a client-supplied path. The caller still receives only the source metadata.
+    """
+
+    safe_scope = _validate_project_scope(project_scope)
+    safe_filename, suffix, mime_type = _validate_source_filename(filename)
+    try:
+        source_size = staged_path.stat().st_size
+    except OSError as exc:
+        raise MediaSourcePreparationError("待导入的音视频素材不存在。") from exc
+    if source_size <= 0:
+        raise MediaSourcePreparationError("音视频素材不能为空。")
+    if source_size > MAX_MEDIA_SOURCE_BYTES:
+        raise MediaSourcePreparationError("音视频素材超过当前受控导入上限 256 MB。")
+
+    root = media_source_root(root_dir=root_dir)
+    sources_root = root / "sources"
+    sources_root.mkdir(parents=True, exist_ok=True)
+    source_id = _new_id("ms")
+    source_dir = (sources_root / source_id).resolve()
+    source_dir.relative_to(sources_root.resolve())
+    source_dir.mkdir(parents=False, exist_ok=False)
+    relative_file = f"source{suffix}"
+    source_path = _resolve_source_file(source_dir, relative_file)
+    now = _utc_now()
+    try:
+        source_sha256, copied_size = _atomic_copy_file_and_hash(staged_path, source_path)
+        if copied_size != source_size:
+            raise MediaSourcePreparationError("音视频素材在导入期间发生变化。")
+        manifest: dict[str, Any] = {
+            "schema_version": 1,
+            "source_id": source_id,
+            "project_scope": safe_scope,
+            "filename": safe_filename,
+            "source_file": relative_file,
+            "source_sha256": source_sha256,
+            "mime_type": mime_type,
+            "size_bytes": copied_size,
+            "created_at": now,
+            "probe": None,
+            "derived_audio": [],
+        }
+        _write_manifest(source_dir, manifest)
+    except Exception:
+        _remove_source_directory(source_dir)
+        raise
+    return _source_info(manifest)
+
+
 def get_media_source(
     source_id: str,
     *,
@@ -849,6 +907,27 @@ def _atomic_write_bytes(path: Path, content: bytes) -> None:
             target.flush()
             os.fsync(target.fileno())
         os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _atomic_copy_file_and_hash(source_path: Path, target_path: Path) -> tuple[str, int]:
+    """Copy a private staged file to its immutable source directory and hash that copy."""
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target_path.with_name(f".{target_path.name}.{uuid4().hex}.tmp")
+    digest = sha256()
+    copied_size = 0
+    try:
+        with source_path.open("rb") as source, temporary.open("wb") as target:
+            for block in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(block)
+                copied_size += len(block)
+                target.write(block)
+            target.flush()
+            os.fsync(target.fileno())
+        os.replace(temporary, target_path)
+        return digest.hexdigest(), copied_size
     finally:
         temporary.unlink(missing_ok=True)
 

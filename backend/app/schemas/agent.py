@@ -69,7 +69,7 @@ class AgentActionAdmissionDescriptor(BaseModel):
     action: str
     execution_mode: Literal["execute", "guided_handoff", "planning_only"]
     requires_runtime_ready: bool
-    material_kind: Literal["document", "dataset", "knowledge_base"] | None = None
+    material_kind: Literal["document", "dataset", "knowledge_base", "media_source"] | None = None
     expected_output: str
     verification_scope: str
     recovery_hint: str

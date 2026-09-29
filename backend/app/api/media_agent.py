@@ -10,10 +10,12 @@ import asyncio
 import base64
 import binascii
 import logging
+import os
+from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from app.schemas.media_workspace import (
@@ -86,12 +88,15 @@ from app.services.media_ai_edit_delivery import (
     run_media_ai_edit_task,
 )
 from app.services.media_source_preparation import (
+    MAX_MEDIA_SOURCE_BYTES,
     MediaSourcePreparationError,
     extract_primary_audio_for_transcription,
     get_media_source,
     import_media_source_bytes,
+    import_media_source_staged_file,
     probe_media_source,
 )
+from app.core.config import settings
 from app.services.media_transcription_delivery import (
     create_media_transcription_queued_run,
     get_media_transcription_task_result,
@@ -182,6 +187,34 @@ async def import_media_source_endpoint(project_id: str, request: MediaSourceImpo
         raise _media_error_to_http(exc) from exc
     except MediaSourcePreparationError as exc:
         raise _media_source_error_to_http(exc) from exc
+
+
+@router.post("/projects/{project_id}/media-sources/upload", response_model=MediaSourceInfo, status_code=201)
+async def upload_media_source_endpoint(
+    project_id: str,
+    file: UploadFile = File(...),
+) -> MediaSourceInfo:
+    """Stream one media file to private staging, then import a verified immutable copy."""
+
+    staged_path: Path | None = None
+    try:
+        await asyncio.to_thread(get_media_project, project_id)
+        filename = (file.filename or "").strip()
+        staged_path = await _stage_media_upload(file)
+        return await asyncio.to_thread(
+            import_media_source_staged_file,
+            project_scope=project_id,
+            filename=filename,
+            staged_path=staged_path,
+        )
+    except MediaWorkspaceError as exc:
+        raise _media_error_to_http(exc) from exc
+    except MediaSourcePreparationError as exc:
+        raise _media_source_error_to_http(exc) from exc
+    finally:
+        if staged_path is not None:
+            staged_path.unlink(missing_ok=True)
+        await file.close()
 
 
 @router.get("/projects/{project_id}/media-sources/{source_id}", response_model=MediaSourceInfo)
@@ -910,6 +943,32 @@ def _decode_media_source_base64(value: str) -> bytes:
         return base64.b64decode(value.encode("ascii"), validate=True)
     except (UnicodeEncodeError, ValueError, binascii.Error) as exc:
         raise MediaSourcePreparationError("媒体内容不是有效的 Base64 编码。") from exc
+
+
+async def _stage_media_upload(file: UploadFile) -> Path:
+    """Persist a bounded multipart upload without exposing or trusting any client path."""
+
+    if not (file.filename or "").strip():
+        raise MediaSourcePreparationError("音视频素材缺少文件名。")
+    staging_root = (settings.media_source_dir / "upload_staging").resolve()
+    staging_root.mkdir(parents=True, exist_ok=True)
+    staged_path = staging_root / f".upload-{uuid4().hex}.part"
+    total_size = 0
+    try:
+        with staged_path.open("xb") as target:
+            while block := await file.read(1024 * 1024):
+                total_size += len(block)
+                if total_size > MAX_MEDIA_SOURCE_BYTES:
+                    raise MediaSourcePreparationError("音视频素材超过当前受控导入上限 256 MB。")
+                target.write(block)
+            target.flush()
+            os.fsync(target.fileno())
+        if total_size == 0:
+            raise MediaSourcePreparationError("音视频素材不能为空。")
+        return staged_path
+    except Exception:
+        staged_path.unlink(missing_ok=True)
+        raise
 
 
 def _prepare_transcription_audio(project_id: str, source_id: str):  # type: ignore[no-untyped-def]

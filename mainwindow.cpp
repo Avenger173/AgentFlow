@@ -18,6 +18,7 @@
 
 #include <QAbstractItemView>
 #include <QAction>
+#include <QAudioOutput>
 #include <QApplication>
 #include <QBrush>
 #include <QCheckBox>
@@ -43,15 +44,18 @@
 #include <QLayout>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QLocale>
 #include <QListWidgetItem>
 #include <QMessageBox>
 #include <QMenu>
+#include <QMediaPlayer>
 #include <QPlainTextEdit>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QResizeEvent>
 #include <QScrollArea>
+#include <QSlider>
 #include <QSet>
 #include <QSignalBlocker>
 #include <QSize>
@@ -70,7 +74,10 @@
 #include <QToolTip>
 #include <QTimer>
 #include <QUrl>
+#include <QVideoWidget>
 #include <QVBoxLayout>
+
+#include <limits>
 
 #include <QStyle>
 #include <QColor>
@@ -408,6 +415,9 @@ QString dispatchNextActionText(const QString &action)
     }
     if (action == QStringLiteral("open_data_workspace")) {
         return QStringLiteral("前往数据工作台继续");
+    }
+    if (action == QStringLiteral("open_video_workspace")) {
+        return QStringLiteral("前往短视频剪辑工作区继续");
     }
     if (action == QStringLiteral("review_combination_plan")) {
         return QStringLiteral("组合计划待 Runtime 支持");
@@ -970,6 +980,7 @@ MainWindow::MainWindow(QWidget *parent)
     setupDocumentAgent();
     setupDataWorkspace();
     setupMediaWorkspace();
+    setupVideoWorkspace();
     setupKnowledgeBase();
     setupCodeWorkshop();
     setupModelPage();
@@ -1758,6 +1769,8 @@ void MainWindow::startNewDispatchConversation()
     dispatchSelectedDocumentRef.clear();
     dispatchSelectedKnowledgeBaseId.clear();
     dispatchSelectedDatasetRef.clear();
+    dispatchSelectedMediaSourceRef.clear();
+    dispatchSelectedMediaSourceDisplayName.clear();
     updateDispatchMaterialBindingsUi();
     ui->conversationTextEdit->clear();
     ui->dispatchInputEdit->clear();
@@ -2099,6 +2112,8 @@ void MainWindow::selectDispatchConversation(const QString &conversationId)
     dispatchSelectedDocumentRef.clear();
     dispatchSelectedKnowledgeBaseId.clear();
     dispatchSelectedDatasetRef.clear();
+    dispatchSelectedMediaSourceRef.clear();
+    dispatchSelectedMediaSourceDisplayName.clear();
     updateDispatchMaterialBindingsUi();
     ui->conversationTextEdit->clear();
     ui->dispatchInputEdit->clear();
@@ -2374,6 +2389,7 @@ void MainWindow::updateDispatchMaterialBindingsUi()
     const bool hasDocument = !dispatchSelectedDocumentRef.isEmpty();
     const bool hasKnowledge = !dispatchSelectedKnowledgeBaseId.isEmpty();
     const bool hasDataset = !dispatchSelectedDatasetRef.isEmpty();
+    const bool hasMediaSource = !dispatchSelectedMediaSourceRef.isEmpty();
     const bool canEdit = !dispatchSubmissionWaitingForBackend && !currentDispatchExecutionInProgress;
 
     const auto updateChip = [canEdit](QLabel *label,
@@ -2407,9 +2423,14 @@ void MainWindow::updateDispatchMaterialBindingsUi()
                QStringLiteral("本次只读数据文件：%1").arg(dispatchSelectedDatasetRef));
 
     const bool hasAgentHints = !buildDispatchAgentHints().isEmpty();
-    ui->dispatchMaterialsFrame->setVisible(hasDocument || hasKnowledge || hasDataset || hasAgentHints);
+    ui->dispatchMaterialsFrame->setVisible(hasDocument || hasKnowledge || hasDataset || hasMediaSource || hasAgentHints);
     ui->dispatchMaterialsHint->setText(
-        QStringLiteral("本次范围 · 材料可组合，路由可移除"));
+        hasMediaSource
+            ? QStringLiteral("本次范围 · 视频素材：%1 · 可与其他材料组合")
+                  .arg(dispatchSelectedMediaSourceDisplayName.isEmpty()
+                           ? dispatchSelectedMediaSourceRef
+                           : dispatchSelectedMediaSourceDisplayName)
+            : QStringLiteral("本次范围 · 材料可组合，路由可移除"));
     updateDispatchAgentHintsUi();
 }
 
@@ -3479,6 +3500,8 @@ void MainWindow::delegateKnowledgeBaseToCommander()
     // 多材料协作时仍可从调度台材料选择器显式添加。
     dispatchSelectedDocumentRef.clear();
     dispatchSelectedDatasetRef.clear();
+    dispatchSelectedMediaSourceRef.clear();
+    dispatchSelectedMediaSourceDisplayName.clear();
     removeDispatchAgentHint(QStringLiteral("document_agent"));
     removeDispatchAgentHint(QStringLiteral("data_agent"));
     insertDispatchAgentHint(QStringLiteral("knowledge_agent"));
@@ -3903,6 +3926,196 @@ void MainWindow::openMediaWorkspace(const QString &aiInstruction)
     }
 }
 
+void MainWindow::setupVideoWorkspace()
+{
+    videoPlayer_ = new QMediaPlayer(this);
+    videoAudioOutput_ = new QAudioOutput(this);
+    videoPlayer_->setAudioOutput(videoAudioOutput_);
+    videoPlayer_->setVideoOutput(ui->videoPreview);
+    ui->videoPlayButton->setIcon(style()->standardIcon(QStyle::SP_MediaPlay));
+    ui->videoPlayButton->setText(QString());
+
+    connect(ui->videoChooseButton, &QPushButton::clicked, this, &MainWindow::chooseVideoSourceFile);
+    connect(ui->videoImportButton, &QPushButton::clicked, this, &MainWindow::importSelectedVideoSource);
+    connect(ui->videoDelegateButton, &QPushButton::clicked, this, &MainWindow::delegateVideoSourceToCommander);
+    connect(ui->videoPlayButton, &QToolButton::clicked, this, [this]() {
+        if (!videoPlayer_ || videoLocalSourcePath.isEmpty()) {
+            return;
+        }
+        if (videoPlayer_->playbackState() == QMediaPlayer::PlayingState) {
+            videoPlayer_->pause();
+        } else {
+            videoPlayer_->play();
+        }
+    });
+    connect(ui->videoSeekSlider, &QSlider::sliderMoved, this, [this](int position) {
+        if (videoPlayer_) {
+            videoPlayer_->setPosition(position);
+        }
+    });
+    connect(videoPlayer_, &QMediaPlayer::durationChanged, this, [this](qint64) { updateVideoPlaybackUi(); });
+    connect(videoPlayer_, &QMediaPlayer::positionChanged, this, [this](qint64 position) { updateVideoPlaybackUi(position); });
+    connect(videoPlayer_, &QMediaPlayer::playbackStateChanged, this, [this](QMediaPlayer::PlaybackState state) {
+        ui->videoPlayButton->setIcon(style()->standardIcon(
+            state == QMediaPlayer::PlayingState ? QStyle::SP_MediaPause : QStyle::SP_MediaPlay));
+        ui->videoPlayButton->setToolTip(
+            state == QMediaPlayer::PlayingState ? QStringLiteral("暂停本地预览") : QStringLiteral("播放本地预览"));
+    });
+    connect(videoPlayer_, &QMediaPlayer::errorOccurred, this, [this](QMediaPlayer::Error, const QString &message) {
+        if (!message.trimmed().isEmpty()) {
+            ui->videoStatusLabel->setText(QStringLiteral("本地预览不可用：%1").arg(message.left(160)));
+        }
+    });
+
+    connect(backendClient, &BackendClient::mediaProjectCreated, this, [this](const MediaProjectInfo &project) {
+        if (!videoProjectCreationPending || videoLocalSourcePath.isEmpty()) {
+            return;
+        }
+        videoProjectCreationPending = false;
+        videoProjectId = project.projectId;
+        videoSourceImportPending = true;
+        ui->videoStatusLabel->setText(QStringLiteral("正在导入受控素材副本…"));
+        backendClient->importMediaSource(videoProjectId, videoLocalSourcePath);
+    });
+    connect(backendClient, &BackendClient::mediaSourceImported, this, [this](const MediaSourceInfo &source) {
+        if (!videoSourceImportPending || source.projectScope != videoProjectId) {
+            return;
+        }
+        videoSourceImportPending = false;
+        videoSourceId = source.sourceId;
+        videoSourceDisplayName = source.filename;
+        ui->videoImportButton->setEnabled(false);
+        ui->videoDelegateButton->setEnabled(true);
+        ui->videoStatusLabel->setText(
+            QStringLiteral("已导入受控素材，可交给调度台；尚未提交转写或调用模型。"));
+        ui->videoSourceMeta->setText(
+            QStringLiteral("%1 · %2 · 受控素材 %3")
+                .arg(source.mimeType, QLocale().formattedDataSize(source.sizeBytes), source.sourceId));
+    });
+    connect(backendClient, &BackendClient::mediaAgentFailed, this, [this](const QString &operation, const QString &message) {
+        if (operation != QStringLiteral("import_media_source")
+            && !(operation == QStringLiteral("create_project") && videoProjectCreationPending)) {
+            return;
+        }
+        videoProjectCreationPending = false;
+        videoSourceImportPending = false;
+        ui->videoImportButton->setEnabled(!videoLocalSourcePath.isEmpty());
+        ui->videoStatusLabel->setText(QStringLiteral("导入未完成：%1").arg(message.left(180)));
+    });
+    updateVideoPlaybackUi();
+}
+
+void MainWindow::openVideoWorkspace(const QString &goal, const QString &sourceId)
+{
+    switchPage(8);
+    if (!goal.trimmed().isEmpty()) {
+        ui->videoGoalEdit->setPlainText(goal.trimmed());
+    }
+    if (!sourceId.trimmed().isEmpty() && sourceId == videoSourceId) {
+        ui->videoStatusLabel->setText(QStringLiteral("已从 AI 调度台带回当前视频与剪辑目标；请复核后再提交下一步。"));
+    }
+    ui->videoGoalEdit->setFocus();
+}
+
+void MainWindow::chooseVideoSourceFile()
+{
+    const QString path = QFileDialog::getOpenFileName(
+        this,
+        QStringLiteral("选择短视频素材"),
+        QString(),
+        QStringLiteral("视频文件 (*.mp4 *.mov *.mkv *.webm)"));
+    if (path.isEmpty()) {
+        return;
+    }
+    const QFileInfo fileInfo(path);
+    constexpr qint64 maxMediaBytes = 256LL * 1024 * 1024;
+    if (!fileInfo.isFile() || fileInfo.size() <= 0) {
+        ui->videoStatusLabel->setText(QStringLiteral("所选文件不可读取。"));
+        return;
+    }
+    if (fileInfo.size() > maxMediaBytes) {
+        ui->videoStatusLabel->setText(QStringLiteral("当前仅支持不超过 256 MB 的单段视频素材。"));
+        return;
+    }
+
+    videoLocalSourcePath = fileInfo.absoluteFilePath();
+    videoProjectId.clear();
+    videoSourceId.clear();
+    videoSourceDisplayName = fileInfo.fileName();
+    videoProjectCreationPending = false;
+    videoSourceImportPending = false;
+    videoPlayer_->setSource(QUrl::fromLocalFile(videoLocalSourcePath));
+    ui->videoSourceTitle->setText(videoSourceDisplayName);
+    ui->videoSourceMeta->setText(
+        QStringLiteral("%1 · 本地预览，尚未上传")
+            .arg(QLocale().formattedDataSize(fileInfo.size())));
+    ui->videoImportButton->setEnabled(true);
+    ui->videoDelegateButton->setEnabled(false);
+    ui->videoStatusLabel->setText(QStringLiteral("已选择本地视频，可预览；点击“导入受控素材”后才会复制到 AgentFlow。"));
+}
+
+void MainWindow::importSelectedVideoSource()
+{
+    if (videoLocalSourcePath.isEmpty() || videoProjectCreationPending || videoSourceImportPending) {
+        return;
+    }
+    if (!backendManager || !backendManager->isReady()) {
+        ui->videoStatusLabel->setText(QStringLiteral("本地服务正在启动，服务就绪后再导入视频。"));
+        if (backendManager) {
+            backendManager->ensureStarted();
+        }
+        return;
+    }
+    videoProjectCreationPending = true;
+    ui->videoImportButton->setEnabled(false);
+    ui->videoStatusLabel->setText(QStringLiteral("正在创建受控素材项目…"));
+    backendClient->createMediaProject(
+        QStringLiteral("视频 · %1").arg(QFileInfo(videoLocalSourcePath).completeBaseName().left(80)));
+}
+
+void MainWindow::delegateVideoSourceToCommander()
+{
+    if (videoSourceId.isEmpty()) {
+        return;
+    }
+    dispatchSelectedDocumentRef.clear();
+    dispatchSelectedKnowledgeBaseId.clear();
+    dispatchSelectedDatasetRef.clear();
+    dispatchSelectedMediaSourceRef = videoSourceId;
+    dispatchSelectedMediaSourceDisplayName = videoSourceDisplayName;
+    removeDispatchAgentHint(QStringLiteral("document_agent"));
+    removeDispatchAgentHint(QStringLiteral("data_agent"));
+    removeDispatchAgentHint(QStringLiteral("knowledge_agent"));
+    switchPage(1);
+    const QString goal = ui->videoGoalEdit->toPlainText().trimmed();
+    ui->dispatchInputEdit->setText(
+        QStringLiteral("@多媒体助手 %1").arg(
+            goal.isEmpty() ? QStringLiteral("请根据当前视频生成待确认的剪辑候选片段。") : goal));
+    updateDispatchMaterialBindingsUi();
+    ui->dispatchChatStatus->setText(QStringLiteral("已带入受控视频素材；发送后将先进入短视频工作区复核。"));
+    ui->dispatchInputEdit->setFocus();
+}
+
+void MainWindow::updateVideoPlaybackUi(qint64 positionMs)
+{
+    if (!videoPlayer_) {
+        return;
+    }
+    const qint64 duration = qMax<qint64>(0, videoPlayer_->duration());
+    const qint64 position = positionMs >= 0 ? positionMs : qMax<qint64>(0, videoPlayer_->position());
+    const auto formatTime = [](qint64 milliseconds) {
+        const qint64 seconds = milliseconds / 1000;
+        return QStringLiteral("%1:%2")
+            .arg(seconds / 60, 2, 10, QLatin1Char('0'))
+            .arg(seconds % 60, 2, 10, QLatin1Char('0'));
+    };
+    QSignalBlocker blocker(ui->videoSeekSlider);
+    ui->videoSeekSlider->setEnabled(duration > 0);
+    ui->videoSeekSlider->setRange(0, static_cast<int>(qMin<qint64>(duration, std::numeric_limits<int>::max())));
+    ui->videoSeekSlider->setValue(static_cast<int>(qMin<qint64>(position, std::numeric_limits<int>::max())));
+    ui->videoTimeLabel->setText(QStringLiteral("%1 / %2").arg(formatTime(position), formatTime(duration)));
+}
+
 void MainWindow::setupDataWorkspace()
 {
     // 数据文件就绪后，客户最常做的是提出一个问题并得到图表/结论。准备说明、字段表与原始预览
@@ -4238,6 +4451,8 @@ void MainWindow::delegateDataDatasetToCommander()
     dispatchSelectedDocumentRef.clear();
     dispatchSelectedKnowledgeBaseId.clear();
     dispatchSelectedDatasetRef = datasetRef;
+    dispatchSelectedMediaSourceRef.clear();
+    dispatchSelectedMediaSourceDisplayName.clear();
     updateDispatchMaterialBindingsUi();
     switchPage(1);
 
@@ -4268,6 +4483,8 @@ void MainWindow::handleDataDatasetImported(const DataDatasetInfo &dataset)
         dispatchSelectedDocumentRef.clear();
         dispatchSelectedKnowledgeBaseId.clear();
         dispatchSelectedDatasetRef = datasetRef;
+        dispatchSelectedMediaSourceRef.clear();
+        dispatchSelectedMediaSourceDisplayName.clear();
         updateDispatchMaterialBindingsUi();
         removeDispatchAgentHint(QStringLiteral("document_agent"));
         removeDispatchAgentHint(QStringLiteral("knowledge_agent"));
@@ -11286,6 +11503,11 @@ bool MainWindow::isCurrentDispatchPublicReferenceSearch() const
 bool MainWindow::isCurrentDispatchMediaWorkspaceHandoff() const
 {
     return currentDispatchPlanSummary.nextAction == QStringLiteral("open_media_workspace");
+}
+
+bool MainWindow::isCurrentDispatchVideoWorkspaceHandoff() const
+{
+    return currentDispatchPlanSummary.nextAction == QStringLiteral("open_video_workspace");
 }
 
 bool MainWindow::isCurrentDispatchDataChartDelivery() const
@@ -19574,7 +19796,7 @@ void MainWindow::switchPage(int index)
         setActiveNavButton(ui->navVisionButton);
         break;
     case 8:
-        updateHeader("音视频工坊", "抽帧、转码、字幕、封面和视频分析");
+        updateHeader("短视频剪辑", "受控导入单段视频，带目标进入调度台复核");
         setActiveNavButton(ui->navVideoButton);
         break;
     case 9:
@@ -19973,6 +20195,16 @@ QJsonArray MainWindow::buildDispatchMaterialBindings() const
         binding.insert(QStringLiteral("usage"), QStringLiteral("用户在数据工作台完成画像后明确交给总指挥的数据文件。"));
         materials.append(binding);
     }
+    if (!dispatchSelectedMediaSourceRef.isEmpty()) {
+        QJsonObject binding;
+        binding.insert(QStringLiteral("binding_id"), QStringLiteral("dispatch_media_source"));
+        binding.insert(QStringLiteral("kind"), QStringLiteral("media_source"));
+        binding.insert(QStringLiteral("ref"), dispatchSelectedMediaSourceRef);
+        binding.insert(QStringLiteral("display_name"), dispatchSelectedMediaSourceDisplayName);
+        binding.insert(QStringLiteral("origin"), QStringLiteral("client_selected"));
+        binding.insert(QStringLiteral("usage"), QStringLiteral("用户在音视频工坊明确导入并选择的受控视频素材。"));
+        materials.append(binding);
+    }
     return materials;
 }
 
@@ -19993,6 +20225,8 @@ void MainWindow::queueDispatchMessageUntilBackendReady(const QString &message,
     dispatchSelectedDocumentRef.clear();
     dispatchSelectedKnowledgeBaseId.clear();
     dispatchSelectedDatasetRef.clear();
+    dispatchSelectedMediaSourceRef.clear();
+    dispatchSelectedMediaSourceDisplayName.clear();
     updateDispatchMaterialBindingsUi();
     ui->dispatchInputEdit->setReadOnly(true);
     ui->sendTaskButton->setEnabled(false);
@@ -20055,6 +20289,9 @@ void MainWindow::restoreQueuedDispatchMessage(const QString &reason)
             dispatchSelectedKnowledgeBaseId = ref;
         } else if (kind == QStringLiteral("dataset")) {
             dispatchSelectedDatasetRef = ref;
+        } else if (kind == QStringLiteral("media_source")) {
+            dispatchSelectedMediaSourceRef = ref;
+            dispatchSelectedMediaSourceDisplayName = binding.value(QStringLiteral("display_name")).toString();
         }
     }
     updateDispatchMaterialBindingsUi();
@@ -20216,6 +20453,8 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
             ? QStringLiteral("正在制作 PPT")
             : currentDispatchPresentationCompleted ? QStringLiteral("PPT 已生成")
                                                     : QStringLiteral("PPT 制作已受理");
+    } else if (isCurrentDispatchVideoWorkspaceHandoff()) {
+        taskSummary = QStringLiteral("已转入短视频剪辑工作区");
     } else if (isCurrentDispatchMediaWorkspaceHandoff()) {
         taskSummary = QStringLiteral("已转入图片工作区");
     } else if (currentDispatchGuidedHandoff) {
@@ -20273,6 +20512,10 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
             QStringLiteral("<hr/><h3>AI 调度台</h3><p><b>已开始制作 PPT。</b></p>"
                            "<p>正在生成创作计划、整理页面并导出可编辑 PPTX；完整进度会显示在独立创作窗口，"
                            "主对话不会被切走。</p>"));
+    } else if (isCurrentDispatchVideoWorkspaceHandoff()) {
+        appendConversationHtml(
+            QStringLiteral("<hr/><h3>AI 调度台</h3><p><b>已打开短视频剪辑工作区。</b></p>"
+                           "<p>已绑定本轮选择的视频和剪辑目标；此时尚未提交转写、候选片段或渲染。</p>"));
     } else if (isCurrentDispatchMediaWorkspaceHandoff()) {
         appendConversationHtml(
             QStringLiteral("<hr/><h3>AI 调度台</h3><p><b>已打开图片工作区。</b></p>"
@@ -20311,6 +20554,8 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
         dispatchStatus = QStringLiteral("等待开始联网检索");
     } else if (currentDispatchPresentationHandoff) {
         dispatchStatus = QStringLiteral("已识别 PPT 制作需求");
+    } else if (isCurrentDispatchVideoWorkspaceHandoff()) {
+        dispatchStatus = QStringLiteral("已识别短视频剪辑需求");
     } else if (isCurrentDispatchMediaWorkspaceHandoff()) {
         dispatchStatus = QStringLiteral("已识别图片编辑需求");
     } else if (currentDispatchGuidedHandoff) {
@@ -20370,6 +20615,12 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
             : currentDispatchPresentationCompleted
                   ? QStringLiteral("5 当前结论 · PPT 已交付")
                   : QStringLiteral("5 当前结论 · PPT 制作已受理");
+    } else if (isCurrentDispatchVideoWorkspaceHandoff()) {
+        stageThree = QStringLiteral("3 短视频工作区交接 · 等待复核素材与目标");
+        stageFour = QStringLiteral("4 模型调用 · 尚未提交");
+        stageFive = QStringLiteral("5 当前结论 · 已带入视频与剪辑目标");
+        stageThreeBadge = QStringLiteral("badgeGreen");
+        stageFiveBadge = QStringLiteral("badgeGreen");
     } else if (isCurrentDispatchMediaWorkspaceHandoff()) {
         stageThree = QStringLiteral("3 图片工作区交接 · 等待你选择当前版本");
         stageFour = QStringLiteral("4 模型调用 · 尚未提交");
@@ -20395,6 +20646,17 @@ void MainWindow::handleChatCompleted(const ChatResult &result)
         // 明确的“制作 PPT”请求直接进入现有创作/导出链；主窗口不切页，也不要求客户
         // 再重复点击“开始执行”。独立窗口负责展示计划、导出和回读验证进度。
         openPresentationStudioForPrompt(currentDispatchUserGoal, true);
+    } else if (isCurrentDispatchVideoWorkspaceHandoff()) {
+        QString sourceId;
+        QString goal = currentDispatchUserGoal;
+        for (const WorkflowStepInfo &step : currentDispatchPlanSteps) {
+            if (step.action == QStringLiteral("open_video_workspace")) {
+                sourceId = step.input.value(QStringLiteral("source_id")).toString();
+                goal = step.input.value(QStringLiteral("task_goal")).toString(goal).trimmed();
+                break;
+            }
+        }
+        openVideoWorkspace(goal, sourceId);
     } else if (isCurrentDispatchMediaWorkspaceHandoff()) {
         QString instruction = currentDispatchUserGoal;
         for (const WorkflowStepInfo &step : currentDispatchPlanSteps) {

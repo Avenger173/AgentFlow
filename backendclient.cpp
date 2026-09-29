@@ -3,6 +3,9 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QFile>
+#include <QFileInfo>
+#include <QHttpMultiPart>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QSet>
@@ -570,6 +573,19 @@ MediaImageAssetInfo readMediaImageAssetInfo(const QJsonObject &payload)
     asset.undoAvailable = payload.value(QStringLiteral("undo_available")).toBool();
     asset.redoAvailable = payload.value(QStringLiteral("redo_available")).toBool();
     return asset;
+}
+
+MediaSourceInfo readMediaSourceInfo(const QJsonObject &payload)
+{
+    MediaSourceInfo source;
+    source.sourceId = payload.value(QStringLiteral("source_id")).toString();
+    source.projectScope = payload.value(QStringLiteral("project_scope")).toString();
+    source.filename = payload.value(QStringLiteral("filename")).toString();
+    source.sourceSha256 = payload.value(QStringLiteral("source_sha256")).toString();
+    source.mimeType = payload.value(QStringLiteral("mime_type")).toString();
+    source.sizeBytes = static_cast<qint64>(payload.value(QStringLiteral("size_bytes")).toDouble());
+    source.createdAt = payload.value(QStringLiteral("created_at")).toString();
+    return source;
 }
 
 MediaImageRevisionInfo readMediaImageRevisionInfo(const QJsonObject &payload)
@@ -2817,6 +2833,58 @@ void BackendClient::importMediaImage(
     });
 }
 
+void BackendClient::importMediaSource(const QString &projectId, const QString &filePath)
+{
+    const QString normalizedProjectId = projectId.trimmed();
+    const QFileInfo fileInfo(filePath);
+    if (normalizedProjectId.isEmpty() || !fileInfo.isFile() || fileInfo.fileName().isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("import_media_source"), QStringLiteral("导入音视频素材缺少项目或有效文件。"));
+        return;
+    }
+
+    auto *file = new QFile(fileInfo.absoluteFilePath());
+    if (!file->open(QIODevice::ReadOnly)) {
+        const QString message = file->errorString();
+        file->deleteLater();
+        emit mediaAgentFailed(QStringLiteral("import_media_source"), QStringLiteral("无法读取音视频素材：%1").arg(message));
+        return;
+    }
+
+    auto *multipart = new QHttpMultiPart(QHttpMultiPart::FormDataType);
+    file->setParent(multipart);
+    QHttpPart filePart;
+    filePart.setHeader(
+        QNetworkRequest::ContentDispositionHeader,
+        QVariant(QStringLiteral("form-data; name=\"file\"; filename=\"%1\"").arg(fileInfo.fileName())));
+    filePart.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/octet-stream"));
+    filePart.setBodyDevice(file);
+    multipart->append(filePart);
+
+    QNetworkReply *reply = networkManager_.post(
+        createRequest(buildMediaAgentMediaSourceUploadUrl(normalizedProjectId), 10 * 60 * 1000), multipart);
+    multipart->setParent(reply);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        if (reply->error() != QNetworkReply::NoError) {
+            const QString message = replyErrorMessage(reply);
+            reply->deleteLater();
+            emit mediaAgentFailed(QStringLiteral("import_media_source"), message);
+            return;
+        }
+        const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+        reply->deleteLater();
+        if (!document.isObject()) {
+            emit mediaAgentFailed(QStringLiteral("import_media_source"), QStringLiteral("音视频素材导入响应无效。"));
+            return;
+        }
+        const MediaSourceInfo source = readMediaSourceInfo(document.object());
+        if (source.sourceId.isEmpty() || source.projectScope.isEmpty() || source.filename.isEmpty()) {
+            emit mediaAgentFailed(QStringLiteral("import_media_source"), QStringLiteral("音视频素材导入响应缺少受控素材信息。"));
+            return;
+        }
+        emit mediaSourceImported(source);
+    });
+}
+
 void BackendClient::requestMediaAssetRevisions(const QString &projectId, const QString &assetId)
 {
     if (projectId.trimmed().isEmpty() || assetId.trimmed().isEmpty()) {
@@ -4929,6 +4997,14 @@ QUrl BackendClient::buildMediaAgentImagesUrl(const QString &projectId) const
 {
     QUrl url(baseUrl_);
     url.setPath(QStringLiteral("/api/agents/media_agent/projects/%1/images")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(projectId))));
+    return url;
+}
+
+QUrl BackendClient::buildMediaAgentMediaSourceUploadUrl(const QString &projectId) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/agents/media_agent/projects/%1/media-sources/upload")
                     .arg(QString::fromUtf8(QUrl::toPercentEncoding(projectId))));
     return url;
 }

@@ -2668,8 +2668,9 @@ QPushButton#navGroupButton:hover {
 </layout>
 </widget></item>
 </layout></widget>
-<widget class="QWidget" name="videoPage"><layout class="QVBoxLayout" name="videoPageLayout">
-<property name="spacing"><number>12</number></property>
+<widget class="QWidget" name="videoPage">
+<layout class="QVBoxLayout" name="videoPageLayout">
+<property name="spacing"><number>14</number></property>
 <property name="leftMargin"><number>0</number></property>
 <property name="topMargin"><number>0</number></property>
 <property name="rightMargin"><number>0</number></property>
@@ -2677,62 +2678,151 @@ QPushButton#navGroupButton:hover {
 <item><widget class="QFrame" name="videoMainCard">
 <property name="objectName"><string>heroCard</string></property>
 <property name="frameShape"><enum>QFrame::Shape::NoFrame</enum></property>
-<layout class="QVBoxLayout" name="videoMainLayout">
-<property name="spacing"><number>8</number></property>
-<property name="leftMargin"><number>18</number></property>
-<property name="topMargin"><number>14</number></property>
-<property name="rightMargin"><number>18</number></property>
-<property name="bottomMargin"><number>14</number></property>
-<item><layout class="QHBoxLayout" name="videoHeadLayout">
+<layout class="QHBoxLayout" name="videoMainLayout">
 <property name="spacing"><number>14</number></property>
-<property name="leftMargin"><number>0</number></property>
-<property name="topMargin"><number>0</number></property>
-<property name="rightMargin"><number>0</number></property>
-<property name="bottomMargin"><number>0</number></property>
+<property name="leftMargin"><number>22</number></property>
+<property name="topMargin"><number>18</number></property>
+<property name="rightMargin"><number>22</number></property>
+<property name="bottomMargin"><number>18</number></property>
 <item><widget class="QLabel" name="videoIcon">
-<property name="minimumSize"><size><width>38</width><height>38</height></size></property>
-<property name="maximumSize"><size><width>38</width><height>38</height></size></property>
+<property name="minimumSize"><size><width>48</width><height>48</height></size></property>
+<property name="maximumSize"><size><width>48</width><height>48</height></size></property>
 <property name="styleSheet"><string notr="true">background:#EEF6FF;border-radius:12px;</string></property>
-<property name="text"><string></string></property>
 <property name="pixmap"><pixmap resource="resources.qrc">:/icons/video.svg</pixmap></property>
-<property name="scaledContents"><bool>false</bool></property>
 <property name="alignment"><set>Qt::AlignmentFlag::AlignCenter</set></property>
-</widget></item><item><layout class="QVBoxLayout" name="videoTextLayout">
-<property name="spacing"><number>4</number></property>
+</widget></item>
+<item><layout class="QVBoxLayout" name="videoTextLayout">
+<property name="spacing"><number>3</number></property>
 <property name="leftMargin"><number>0</number></property>
 <property name="topMargin"><number>0</number></property>
 <property name="rightMargin"><number>0</number></property>
 <property name="bottomMargin"><number>0</number></property>
 <item><widget class="QLabel" name="videoTitle">
 <property name="objectName"><string>heroTitle</string></property>
-<property name="text"><string>音视频工坊</string></property>
-<property name="visible"><bool>false</bool></property>
-<property name="wordWrap"><bool>true</bool></property>
-
-</widget></item><item><widget class="QLabel" name="videoSub">
+<property name="text"><string>短视频剪辑</string></property>
+</widget></item>
+<item><widget class="QLabel" name="videoSub">
 <property name="objectName"><string>subText</string></property>
-<property name="text"><string>FFmpeg 抽帧、转码、字幕、封面和视频分析。</string></property>
-<property name="wordWrap"><bool>true</bool></property>
-
+<property name="text"><string>先受控导入一段视频，再把素材与剪辑目标交给 AI 调度台。</string></property>
 </widget></item>
 </layout></item>
-</layout></item><item><spacer name="videoSpacer">
-<property name="orientation"><enum>Qt::Orientation::Vertical</enum></property>
-<property name="sizeType"><enum>QSizePolicy::Policy::Fixed</enum></property>
-<property name="sizeHint" stdset="0"><size><width>20</width><height>4</height></size></property>
-</spacer></item><item><widget class="QLineEdit" name="videoInput">
-<property name="minimumSize"><size><width>0</width><height>40</height></size></property>
-<property name="enabled"><bool>false</bool></property>
-
-<property name="placeholderText"><string>音视频能力准备中</string></property>
-</widget></item><item><spacer name="videoFill">
-<property name="orientation"><enum>Qt::Orientation::Vertical</enum></property>
-<property name="sizeType"><enum>QSizePolicy::Policy::Fixed</enum></property>
-<property name="sizeHint" stdset="0"><size><width>20</width><height>0</height></size></property>
+<item><spacer name="videoHeroFill">
+<property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property>
+<property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property>
 </spacer></item>
 </layout>
 </widget></item>
-</layout></widget>
+<item><widget class="QFrame" name="videoWorkbenchCard">
+<property name="objectName"><string>contentCard</string></property>
+<property name="frameShape"><enum>QFrame::Shape::NoFrame</enum></property>
+<layout class="QHBoxLayout" name="videoWorkbenchLayout">
+<property name="spacing"><number>18</number></property>
+<property name="leftMargin"><number>20</number></property>
+<property name="topMargin"><number>18</number></property>
+<property name="rightMargin"><number>20</number></property>
+<property name="bottomMargin"><number>20</number></property>
+<item><widget class="QFrame" name="videoPreviewPanel">
+<property name="minimumSize"><size><width>440</width><height>0</height></size></property>
+<property name="frameShape"><enum>QFrame::Shape::NoFrame</enum></property>
+<layout class="QVBoxLayout" name="videoPreviewLayout">
+<property name="spacing"><number>10</number></property>
+<property name="leftMargin"><number>0</number></property>
+<property name="topMargin"><number>0</number></property>
+<property name="rightMargin"><number>0</number></property>
+<property name="bottomMargin"><number>0</number></property>
+<item><widget class="QVideoWidget" name="videoPreview">
+<property name="minimumSize"><size><width>440</width><height>248</height></size></property>
+<property name="styleSheet"><string notr="true">background:#0F172A;border:1px solid #CBD5E1;border-radius:6px;</string></property>
+</widget></item>
+<item><layout class="QHBoxLayout" name="videoPlaybackLayout">
+<property name="spacing"><number>8</number></property>
+<property name="leftMargin"><number>0</number></property>
+<property name="topMargin"><number>0</number></property>
+<property name="rightMargin"><number>0</number></property>
+<property name="bottomMargin"><number>0</number></property>
+<item><widget class="QToolButton" name="videoPlayButton">
+<property name="objectName"><string>ghostButton</string></property>
+<property name="minimumSize"><size><width>40</width><height>36</height></size></property>
+<property name="toolTip"><string>播放或暂停本地预览</string></property>
+</widget></item>
+<item><widget class="QSlider" name="videoSeekSlider">
+<property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property>
+<property name="enabled"><bool>false</bool></property>
+</widget></item>
+<item><widget class="QLabel" name="videoTimeLabel">
+<property name="objectName"><string>subText</string></property>
+<property name="minimumSize"><size><width>92</width><height>0</height></size></property>
+<property name="text"><string>00:00 / 00:00</string></property>
+<property name="alignment"><set>Qt::AlignmentFlag::AlignRight|Qt::AlignmentFlag::AlignVCenter</set></property>
+</widget></item>
+</layout></item>
+</layout>
+</widget></item>
+<item><widget class="QFrame" name="videoSourcePanel">
+<property name="minimumSize"><size><width>300</width><height>0</height></size></property>
+<property name="maximumSize"><size><width>420</width><height>16777215</height></size></property>
+<property name="frameShape"><enum>QFrame::Shape::NoFrame</enum></property>
+<layout class="QVBoxLayout" name="videoSourceLayout">
+<property name="spacing"><number>10</number></property>
+<property name="leftMargin"><number>0</number></property>
+<property name="topMargin"><number>0</number></property>
+<property name="rightMargin"><number>0</number></property>
+<property name="bottomMargin"><number>0</number></property>
+<item><widget class="QLabel" name="videoSourceHeader">
+<property name="objectName"><string>sectionTitle</string></property>
+<property name="text"><string>当前素材</string></property>
+</widget></item>
+<item><widget class="QLabel" name="videoSourceTitle">
+<property name="objectName"><string>bodyText</string></property>
+<property name="text"><string>尚未选择视频</string></property>
+<property name="wordWrap"><bool>true</bool></property>
+</widget></item>
+<item><widget class="QLabel" name="videoSourceMeta">
+<property name="objectName"><string>tinyText</string></property>
+<property name="text"><string>支持 MP4、MOV、MKV、WebM，单段不超过 256 MB。</string></property>
+<property name="wordWrap"><bool>true</bool></property>
+</widget></item>
+<item><widget class="QPushButton" name="videoChooseButton">
+<property name="objectName"><string>secondaryButton</string></property>
+<property name="minimumSize"><size><width>0</width><height>40</height></size></property>
+<property name="text"><string>选择视频</string></property>
+</widget></item>
+<item><widget class="QPushButton" name="videoImportButton">
+<property name="objectName"><string>primaryButton</string></property>
+<property name="minimumSize"><size><width>0</width><height>40</height></size></property>
+<property name="enabled"><bool>false</bool></property>
+<property name="text"><string>导入受控素材</string></property>
+</widget></item>
+<item><widget class="QLabel" name="videoGoalHeader">
+<property name="objectName"><string>sectionTitle</string></property>
+<property name="text"><string>剪辑目标</string></property>
+</widget></item>
+<item><widget class="QPlainTextEdit" name="videoGoalEdit">
+<property name="minimumSize"><size><width>0</width><height>104</height></size></property>
+<property name="placeholderText"><string>例如：保留介绍产品功能的片段，生成待确认的剪辑候选。</string></property>
+</widget></item>
+<item><widget class="QLabel" name="videoStatusLabel">
+<property name="objectName"><string>subText</string></property>
+<property name="text"><string>选择视频后可本地预览；导入前不会复制文件。</string></property>
+<property name="wordWrap"><bool>true</bool></property>
+</widget></item>
+<item><widget class="QPushButton" name="videoDelegateButton">
+<property name="objectName"><string>secondaryButton</string></property>
+<property name="minimumSize"><size><width>0</width><height>40</height></size></property>
+<property name="enabled"><bool>false</bool></property>
+<property name="text"><string>交给调度台</string></property>
+<property name="toolTip"><string>把已导入的视频素材和当前目标带入 AI 调度台</string></property>
+</widget></item>
+</layout>
+</widget></item>
+</layout>
+</widget></item>
+<item><spacer name="videoFill">
+<property name="orientation"><enum>Qt::Orientation::Vertical</enum></property>
+<property name="sizeHint" stdset="0"><size><width>20</width><height>40</height></size></property>
+</spacer></item>
+</layout>
+</widget>
 <widget class="QWidget" name="knowledgePage"><layout class="QVBoxLayout" name="knowledgePageLayout">
 <property name="spacing"><number>14</number></property>
 <property name="leftMargin"><number>0</number></property>
@@ -3678,6 +3768,13 @@ border-radius: 22px;</string></property>
 </layout>
 </widget>
 </widget>
+<customwidgets>
+<customwidget>
+<class>QVideoWidget</class>
+<extends>QWidget</extends>
+<header>QVideoWidget</header>
+</customwidget>
+</customwidgets>
 <resources>
 <include location="resources.qrc"/>
 </resources>

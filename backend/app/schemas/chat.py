@@ -12,7 +12,7 @@ RiskLevel = Literal["low", "medium", "high"]
 CommandRiskLevel = Literal["none", "read_only", "diagnostic", "modifying", "network", "high_risk"]
 WorkflowExecutionMode = Literal["execute", "guided_handoff", "planning_only"]
 WorkflowAdmissionStatus = Literal["ready", "guided", "blocked"]
-WorkflowMaterialKind = Literal["document", "dataset", "knowledge_base", "artifact"]
+WorkflowMaterialKind = Literal["document", "dataset", "knowledge_base", "media_source", "artifact"]
 WorkflowMaterialOrigin = Literal["client_selected", "user_named", "task_artifact"]
 # 组合计划在 C6.3 先表达依赖图，不允许旧 Runtime 把它误当成已经具备结果汇总能力的
 # 多 Agent 执行任务。等 C6.4 具备父任务汇总与有限并发后，才会解除该保护。
