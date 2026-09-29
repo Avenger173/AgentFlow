@@ -1232,6 +1232,12 @@ void MainWindow::setupBackendIntegration()
         // 把请求交给尚未监听的端口并等到超时；材料范围已在点击发送时冻结。
         flushQueuedDispatchMessage();
         requestDispatchConversationContext();
+        // 视频选择已是“选择并导入”的单一客户动作。若刚好发生在后端启动期，只恢复这一次
+        // 已明确选定的本地文件导入，不读取新路径、不发起转写或模型调用。
+        if (videoImportAfterBackendReady && !videoLocalSourcePath.isEmpty()
+            && !videoProjectCreationPending && !videoSourceImportPending && videoSourceId.isEmpty()) {
+            importSelectedVideoSource();
+        }
     });
     connect(backendManager, &BackendManager::unavailable, this, [this](const QString &message) {
         restoreQueuedDispatchMessage(message);
@@ -3937,7 +3943,6 @@ void MainWindow::setupVideoWorkspace()
     ui->videoPlayButton->setText(QString());
 
     connect(ui->videoChooseButton, &QPushButton::clicked, this, &MainWindow::chooseVideoSourceFile);
-    connect(ui->videoImportButton, &QPushButton::clicked, this, &MainWindow::importSelectedVideoSource);
     connect(ui->videoTranscribeButton, &QPushButton::clicked, this, &MainWindow::startVideoTranscription);
     connect(ui->videoCandidateButton, &QPushButton::clicked, this, &MainWindow::startVideoEdlCandidate);
     connect(ui->videoRenderButton, &QPushButton::clicked, this, [this]() {
@@ -4002,7 +4007,8 @@ void MainWindow::setupVideoWorkspace()
         videoSourceImportPending = false;
         videoSourceId = source.sourceId;
         videoSourceDisplayName = source.filename;
-        ui->videoImportButton->setEnabled(false);
+        ui->videoChooseButton->setEnabled(true);
+        ui->videoChooseButton->setText(QStringLiteral("重新选择视频"));
         ui->videoTranscribeButton->setEnabled(true);
         ui->videoDelegateButton->setEnabled(true);
         updateVideoCandidateButton();
@@ -4258,7 +4264,8 @@ void MainWindow::setupVideoWorkspace()
         if (importFailure) {
             videoProjectCreationPending = false;
             videoSourceImportPending = false;
-            ui->videoImportButton->setEnabled(!videoLocalSourcePath.isEmpty());
+            ui->videoChooseButton->setEnabled(true);
+            ui->videoChooseButton->setText(QStringLiteral("重新选择视频"));
             ui->videoStatusLabel->setText(QStringLiteral("导入未完成：%1").arg(message.left(180)));
             return;
         }
@@ -4358,6 +4365,7 @@ void MainWindow::chooseVideoSourceFile()
     videoSourceDisplayName = fileInfo.fileName();
     videoProjectCreationPending = false;
     videoSourceImportPending = false;
+    videoImportAfterBackendReady = false;
     videoTranscriptionAudioId.clear();
     videoTranscriptionTaskId.clear();
     videoCompletedTranscriptionTaskId.clear();
@@ -4369,12 +4377,14 @@ void MainWindow::chooseVideoSourceFile()
     ui->videoSourceMeta->setText(
         QStringLiteral("%1 · 本地预览，尚未上传")
             .arg(QLocale().formattedDataSize(fileInfo.size())));
-    ui->videoImportButton->setEnabled(true);
+    ui->videoChooseButton->setText(QStringLiteral("正在导入视频..."));
+    ui->videoChooseButton->setEnabled(false);
     ui->videoTranscribeButton->setEnabled(false);
     ui->videoTranscribeButton->setText(QStringLiteral("提交转写"));
     ui->videoDelegateButton->setEnabled(false);
     ui->videoTranscriptEdit->clear();
-    ui->videoStatusLabel->setText(QStringLiteral("已选择本地视频，可预览；点击“导入受控素材”后才会复制到 AgentFlow。"));
+    ui->videoStatusLabel->setText(QStringLiteral("已选择本地视频，正在创建受控副本…"));
+    importSelectedVideoSource();
 }
 
 void MainWindow::importSelectedVideoSource()
@@ -4383,14 +4393,19 @@ void MainWindow::importSelectedVideoSource()
         return;
     }
     if (!backendManager || !backendManager->isReady()) {
-        ui->videoStatusLabel->setText(QStringLiteral("本地服务正在启动，服务就绪后再导入视频。"));
+        videoImportAfterBackendReady = true;
+        ui->videoChooseButton->setEnabled(true);
+        ui->videoChooseButton->setText(QStringLiteral("重新选择视频"));
+        ui->videoStatusLabel->setText(QStringLiteral("本地服务正在启动，服务就绪后会自动导入当前视频。"));
         if (backendManager) {
             backendManager->ensureStarted();
         }
         return;
     }
+    videoImportAfterBackendReady = false;
     videoProjectCreationPending = true;
-    ui->videoImportButton->setEnabled(false);
+    ui->videoChooseButton->setEnabled(false);
+    ui->videoChooseButton->setText(QStringLiteral("正在导入视频..."));
     ui->videoStatusLabel->setText(QStringLiteral("正在创建受控素材项目…"));
     backendClient->createMediaProject(
         QStringLiteral("视频 · %1").arg(QFileInfo(videoLocalSourcePath).completeBaseName().left(80)));

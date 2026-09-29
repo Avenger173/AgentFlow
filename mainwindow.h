@@ -901,6 +901,7 @@ private:
     QString videoSourceDisplayName;
     bool videoProjectCreationPending = false;
     bool videoSourceImportPending = false;
+    bool videoImportAfterBackendReady = false;
     QString videoTranscriptionAudioId;
     QString videoTranscriptionTaskId;
     QString videoCompletedTranscriptionTaskId;

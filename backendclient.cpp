@@ -2992,8 +2992,11 @@ void BackendClient::importMediaSource(const QString &projectId, const QString &f
     filePart.setBodyDevice(file);
     multipart->append(filePart);
 
-    QNetworkReply *reply = networkManager_.post(
-        createRequest(buildMediaAgentMediaSourceUploadUrl(normalizedProjectId), 10 * 60 * 1000), multipart);
+    // `createRequest()` 为 JSON API 预设 Content-Type；multipart 必须让 QHttpMultiPart 写入
+    // 自己的 boundary，否则 FastAPI 无法识别 name="file" 的字段而返回 HTTP 422。
+    QNetworkRequest uploadRequest(buildMediaAgentMediaSourceUploadUrl(normalizedProjectId));
+    uploadRequest.setTransferTimeout(10 * 60 * 1000);
+    QNetworkReply *reply = networkManager_.post(uploadRequest, multipart);
     multipart->setParent(reply);
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         if (reply->error() != QNetworkReply::NoError) {

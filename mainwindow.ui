@@ -2803,15 +2803,10 @@ QPushButton#navGroupButton:hover {
 <property name="wordWrap"><bool>true</bool></property>
 </widget></item>
 <item><widget class="QPushButton" name="videoChooseButton">
-<property name="objectName"><string>secondaryButton</string></property>
-<property name="minimumSize"><size><width>0</width><height>40</height></size></property>
-<property name="text"><string>选择视频</string></property>
-</widget></item>
-<item><widget class="QPushButton" name="videoImportButton">
 <property name="objectName"><string>primaryButton</string></property>
 <property name="minimumSize"><size><width>0</width><height>40</height></size></property>
-<property name="enabled"><bool>false</bool></property>
-<property name="text"><string>导入受控素材</string></property>
+<property name="text"><string>选择并导入视频</string></property>
+<property name="toolTip"><string>选择后会创建受控副本用于转写和剪辑，原视频不会被修改。</string></property>
 </widget></item>
 <item><widget class="QPushButton" name="videoTranscribeButton">
 <property name="objectName"><string>primaryButton</string></property>
