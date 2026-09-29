@@ -496,6 +496,7 @@ QPushButton#navGroupButton:hover {
 
 <property name="icon"><iconset resource="resources.qrc"><normaloff>:/icons/video.svg</normaloff>:/icons/video.svg</iconset></property>
 <property name="iconSize"><size><width>20</width><height>20</height></size></property>
+<property name="accessibleName"><string>短视频剪辑</string></property>
 <property name="text"><string>  音视频工坊</string></property>
 </widget></item><item><widget class="QPushButton" name="navKnowledgeButton">
 
@@ -2765,6 +2766,16 @@ QPushButton#navGroupButton:hover {
 <property name="readOnly"><bool>true</bool></property>
 <property name="placeholderText"><string>导入后主动提交转写，完成的带时间标记文本会显示在这里。</string></property>
 </widget></item>
+<item><widget class="QLabel" name="videoCandidateHeader">
+<property name="objectName"><string>sectionTitle</string></property>
+<property name="text"><string>待确认候选</string></property>
+</widget></item>
+<item><widget class="QPlainTextEdit" name="videoCandidateEdit">
+<property name="minimumSize"><size><width>0</width><height>104</height></size></property>
+<property name="accessibleName"><string>候选片段复核</string></property>
+<property name="readOnly"><bool>true</bool></property>
+<property name="placeholderText"><string>完成转写并填写剪辑目标后，待确认的片段范围和理由会显示在这里。</string></property>
+</widget></item>
 </layout>
 </widget></item>
 <item><widget class="QFrame" name="videoSourcePanel">
@@ -2815,7 +2826,15 @@ QPushButton#navGroupButton:hover {
 </widget></item>
 <item><widget class="QPlainTextEdit" name="videoGoalEdit">
 <property name="minimumSize"><size><width>0</width><height>104</height></size></property>
+<property name="accessibleName"><string>剪辑目标输入</string></property>
 <property name="placeholderText"><string>例如：保留介绍产品功能的片段，生成待确认的剪辑候选。</string></property>
+</widget></item>
+<item><widget class="QPushButton" name="videoCandidateButton">
+<property name="objectName"><string>secondaryButton</string></property>
+<property name="minimumSize"><size><width>0</width><height>40</height></size></property>
+<property name="enabled"><bool>false</bool></property>
+<property name="text"><string>生成剪辑候选</string></property>
+<property name="toolTip"><string>使用已完成转写和当前剪辑目标生成待确认片段；不会渲染或修改视频。</string></property>
 </widget></item>
 <item><widget class="QLabel" name="videoStatusLabel">
 <property name="objectName"><string>subText</string></property>

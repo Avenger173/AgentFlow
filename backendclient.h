@@ -521,6 +521,34 @@ struct MediaTranscriptionTaskResult
     QList<MediaTranscriptionSegmentInfo> segments;
 };
 
+// 候选剪辑仅描述已验证转写中的句段和时间范围；渲染仍需要后续的显式确认。
+struct MediaEdlCandidateSelectionInfo
+{
+    int startSentenceId = 0;
+    int endSentenceId = 0;
+    qint64 beginMs = 0;
+    qint64 endMs = 0;
+    QString reason;
+};
+
+struct MediaEdlCandidateTaskResult
+{
+    QString taskId;
+    QString status;
+    QString summary;
+    QString message;
+    QString failureReason;
+    QString clarificationQuestion;
+    QString sourceId;
+    QString transcriptionTaskId;
+    QString goal;
+    bool hasCandidate = false;
+    bool requiresConfirmation = false;
+    QList<MediaEdlCandidateSelectionInfo> selections;
+};
+
+Q_DECLARE_METATYPE(MediaEdlCandidateTaskResult)
+
 struct MediaAssetRevisionListResult
 {
     MediaImageAssetInfo asset;
@@ -1452,6 +1480,11 @@ public:
         const QString &audioId,
         const QStringList &languageHints = {});
     void requestMediaTranscriptionResult(const QString &taskId);
+    void startMediaEdlCandidate(
+        const QString &projectId,
+        const QString &transcriptionTaskId,
+        const QString &goal);
+    void requestMediaEdlCandidateResult(const QString &taskId);
     void requestMediaAssetRevisions(const QString &projectId, const QString &assetId);
     void requestMediaImageLayerStack(
         const QString &projectId,
@@ -1850,6 +1883,10 @@ signals:
     void mediaTranscriptionTaskStillRunning(const QString &taskId, const QString &status, const QString &summary);
     void mediaTranscriptionTaskCompleted(const MediaTranscriptionTaskResult &result);
     void mediaTranscriptionTaskCancelled(const QString &taskId, const QString &message);
+    void mediaEdlCandidateTaskStarted(const QString &taskId);
+    void mediaEdlCandidateTaskStillRunning(const QString &taskId, const QString &status, const QString &summary);
+    void mediaEdlCandidateTaskCompleted(const MediaEdlCandidateTaskResult &result);
+    void mediaEdlCandidateTaskCancelled(const QString &taskId, const QString &message);
     void mediaAssetRevisionsReceived(const MediaAssetRevisionListResult &result);
     void mediaImageLayerStackReceived(const MediaImageLayerStackResult &result);
     void mediaImageRevisionCreated(const MediaImageRevisionInfo &revision);
@@ -1958,6 +1995,8 @@ private:
     QUrl buildMediaAgentTranscriptionAudioUrl(const QString &projectId, const QString &sourceId) const;
     QUrl buildMediaAgentTranscriptionStartUrl(const QString &projectId) const;
     QUrl buildMediaAgentTranscriptionResultUrl(const QString &taskId) const;
+    QUrl buildMediaAgentEdlCandidateStartUrl(const QString &projectId) const;
+    QUrl buildMediaAgentEdlCandidateResultUrl(const QString &taskId) const;
     QUrl buildMediaAgentAssetRevisionsUrl(const QString &projectId, const QString &assetId) const;
     QUrl buildMediaAgentRevisionLayerStackUrl(
         const QString &projectId,
@@ -2078,6 +2117,8 @@ private:
     void handleMediaTranscriptionAudioReply(QNetworkReply *reply);
     void handleMediaTranscriptionStartReply(QNetworkReply *reply);
     void handleMediaTranscriptionResultReply(QNetworkReply *reply);
+    void handleMediaEdlCandidateStartReply(QNetworkReply *reply);
+    void handleMediaEdlCandidateResultReply(QNetworkReply *reply);
     void handleMediaImageRevisionTaskStartReply(QNetworkReply *reply);
     void handleMediaImageRevisionTaskResultReply(QNetworkReply *reply);
     void handleMediaImageAiEditTaskStartReply(QNetworkReply *reply);

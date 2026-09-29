@@ -199,8 +199,13 @@ private:
     void importSelectedVideoSource();
     void startVideoTranscription();
     void requestVideoTranscriptionResult();
+    void startVideoEdlCandidate();
+    void requestVideoEdlCandidateResult();
     void delegateVideoSourceToCommander();
     QString formatVideoTranscript(const MediaTranscriptionTaskResult &result) const;
+    QString formatVideoEdlCandidate(const MediaEdlCandidateTaskResult &result) const;
+    void resetVideoEdlCandidateUi();
+    void updateVideoCandidateButton();
     void updateVideoPlaybackUi(qint64 positionMs = -1);
     void importDataDatasetFromFile();
     void refreshDataDatasets();
@@ -892,8 +897,12 @@ private:
     bool videoSourceImportPending = false;
     QString videoTranscriptionAudioId;
     QString videoTranscriptionTaskId;
+    QString videoCompletedTranscriptionTaskId;
     bool videoTranscriptionPending = false;
     bool videoTranscriptionRunning = false;
+    QString videoEdlCandidateTaskId;
+    bool videoEdlCandidatePending = false;
+    bool videoEdlCandidateRunning = false;
     QString currentDispatchKnowledgeAnswerChildTaskId;
     // 暂存请求同时冻结本轮显式路由偏好，避免后端启动期间客户编辑输入后改变已排队任务。
     QJsonArray pendingDispatchAgentHints;

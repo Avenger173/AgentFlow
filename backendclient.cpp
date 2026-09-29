@@ -628,6 +628,46 @@ MediaTranscriptionTaskResult readMediaTranscriptionTaskResult(const QJsonObject 
     return result;
 }
 
+MediaEdlCandidateTaskResult readMediaEdlCandidateTaskResult(const QJsonObject &payload)
+{
+    MediaEdlCandidateTaskResult result;
+    result.taskId = payload.value(QStringLiteral("task_id")).toString();
+    result.status = payload.value(QStringLiteral("status")).toString();
+    result.summary = payload.value(QStringLiteral("summary")).toString();
+    result.message = payload.value(QStringLiteral("message")).toString();
+    result.failureReason = payload.value(QStringLiteral("failure_reason")).toString();
+    result.clarificationQuestion = payload.value(QStringLiteral("clarification_question")).toString();
+
+    const QJsonObject candidate = payload.value(QStringLiteral("candidate")).toObject();
+    if (candidate.isEmpty()) {
+        return result;
+    }
+    result.sourceId = candidate.value(QStringLiteral("source_id")).toString();
+    result.transcriptionTaskId = candidate.value(QStringLiteral("transcription_task_id")).toString();
+    result.goal = candidate.value(QStringLiteral("goal")).toString();
+    result.requiresConfirmation = candidate.value(QStringLiteral("requires_confirmation")).toBool();
+    const QJsonArray selections = candidate.value(QStringLiteral("selections")).toArray();
+    result.selections.reserve(selections.size());
+    for (const QJsonValue &value : selections) {
+        if (!value.isObject()) {
+            continue;
+        }
+        const QJsonObject selectionPayload = value.toObject();
+        MediaEdlCandidateSelectionInfo selection;
+        selection.startSentenceId = selectionPayload.value(QStringLiteral("start_sentence_id")).toInt();
+        selection.endSentenceId = selectionPayload.value(QStringLiteral("end_sentence_id")).toInt();
+        selection.beginMs = static_cast<qint64>(selectionPayload.value(QStringLiteral("begin_ms")).toDouble());
+        selection.endMs = static_cast<qint64>(selectionPayload.value(QStringLiteral("end_ms")).toDouble());
+        selection.reason = selectionPayload.value(QStringLiteral("reason")).toString();
+        if (selection.endMs > selection.beginMs && !selection.reason.trimmed().isEmpty()) {
+            result.selections.append(selection);
+        }
+    }
+    result.hasCandidate = !result.sourceId.isEmpty() && !result.transcriptionTaskId.isEmpty()
+        && !result.goal.isEmpty() && result.requiresConfirmation && !result.selections.isEmpty();
+    return result;
+}
+
 MediaImageRevisionInfo readMediaImageRevisionInfo(const QJsonObject &payload)
 {
     MediaImageRevisionInfo revision;
@@ -2974,6 +3014,39 @@ void BackendClient::requestMediaTranscriptionResult(const QString &taskId)
     });
 }
 
+void BackendClient::startMediaEdlCandidate(
+    const QString &projectId,
+    const QString &transcriptionTaskId,
+    const QString &goal)
+{
+    if (projectId.trimmed().isEmpty() || transcriptionTaskId.trimmed().isEmpty() || goal.trimmed().size() < 2) {
+        emit mediaAgentFailed(QStringLiteral("start_edl_candidate"), QStringLiteral("生成剪辑候选缺少已完成转写或剪辑目标。"));
+        return;
+    }
+    QJsonObject payload;
+    payload.insert(QStringLiteral("transcription_task_id"), transcriptionTaskId.trimmed());
+    payload.insert(QStringLiteral("goal"), goal.trimmed());
+    QNetworkReply *reply = networkManager_.post(
+        createRequest(buildMediaAgentEdlCandidateStartUrl(projectId.trimmed()), 10000),
+        QJsonDocument(payload).toJson(QJsonDocument::Compact));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        handleMediaEdlCandidateStartReply(reply);
+    });
+}
+
+void BackendClient::requestMediaEdlCandidateResult(const QString &taskId)
+{
+    if (taskId.trimmed().isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("edl_candidate_task_result"), QStringLiteral("剪辑候选任务 ID 为空。"));
+        return;
+    }
+    QNetworkReply *reply = networkManager_.get(
+        createRequest(buildMediaAgentEdlCandidateResultUrl(taskId.trimmed()), 10000));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        handleMediaEdlCandidateResultReply(reply);
+    });
+}
+
 void BackendClient::requestMediaAssetRevisions(const QString &projectId, const QString &assetId)
 {
     if (projectId.trimmed().isEmpty() || assetId.trimmed().isEmpty()) {
@@ -5123,6 +5196,22 @@ QUrl BackendClient::buildMediaAgentTranscriptionResultUrl(const QString &taskId)
     return url;
 }
 
+QUrl BackendClient::buildMediaAgentEdlCandidateStartUrl(const QString &projectId) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/agents/media_agent/projects/%1/edl-candidates/start")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(projectId))));
+    return url;
+}
+
+QUrl BackendClient::buildMediaAgentEdlCandidateResultUrl(const QString &taskId) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/agents/media_agent/edl-candidates/%1/result")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(taskId))));
+    return url;
+}
+
 QUrl BackendClient::buildMediaAgentAssetRevisionsUrl(
     const QString &projectId,
     const QString &assetId) const
@@ -6596,6 +6685,65 @@ void BackendClient::handleMediaTranscriptionResultReply(QNetworkReply *reply)
     emit mediaAgentFailed(
         QStringLiteral("transcription_task_result"),
         result.message.isEmpty() ? QStringLiteral("转写未完成，请在任务历史中查看原因。") : result.message);
+}
+
+void BackendClient::handleMediaEdlCandidateStartReply(QNetworkReply *reply)
+{
+    if (reply->error() != QNetworkReply::NoError) {
+        const QString message = replyErrorMessage(reply);
+        reply->deleteLater();
+        emit mediaAgentFailed(QStringLiteral("start_edl_candidate"), message);
+        return;
+    }
+    const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+    reply->deleteLater();
+    const QJsonObject payload = document.object();
+    const QString taskId = payload.value(QStringLiteral("task_id")).toString().trimmed();
+    if (!document.isObject() || taskId.isEmpty()
+        || payload.value(QStringLiteral("status")).toString() != QStringLiteral("queued")) {
+        emit mediaAgentFailed(QStringLiteral("start_edl_candidate"), QStringLiteral("剪辑候选任务未返回有效受理状态。"));
+        return;
+    }
+    emit mediaEdlCandidateTaskStarted(taskId);
+}
+
+void BackendClient::handleMediaEdlCandidateResultReply(QNetworkReply *reply)
+{
+    if (reply->error() != QNetworkReply::NoError) {
+        const QString message = replyErrorMessage(reply);
+        reply->deleteLater();
+        emit mediaAgentFailed(QStringLiteral("edl_candidate_task_result"), message);
+        return;
+    }
+    const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+    reply->deleteLater();
+    if (!document.isObject()) {
+        emit mediaAgentFailed(QStringLiteral("edl_candidate_task_result"), QStringLiteral("剪辑候选结果响应格式无效。"));
+        return;
+    }
+    const MediaEdlCandidateTaskResult result = readMediaEdlCandidateTaskResult(document.object());
+    if (result.taskId.isEmpty() || result.status.isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("edl_candidate_task_result"), QStringLiteral("剪辑候选结果缺少任务状态。"));
+        return;
+    }
+    if (result.status == QStringLiteral("queued") || result.status == QStringLiteral("pending")
+        || result.status == QStringLiteral("running")) {
+        emit mediaEdlCandidateTaskStillRunning(result.taskId, result.status, result.summary);
+        return;
+    }
+    if (result.status == QStringLiteral("cancelled")) {
+        emit mediaEdlCandidateTaskCancelled(
+            result.taskId,
+            result.message.isEmpty() ? QStringLiteral("剪辑候选任务已取消，未生成候选片段。") : result.message);
+        return;
+    }
+    if (result.status == QStringLiteral("completed") && (result.hasCandidate || !result.clarificationQuestion.isEmpty())) {
+        emit mediaEdlCandidateTaskCompleted(result);
+        return;
+    }
+    emit mediaAgentFailed(
+        QStringLiteral("edl_candidate_task_result"),
+        result.message.isEmpty() ? QStringLiteral("剪辑候选未完成，请在任务历史中查看原因。") : result.message);
 }
 
 void BackendClient::handleMediaImageRevisionTaskStartReply(QNetworkReply *reply)

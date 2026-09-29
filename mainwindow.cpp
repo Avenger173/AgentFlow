@@ -3938,7 +3938,9 @@ void MainWindow::setupVideoWorkspace()
     connect(ui->videoChooseButton, &QPushButton::clicked, this, &MainWindow::chooseVideoSourceFile);
     connect(ui->videoImportButton, &QPushButton::clicked, this, &MainWindow::importSelectedVideoSource);
     connect(ui->videoTranscribeButton, &QPushButton::clicked, this, &MainWindow::startVideoTranscription);
+    connect(ui->videoCandidateButton, &QPushButton::clicked, this, &MainWindow::startVideoEdlCandidate);
     connect(ui->videoDelegateButton, &QPushButton::clicked, this, &MainWindow::delegateVideoSourceToCommander);
+    connect(ui->videoGoalEdit, &QPlainTextEdit::textChanged, this, &MainWindow::updateVideoCandidateButton);
     connect(ui->videoPlayButton, &QToolButton::clicked, this, [this]() {
         if (!videoPlayer_ || videoLocalSourcePath.isEmpty()) {
             return;
@@ -3988,6 +3990,7 @@ void MainWindow::setupVideoWorkspace()
         ui->videoImportButton->setEnabled(false);
         ui->videoTranscribeButton->setEnabled(true);
         ui->videoDelegateButton->setEnabled(true);
+        updateVideoCandidateButton();
         ui->videoStatusLabel->setText(
             QStringLiteral("已导入受控素材；可主动提交一次转写，尚未调用模型。"));
         ui->videoSourceMeta->setText(
@@ -4037,12 +4040,14 @@ void MainWindow::setupVideoWorkspace()
                 return;
             }
             videoTranscriptionRunning = false;
+            videoCompletedTranscriptionTaskId = result.taskId;
             ui->videoTranscriptEdit->setPlainText(formatVideoTranscript(result));
             ui->videoChooseButton->setEnabled(true);
             ui->videoTranscribeButton->setEnabled(true);
             ui->videoTranscribeButton->setText(QStringLiteral("重新提交转写"));
             ui->videoDelegateButton->setEnabled(true);
-            ui->videoStatusLabel->setText(QStringLiteral("转写已完成并通过结构化交付回读；候选剪辑和渲染尚未在此页开放。"));
+            updateVideoCandidateButton();
+            ui->videoStatusLabel->setText(QStringLiteral("转写已完成并通过结构化交付回读；填写目标后可生成待确认的剪辑候选。"));
         });
     connect(backendClient, &BackendClient::mediaTranscriptionTaskCancelled, this,
         [this](const QString &taskId, const QString &message) {
@@ -4053,6 +4058,75 @@ void MainWindow::setupVideoWorkspace()
             ui->videoChooseButton->setEnabled(true);
             ui->videoTranscribeButton->setEnabled(true);
             ui->videoDelegateButton->setEnabled(true);
+            updateVideoCandidateButton();
+            ui->videoStatusLabel->setText(message.left(180));
+        });
+    connect(backendClient, &BackendClient::mediaEdlCandidateTaskStarted, this, [this](const QString &taskId) {
+        if (!videoEdlCandidatePending) {
+            return;
+        }
+        videoEdlCandidatePending = false;
+        videoEdlCandidateRunning = true;
+        videoEdlCandidateTaskId = taskId;
+        ui->videoStatusLabel->setText(QStringLiteral("剪辑候选任务已受理，正在依据已回读转写生成片段…"));
+        QTimer::singleShot(450, this, [this, taskId]() {
+            if (videoEdlCandidateRunning && videoEdlCandidateTaskId == taskId) {
+                requestVideoEdlCandidateResult();
+            }
+        });
+    });
+    connect(backendClient, &BackendClient::mediaEdlCandidateTaskStillRunning, this,
+        [this](const QString &taskId, const QString &, const QString &summary) {
+            if (!videoEdlCandidateRunning || videoEdlCandidateTaskId != taskId) {
+                return;
+            }
+            ui->videoStatusLabel->setText(summary.isEmpty()
+                ? QStringLiteral("剪辑候选正在生成，等待结构化结果回读…")
+                : summary);
+            QTimer::singleShot(800, this, [this, taskId]() {
+                if (videoEdlCandidateRunning && videoEdlCandidateTaskId == taskId) {
+                    requestVideoEdlCandidateResult();
+                }
+            });
+        });
+    connect(backendClient, &BackendClient::mediaEdlCandidateTaskCompleted, this,
+        [this](const MediaEdlCandidateTaskResult &result) {
+            if (!videoEdlCandidateRunning || videoEdlCandidateTaskId != result.taskId) {
+                return;
+            }
+            videoEdlCandidateRunning = false;
+            ui->videoChooseButton->setEnabled(true);
+            ui->videoTranscribeButton->setEnabled(!videoSourceId.isEmpty());
+            ui->videoGoalEdit->setEnabled(true);
+            ui->videoDelegateButton->setEnabled(!videoSourceId.isEmpty());
+            ui->videoCandidateButton->setText(QStringLiteral("重新生成候选"));
+            if (result.hasCandidate && result.sourceId == videoSourceId
+                && result.transcriptionTaskId == videoCompletedTranscriptionTaskId) {
+                ui->videoCandidateEdit->setPlainText(formatVideoEdlCandidate(result));
+                ui->videoStatusLabel->setText(
+                    QStringLiteral("候选已生成，等待你复核；本轮不会渲染或修改视频。"));
+            } else if (!result.clarificationQuestion.trimmed().isEmpty()) {
+                ui->videoCandidateEdit->setPlainText(
+                    QStringLiteral("需要补充：%1\n\n本轮未生成候选片段，也未渲染 MP4。")
+                        .arg(result.clarificationQuestion.trimmed()));
+                ui->videoStatusLabel->setText(QStringLiteral("请补充剪辑目标后，再显式生成候选。"));
+            } else {
+                ui->videoCandidateEdit->setPlainText(QStringLiteral("候选结果未通过当前素材与转写绑定校验。"));
+                ui->videoStatusLabel->setText(QStringLiteral("候选未展示：结果与当前素材或转写不匹配。"));
+            }
+            updateVideoCandidateButton();
+        });
+    connect(backendClient, &BackendClient::mediaEdlCandidateTaskCancelled, this,
+        [this](const QString &taskId, const QString &message) {
+            if (!videoEdlCandidateRunning || videoEdlCandidateTaskId != taskId) {
+                return;
+            }
+            videoEdlCandidateRunning = false;
+            ui->videoChooseButton->setEnabled(true);
+            ui->videoTranscribeButton->setEnabled(!videoSourceId.isEmpty());
+            ui->videoGoalEdit->setEnabled(true);
+            ui->videoDelegateButton->setEnabled(!videoSourceId.isEmpty());
+            updateVideoCandidateButton();
             ui->videoStatusLabel->setText(message.left(180));
         });
     connect(backendClient, &BackendClient::mediaAgentFailed, this, [this](const QString &operation, const QString &message) {
@@ -4061,7 +4135,9 @@ void MainWindow::setupVideoWorkspace()
         const bool transcriptionFailure = operation == QStringLiteral("prepare_transcription_audio")
             || operation == QStringLiteral("start_transcription")
             || operation == QStringLiteral("transcription_task_result");
-        if (!importFailure && !transcriptionFailure) {
+        const bool candidateFailure = operation == QStringLiteral("start_edl_candidate")
+            || operation == QStringLiteral("edl_candidate_task_result");
+        if (!importFailure && !transcriptionFailure && !candidateFailure) {
             return;
         }
         if (importFailure) {
@@ -4069,6 +4145,20 @@ void MainWindow::setupVideoWorkspace()
             videoSourceImportPending = false;
             ui->videoImportButton->setEnabled(!videoLocalSourcePath.isEmpty());
             ui->videoStatusLabel->setText(QStringLiteral("导入未完成：%1").arg(message.left(180)));
+            return;
+        }
+        if (candidateFailure) {
+            if (!videoEdlCandidatePending && !videoEdlCandidateRunning) {
+                return;
+            }
+            videoEdlCandidatePending = false;
+            videoEdlCandidateRunning = false;
+            ui->videoChooseButton->setEnabled(true);
+            ui->videoTranscribeButton->setEnabled(!videoSourceId.isEmpty());
+            ui->videoGoalEdit->setEnabled(true);
+            ui->videoDelegateButton->setEnabled(!videoSourceId.isEmpty());
+            updateVideoCandidateButton();
+            ui->videoStatusLabel->setText(QStringLiteral("剪辑候选未完成：%1").arg(message.left(180)));
             return;
         }
         if (!videoTranscriptionPending && !videoTranscriptionRunning) {
@@ -4079,6 +4169,7 @@ void MainWindow::setupVideoWorkspace()
         ui->videoChooseButton->setEnabled(true);
         ui->videoTranscribeButton->setEnabled(!videoSourceId.isEmpty());
         ui->videoDelegateButton->setEnabled(!videoSourceId.isEmpty());
+        updateVideoCandidateButton();
         ui->videoStatusLabel->setText(QStringLiteral("转写未完成：%1").arg(message.left(180)));
     });
     updateVideoPlaybackUi();
@@ -4126,8 +4217,10 @@ void MainWindow::chooseVideoSourceFile()
     videoSourceImportPending = false;
     videoTranscriptionAudioId.clear();
     videoTranscriptionTaskId.clear();
+    videoCompletedTranscriptionTaskId.clear();
     videoTranscriptionPending = false;
     videoTranscriptionRunning = false;
+    resetVideoEdlCandidateUi();
     videoPlayer_->setSource(QUrl::fromLocalFile(videoLocalSourcePath));
     ui->videoSourceTitle->setText(videoSourceDisplayName);
     ui->videoSourceMeta->setText(
@@ -4162,7 +4255,8 @@ void MainWindow::importSelectedVideoSource()
 
 void MainWindow::startVideoTranscription()
 {
-    if (videoProjectId.isEmpty() || videoSourceId.isEmpty() || videoTranscriptionPending || videoTranscriptionRunning) {
+    if (videoProjectId.isEmpty() || videoSourceId.isEmpty() || videoTranscriptionPending || videoTranscriptionRunning
+        || videoEdlCandidatePending || videoEdlCandidateRunning) {
         return;
     }
     if (!backendManager || !backendManager->isReady()) {
@@ -4175,6 +4269,8 @@ void MainWindow::startVideoTranscription()
     videoTranscriptionPending = true;
     videoTranscriptionAudioId.clear();
     videoTranscriptionTaskId.clear();
+    videoCompletedTranscriptionTaskId.clear();
+    resetVideoEdlCandidateUi();
     ui->videoChooseButton->setEnabled(false);
     ui->videoTranscribeButton->setEnabled(false);
     ui->videoDelegateButton->setEnabled(false);
@@ -4188,6 +4284,40 @@ void MainWindow::requestVideoTranscriptionResult()
         return;
     }
     backendClient->requestMediaTranscriptionResult(videoTranscriptionTaskId);
+}
+
+void MainWindow::startVideoEdlCandidate()
+{
+    const QString goal = ui->videoGoalEdit->toPlainText().simplified();
+    if (videoProjectId.isEmpty() || videoSourceId.isEmpty() || videoCompletedTranscriptionTaskId.isEmpty()
+        || videoEdlCandidatePending || videoEdlCandidateRunning || goal.size() < 2) {
+        return;
+    }
+    if (!backendManager || !backendManager->isReady()) {
+        ui->videoStatusLabel->setText(QStringLiteral("本地服务正在启动，服务就绪后再生成剪辑候选。"));
+        if (backendManager) {
+            backendManager->ensureStarted();
+        }
+        return;
+    }
+    videoEdlCandidatePending = true;
+    videoEdlCandidateTaskId.clear();
+    ui->videoCandidateEdit->clear();
+    ui->videoChooseButton->setEnabled(false);
+    ui->videoTranscribeButton->setEnabled(false);
+    ui->videoCandidateButton->setEnabled(false);
+    ui->videoGoalEdit->setEnabled(false);
+    ui->videoDelegateButton->setEnabled(false);
+    ui->videoStatusLabel->setText(QStringLiteral("正在提交剪辑候选；本轮只生成待确认片段，不会渲染视频。"));
+    backendClient->startMediaEdlCandidate(videoProjectId, videoCompletedTranscriptionTaskId, goal);
+}
+
+void MainWindow::requestVideoEdlCandidateResult()
+{
+    if (!videoEdlCandidateRunning || videoEdlCandidateTaskId.isEmpty()) {
+        return;
+    }
+    backendClient->requestMediaEdlCandidateResult(videoEdlCandidateTaskId);
 }
 
 void MainWindow::delegateVideoSourceToCommander()
@@ -4228,6 +4358,44 @@ QString MainWindow::formatVideoTranscript(const MediaTranscriptionTaskResult &re
                          .arg(formatTime(segment.beginMs), formatTime(segment.endMs), segment.text));
     }
     return lines.isEmpty() ? result.text : lines.join(QLatin1Char('\n'));
+}
+
+QString MainWindow::formatVideoEdlCandidate(const MediaEdlCandidateTaskResult &result) const
+{
+    const auto formatTime = [](qint64 milliseconds) {
+        const qint64 seconds = qMax<qint64>(0, milliseconds) / 1000;
+        return QStringLiteral("%1:%2")
+            .arg(seconds / 60, 2, 10, QLatin1Char('0'))
+            .arg(seconds % 60, 2, 10, QLatin1Char('0'));
+    };
+    QStringList lines;
+    lines.reserve(result.selections.size());
+    for (qsizetype index = 0; index < result.selections.size(); ++index) {
+        const MediaEdlCandidateSelectionInfo &selection = result.selections.at(index);
+        lines.append(QStringLiteral("片段 %1  [%2 - %3]\n理由：%4\n依据：转写句段 %5-%6")
+                         .arg(index + 1)
+                         .arg(formatTime(selection.beginMs), formatTime(selection.endMs), selection.reason)
+                         .arg(selection.startSentenceId)
+                         .arg(selection.endSentenceId));
+    }
+    return lines.join(QStringLiteral("\n\n"));
+}
+
+void MainWindow::resetVideoEdlCandidateUi()
+{
+    videoEdlCandidateTaskId.clear();
+    videoEdlCandidatePending = false;
+    videoEdlCandidateRunning = false;
+    ui->videoCandidateEdit->clear();
+    ui->videoCandidateButton->setText(QStringLiteral("生成剪辑候选"));
+    updateVideoCandidateButton();
+}
+
+void MainWindow::updateVideoCandidateButton()
+{
+    const bool goalReady = ui->videoGoalEdit->toPlainText().simplified().size() >= 2;
+    ui->videoCandidateButton->setEnabled(!videoCompletedTranscriptionTaskId.isEmpty()
+        && !videoEdlCandidatePending && !videoEdlCandidateRunning && goalReady);
 }
 
 void MainWindow::updateVideoPlaybackUi(qint64 positionMs)

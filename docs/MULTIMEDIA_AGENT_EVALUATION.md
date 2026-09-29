@@ -69,9 +69,9 @@ MM-0 只建立足以判断模型路线可行的代表样本和 INTENT 小集；�
 
 2026-09-28 的 `media_edl_candidate_v1` 只验证候选 EDL 的模型契约，不评价 ASR、剪辑内容质量或视频交付。经用户确认后，以程序生成的中文转写夹具调用 `media_planning -> deepseek / deepseek-v4-pro` 共 `1` 次；模型返回通过 JSON 契约和句段白名单校验的 `3` 段候选，总时长 `9,400 ms`，耗时 `3,369 ms`，Provider usage 为 `338/148/486` input/output/total tokens。回读 manifest 确认为没有原始模型正文、夹具文本、媒体导入、FFmpeg 或输出文件。此前一次因本地 usage 序列化错误而证据不完整的请求保留为 incomplete，未重试。此次通过仅证明当前模型路由可支持受限“转写上下文 -> 待确认 EDL”决策；不改变 `G4-ASR-DEV`、`G4`、字幕或真实素材质量门槛状态。
 
-2026-09-29 已完成上述入口级边界：`verify_media_video_dispatch_entry.py` 在临时数据目录验证 multipart 分块上传、上传响应项目归属和无路径泄露，以及视频交接、缺素材澄清、图片/PPT 不误路由；`verify_media_video_workspace_gui.ps1` 在新构建上验证短视频页可打开、素材选择/目标输入可用且未选素材前导入/转写/交接均锁定。证据截图位于忽略目录 `data/media_evaluations/mm4_video_gui_20260929T141424/`。Qt 客户端已接入既有音轨准备、一次性转写受理、终态轮询和带时间标记结果展示；`verify_media_transcription_delivery.py` 继续以 FFmpeg/Qwen 内存替身验证该交付链，不调用模型、FFmpeg 或客户文件，不能替代真实内容质量或真实客户视频路径。
+2026-09-29 已完成上述入口级边界：`verify_media_video_dispatch_entry.py` 在临时数据目录验证 multipart 分块上传、上传响应项目归属和无路径泄露，以及视频交接、缺素材澄清、图片/PPT 不误路由；`verify_media_video_workspace_gui.ps1` 曾在新构建上验证短视频页可打开、素材选择/目标输入可用且未选素材前导入/转写/交接均锁定。证据截图位于忽略目录 `data/media_evaluations/mm4_video_gui_20260929T141424/`。Qt 客户端现已接入既有音轨准备、一次性转写受理、终态轮询、带时间标记结果展示，以及基于已完成转写显式生成待确认 EDL 候选的受理/轮询/绑定复核；`verify_media_edl_candidate_delivery.py` 与 `verify_media_transcription_delivery.py` 均以替身验证交付边界，不调用模型、FFmpeg 或客户文件，不能替代真实内容质量或真实客户视频路径。
 
-下一段 `MM-4-DEV` 只验证单源、短视频、中文口播的真实客户路径，不替代正式 `G4`：使用同一材料走完“导入 -> 转写 -> 候选复核 -> 明确确认 -> 受限渲染 -> MP4 回读与会话交付”，并人工听看候选是否覆盖目标且未明显纳入无关段落。继续复用已有 ASR、EDL、FFmpeg 和任务恢复回归，不新建转写器、时间线或剪辑引擎，也不为 UI 接线重跑固定的 `8` 次 ASR 质量集。真实主路径预计各需 `1` 次 ASR 和规划模型请求，执行前按 `SKILL.md` 明确素材、次数与预算并取得确认；未知结果不自动重试。纯画面语义、VLM、PySceneDetect、WhisperX、字幕和多轨均不是本门槛 required；只有真实样例证明文本选段不足，且明确模型权限、成本和素材范围后，才另立小探针。`MM-4-DEV=进行中`，完整 `G4-ASR-DEV` 与 `G4` 仍按原发布要求单独评定。
+下一段 `MM-4-DEV` 只验证单源、短视频、中文口播的真实客户路径，不替代正式 `G4`：使用同一材料走完“导入 -> 转写 -> 候选复核 -> 明确确认 -> 受限渲染 -> MP4 回读与会话交付”，并人工听看候选是否覆盖目标且未明显纳入无关段落。候选复核的 Qt 接线和替身回归已完成，仍缺明确确认、受限渲染、MP4 回读与真实素材听看。继续复用已有 ASR、EDL、FFmpeg 和任务恢复回归，不新建转写器、时间线或剪辑引擎，也不为 UI 接线重跑固定的 `8` 次 ASR 质量集。真实主路径预计各需 `1` 次 ASR 和规划模型请求，执行前按 `SKILL.md` 明确素材、次数与预算并取得确认；未知结果不自动重试。纯画面语义、VLM、PySceneDetect、WhisperX、字幕和多轨均不是本门槛 required；只有真实样例证明文本选段不足，且明确模型权限、成本和素材范围后，才另立小探针。`MM-4-DEV=进行中`，完整 `G4-ASR-DEV` 与 `G4` 仍按原发布要求单独评定。
 
 ### 2.1.1 模型 Profile 选型探针
 
