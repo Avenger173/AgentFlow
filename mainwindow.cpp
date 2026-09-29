@@ -3937,6 +3937,7 @@ void MainWindow::setupVideoWorkspace()
 
     connect(ui->videoChooseButton, &QPushButton::clicked, this, &MainWindow::chooseVideoSourceFile);
     connect(ui->videoImportButton, &QPushButton::clicked, this, &MainWindow::importSelectedVideoSource);
+    connect(ui->videoTranscribeButton, &QPushButton::clicked, this, &MainWindow::startVideoTranscription);
     connect(ui->videoDelegateButton, &QPushButton::clicked, this, &MainWindow::delegateVideoSourceToCommander);
     connect(ui->videoPlayButton, &QToolButton::clicked, this, [this]() {
         if (!videoPlayer_ || videoLocalSourcePath.isEmpty()) {
@@ -3985,22 +3986,100 @@ void MainWindow::setupVideoWorkspace()
         videoSourceId = source.sourceId;
         videoSourceDisplayName = source.filename;
         ui->videoImportButton->setEnabled(false);
+        ui->videoTranscribeButton->setEnabled(true);
         ui->videoDelegateButton->setEnabled(true);
         ui->videoStatusLabel->setText(
-            QStringLiteral("已导入受控素材，可交给调度台；尚未提交转写或调用模型。"));
+            QStringLiteral("已导入受控素材；可主动提交一次转写，尚未调用模型。"));
         ui->videoSourceMeta->setText(
             QStringLiteral("%1 · %2 · 受控素材 %3")
                 .arg(source.mimeType, QLocale().formattedDataSize(source.sizeBytes), source.sourceId));
     });
-    connect(backendClient, &BackendClient::mediaAgentFailed, this, [this](const QString &operation, const QString &message) {
-        if (operation != QStringLiteral("import_media_source")
-            && !(operation == QStringLiteral("create_project") && videoProjectCreationPending)) {
+    connect(backendClient, &BackendClient::mediaTranscriptionAudioPrepared, this,
+        [this](const QString &projectId, const MediaTranscriptionAudioInfo &audio) {
+            if (!videoTranscriptionPending || projectId != videoProjectId || audio.sourceId != videoSourceId) {
+                return;
+            }
+            videoTranscriptionAudioId = audio.audioId;
+            ui->videoStatusLabel->setText(QStringLiteral("受控音轨已准备完成，正在提交转写任务…"));
+            backendClient->startMediaTranscription(videoProjectId, videoSourceId, videoTranscriptionAudioId);
+        });
+    connect(backendClient, &BackendClient::mediaTranscriptionTaskStarted, this, [this](const QString &taskId) {
+        if (!videoTranscriptionPending) {
             return;
         }
-        videoProjectCreationPending = false;
-        videoSourceImportPending = false;
-        ui->videoImportButton->setEnabled(!videoLocalSourcePath.isEmpty());
-        ui->videoStatusLabel->setText(QStringLiteral("导入未完成：%1").arg(message.left(180)));
+        videoTranscriptionPending = false;
+        videoTranscriptionRunning = true;
+        videoTranscriptionTaskId = taskId;
+        ui->videoStatusLabel->setText(QStringLiteral("转写任务已受理，正在等待语音模型与交付回读…"));
+        QTimer::singleShot(450, this, [this, taskId]() {
+            if (videoTranscriptionRunning && videoTranscriptionTaskId == taskId) {
+                requestVideoTranscriptionResult();
+            }
+        });
+    });
+    connect(backendClient, &BackendClient::mediaTranscriptionTaskStillRunning, this,
+        [this](const QString &taskId, const QString &, const QString &summary) {
+            if (!videoTranscriptionRunning || videoTranscriptionTaskId != taskId) {
+                return;
+            }
+            ui->videoStatusLabel->setText(summary.isEmpty()
+                ? QStringLiteral("转写正在执行，等待结构化结果回读…")
+                : summary);
+            QTimer::singleShot(800, this, [this, taskId]() {
+                if (videoTranscriptionRunning && videoTranscriptionTaskId == taskId) {
+                    requestVideoTranscriptionResult();
+                }
+            });
+        });
+    connect(backendClient, &BackendClient::mediaTranscriptionTaskCompleted, this,
+        [this](const MediaTranscriptionTaskResult &result) {
+            if (!videoTranscriptionRunning || videoTranscriptionTaskId != result.taskId) {
+                return;
+            }
+            videoTranscriptionRunning = false;
+            ui->videoTranscriptEdit->setPlainText(formatVideoTranscript(result));
+            ui->videoChooseButton->setEnabled(true);
+            ui->videoTranscribeButton->setEnabled(true);
+            ui->videoTranscribeButton->setText(QStringLiteral("重新提交转写"));
+            ui->videoDelegateButton->setEnabled(true);
+            ui->videoStatusLabel->setText(QStringLiteral("转写已完成并通过结构化交付回读；候选剪辑和渲染尚未在此页开放。"));
+        });
+    connect(backendClient, &BackendClient::mediaTranscriptionTaskCancelled, this,
+        [this](const QString &taskId, const QString &message) {
+            if (!videoTranscriptionRunning || videoTranscriptionTaskId != taskId) {
+                return;
+            }
+            videoTranscriptionRunning = false;
+            ui->videoChooseButton->setEnabled(true);
+            ui->videoTranscribeButton->setEnabled(true);
+            ui->videoDelegateButton->setEnabled(true);
+            ui->videoStatusLabel->setText(message.left(180));
+        });
+    connect(backendClient, &BackendClient::mediaAgentFailed, this, [this](const QString &operation, const QString &message) {
+        const bool importFailure = operation == QStringLiteral("import_media_source")
+            || (operation == QStringLiteral("create_project") && videoProjectCreationPending);
+        const bool transcriptionFailure = operation == QStringLiteral("prepare_transcription_audio")
+            || operation == QStringLiteral("start_transcription")
+            || operation == QStringLiteral("transcription_task_result");
+        if (!importFailure && !transcriptionFailure) {
+            return;
+        }
+        if (importFailure) {
+            videoProjectCreationPending = false;
+            videoSourceImportPending = false;
+            ui->videoImportButton->setEnabled(!videoLocalSourcePath.isEmpty());
+            ui->videoStatusLabel->setText(QStringLiteral("导入未完成：%1").arg(message.left(180)));
+            return;
+        }
+        if (!videoTranscriptionPending && !videoTranscriptionRunning) {
+            return;
+        }
+        videoTranscriptionPending = false;
+        videoTranscriptionRunning = false;
+        ui->videoChooseButton->setEnabled(true);
+        ui->videoTranscribeButton->setEnabled(!videoSourceId.isEmpty());
+        ui->videoDelegateButton->setEnabled(!videoSourceId.isEmpty());
+        ui->videoStatusLabel->setText(QStringLiteral("转写未完成：%1").arg(message.left(180)));
     });
     updateVideoPlaybackUi();
 }
@@ -4011,7 +4090,8 @@ void MainWindow::openVideoWorkspace(const QString &goal, const QString &sourceId
     if (!goal.trimmed().isEmpty()) {
         ui->videoGoalEdit->setPlainText(goal.trimmed());
     }
-    if (!sourceId.trimmed().isEmpty() && sourceId == videoSourceId) {
+    if (!sourceId.trimmed().isEmpty() && sourceId == videoSourceId
+        && !videoTranscriptionPending && !videoTranscriptionRunning) {
         ui->videoStatusLabel->setText(QStringLiteral("已从 AI 调度台带回当前视频与剪辑目标；请复核后再提交下一步。"));
     }
     ui->videoGoalEdit->setFocus();
@@ -4044,13 +4124,20 @@ void MainWindow::chooseVideoSourceFile()
     videoSourceDisplayName = fileInfo.fileName();
     videoProjectCreationPending = false;
     videoSourceImportPending = false;
+    videoTranscriptionAudioId.clear();
+    videoTranscriptionTaskId.clear();
+    videoTranscriptionPending = false;
+    videoTranscriptionRunning = false;
     videoPlayer_->setSource(QUrl::fromLocalFile(videoLocalSourcePath));
     ui->videoSourceTitle->setText(videoSourceDisplayName);
     ui->videoSourceMeta->setText(
         QStringLiteral("%1 · 本地预览，尚未上传")
             .arg(QLocale().formattedDataSize(fileInfo.size())));
     ui->videoImportButton->setEnabled(true);
+    ui->videoTranscribeButton->setEnabled(false);
+    ui->videoTranscribeButton->setText(QStringLiteral("提交转写"));
     ui->videoDelegateButton->setEnabled(false);
+    ui->videoTranscriptEdit->clear();
     ui->videoStatusLabel->setText(QStringLiteral("已选择本地视频，可预览；点击“导入受控素材”后才会复制到 AgentFlow。"));
 }
 
@@ -4071,6 +4158,36 @@ void MainWindow::importSelectedVideoSource()
     ui->videoStatusLabel->setText(QStringLiteral("正在创建受控素材项目…"));
     backendClient->createMediaProject(
         QStringLiteral("视频 · %1").arg(QFileInfo(videoLocalSourcePath).completeBaseName().left(80)));
+}
+
+void MainWindow::startVideoTranscription()
+{
+    if (videoProjectId.isEmpty() || videoSourceId.isEmpty() || videoTranscriptionPending || videoTranscriptionRunning) {
+        return;
+    }
+    if (!backendManager || !backendManager->isReady()) {
+        ui->videoStatusLabel->setText(QStringLiteral("本地服务正在启动，服务就绪后再提交转写。"));
+        if (backendManager) {
+            backendManager->ensureStarted();
+        }
+        return;
+    }
+    videoTranscriptionPending = true;
+    videoTranscriptionAudioId.clear();
+    videoTranscriptionTaskId.clear();
+    ui->videoChooseButton->setEnabled(false);
+    ui->videoTranscribeButton->setEnabled(false);
+    ui->videoDelegateButton->setEnabled(false);
+    ui->videoStatusLabel->setText(QStringLiteral("正在从受控视频提取固定规格的转写音轨…"));
+    backendClient->prepareMediaTranscriptionAudio(videoProjectId, videoSourceId);
+}
+
+void MainWindow::requestVideoTranscriptionResult()
+{
+    if (!videoTranscriptionRunning || videoTranscriptionTaskId.isEmpty()) {
+        return;
+    }
+    backendClient->requestMediaTranscriptionResult(videoTranscriptionTaskId);
 }
 
 void MainWindow::delegateVideoSourceToCommander()
@@ -4094,6 +4211,23 @@ void MainWindow::delegateVideoSourceToCommander()
     updateDispatchMaterialBindingsUi();
     ui->dispatchChatStatus->setText(QStringLiteral("已带入受控视频素材；发送后将先进入短视频工作区复核。"));
     ui->dispatchInputEdit->setFocus();
+}
+
+QString MainWindow::formatVideoTranscript(const MediaTranscriptionTaskResult &result) const
+{
+    const auto formatTime = [](qint64 milliseconds) {
+        const qint64 seconds = qMax<qint64>(0, milliseconds) / 1000;
+        return QStringLiteral("%1:%2")
+            .arg(seconds / 60, 2, 10, QLatin1Char('0'))
+            .arg(seconds % 60, 2, 10, QLatin1Char('0'));
+    };
+    QStringList lines;
+    lines.reserve(result.segments.size());
+    for (const MediaTranscriptionSegmentInfo &segment : result.segments) {
+        lines.append(QStringLiteral("[%1 - %2] %3")
+                         .arg(formatTime(segment.beginMs), formatTime(segment.endMs), segment.text));
+    }
+    return lines.isEmpty() ? result.text : lines.join(QLatin1Char('\n'));
 }
 
 void MainWindow::updateVideoPlaybackUi(qint64 positionMs)

@@ -112,11 +112,14 @@ try {
     $delegateButton = Wait-Element -Description "delegate video button" -Find {
         Find-ByName -Root $mainWindow -Name "交给调度台"
     }
+    $transcribeButton = Wait-Element -Description "submit transcription button" -Find {
+        Find-ByName -Root $mainWindow -Name "提交转写"
+    }
     if (!$chooseButton.Current.IsEnabled -or !$goalEdit.Current.IsEnabled) {
         throw "Video workspace must allow material selection and goal entry."
     }
-    if ($importButton.Current.IsEnabled -or $delegateButton.Current.IsEnabled) {
-        throw "Video import and delegation must stay disabled before selecting a local file."
+    if ($importButton.Current.IsEnabled -or $transcribeButton.Current.IsEnabled -or $delegateButton.Current.IsEnabled) {
+        throw "Video import, transcription and delegation must stay disabled before selecting a local file."
     }
     Save-Screenshot -Window $mainWindow -Path (Join-Path $evidenceDir "video-workspace-open.png")
     Write-Output "Media video workspace GUI smoke passed."

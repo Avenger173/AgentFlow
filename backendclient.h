@@ -489,6 +489,38 @@ struct MediaSourceInfo
     QString createdAt;
 };
 
+// 视频工作区只消费已经固定为 16 kHz 单声道 WAV 的受控派生音频元数据；原始媒体路径和字节
+// 始终不离开后端。
+struct MediaTranscriptionAudioInfo
+{
+    QString audioId;
+    QString sourceId;
+    qint64 sizeBytes = 0;
+    double durationSeconds = 0.0;
+    int sampleRate = 0;
+    int channels = 0;
+};
+
+struct MediaTranscriptionSegmentInfo
+{
+    int sentenceId = 0;
+    QString text;
+    qint64 beginMs = 0;
+    qint64 endMs = 0;
+};
+
+struct MediaTranscriptionTaskResult
+{
+    QString taskId;
+    QString status;
+    QString summary;
+    QString message;
+    QString failureReason;
+    QString artifactId;
+    QString text;
+    QList<MediaTranscriptionSegmentInfo> segments;
+};
+
 struct MediaAssetRevisionListResult
 {
     MediaImageAssetInfo asset;
@@ -1413,6 +1445,13 @@ public:
     void requestMediaProject(const QString &projectId);
     void importMediaImage(const QString &projectId, const QString &filename, const QByteArray &content);
     void importMediaSource(const QString &projectId, const QString &filePath);
+    void prepareMediaTranscriptionAudio(const QString &projectId, const QString &sourceId);
+    void startMediaTranscription(
+        const QString &projectId,
+        const QString &sourceId,
+        const QString &audioId,
+        const QStringList &languageHints = {});
+    void requestMediaTranscriptionResult(const QString &taskId);
     void requestMediaAssetRevisions(const QString &projectId, const QString &assetId);
     void requestMediaImageLayerStack(
         const QString &projectId,
@@ -1806,6 +1845,11 @@ signals:
     void mediaProjectReceived(const MediaProjectDetailResult &result);
     void mediaImageImported(const MediaImageAssetInfo &asset);
     void mediaSourceImported(const MediaSourceInfo &source);
+    void mediaTranscriptionAudioPrepared(const QString &projectId, const MediaTranscriptionAudioInfo &audio);
+    void mediaTranscriptionTaskStarted(const QString &taskId);
+    void mediaTranscriptionTaskStillRunning(const QString &taskId, const QString &status, const QString &summary);
+    void mediaTranscriptionTaskCompleted(const MediaTranscriptionTaskResult &result);
+    void mediaTranscriptionTaskCancelled(const QString &taskId, const QString &message);
     void mediaAssetRevisionsReceived(const MediaAssetRevisionListResult &result);
     void mediaImageLayerStackReceived(const MediaImageLayerStackResult &result);
     void mediaImageRevisionCreated(const MediaImageRevisionInfo &revision);
@@ -1911,6 +1955,9 @@ private:
     QUrl buildMediaAgentProjectUrl(const QString &projectId) const;
     QUrl buildMediaAgentImagesUrl(const QString &projectId) const;
     QUrl buildMediaAgentMediaSourceUploadUrl(const QString &projectId) const;
+    QUrl buildMediaAgentTranscriptionAudioUrl(const QString &projectId, const QString &sourceId) const;
+    QUrl buildMediaAgentTranscriptionStartUrl(const QString &projectId) const;
+    QUrl buildMediaAgentTranscriptionResultUrl(const QString &taskId) const;
     QUrl buildMediaAgentAssetRevisionsUrl(const QString &projectId, const QString &assetId) const;
     QUrl buildMediaAgentRevisionLayerStackUrl(
         const QString &projectId,
@@ -2028,6 +2075,9 @@ private:
     void handleDataTransformationPreviewReply(QNetworkReply *reply);
     void handleDataTransformationExportStartReply(QNetworkReply *reply);
     void handleDataTransformationExportResultReply(QNetworkReply *reply);
+    void handleMediaTranscriptionAudioReply(QNetworkReply *reply);
+    void handleMediaTranscriptionStartReply(QNetworkReply *reply);
+    void handleMediaTranscriptionResultReply(QNetworkReply *reply);
     void handleMediaImageRevisionTaskStartReply(QNetworkReply *reply);
     void handleMediaImageRevisionTaskResultReply(QNetworkReply *reply);
     void handleMediaImageAiEditTaskStartReply(QNetworkReply *reply);

@@ -197,7 +197,10 @@ private:
     void openVideoWorkspace(const QString &goal = QString(), const QString &sourceId = QString());
     void chooseVideoSourceFile();
     void importSelectedVideoSource();
+    void startVideoTranscription();
+    void requestVideoTranscriptionResult();
     void delegateVideoSourceToCommander();
+    QString formatVideoTranscript(const MediaTranscriptionTaskResult &result) const;
     void updateVideoPlaybackUi(qint64 positionMs = -1);
     void importDataDatasetFromFile();
     void refreshDataDatasets();
@@ -887,6 +890,10 @@ private:
     QString videoSourceDisplayName;
     bool videoProjectCreationPending = false;
     bool videoSourceImportPending = false;
+    QString videoTranscriptionAudioId;
+    QString videoTranscriptionTaskId;
+    bool videoTranscriptionPending = false;
+    bool videoTranscriptionRunning = false;
     QString currentDispatchKnowledgeAnswerChildTaskId;
     // 暂存请求同时冻结本轮显式路由偏好，避免后端启动期间客户编辑输入后改变已排队任务。
     QJsonArray pendingDispatchAgentHints;

@@ -2756,6 +2756,15 @@ QPushButton#navGroupButton:hover {
 <property name="alignment"><set>Qt::AlignmentFlag::AlignRight|Qt::AlignmentFlag::AlignVCenter</set></property>
 </widget></item>
 </layout></item>
+<item><widget class="QLabel" name="videoTranscriptHeader">
+<property name="objectName"><string>sectionTitle</string></property>
+<property name="text"><string>转写结果</string></property>
+</widget></item>
+<item><widget class="QPlainTextEdit" name="videoTranscriptEdit">
+<property name="minimumSize"><size><width>0</width><height>122</height></size></property>
+<property name="readOnly"><bool>true</bool></property>
+<property name="placeholderText"><string>导入后主动提交转写，完成的带时间标记文本会显示在这里。</string></property>
+</widget></item>
 </layout>
 </widget></item>
 <item><widget class="QFrame" name="videoSourcePanel">
@@ -2792,6 +2801,13 @@ QPushButton#navGroupButton:hover {
 <property name="minimumSize"><size><width>0</width><height>40</height></size></property>
 <property name="enabled"><bool>false</bool></property>
 <property name="text"><string>导入受控素材</string></property>
+</widget></item>
+<item><widget class="QPushButton" name="videoTranscribeButton">
+<property name="objectName"><string>primaryButton</string></property>
+<property name="minimumSize"><size><width>0</width><height>40</height></size></property>
+<property name="enabled"><bool>false</bool></property>
+<property name="text"><string>提交转写</string></property>
+<property name="toolTip"><string>提取受控音轨后提交一次语音转写</string></property>
 </widget></item>
 <item><widget class="QLabel" name="videoGoalHeader">
 <property name="objectName"><string>sectionTitle</string></property>

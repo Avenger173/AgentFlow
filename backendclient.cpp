@@ -588,6 +588,46 @@ MediaSourceInfo readMediaSourceInfo(const QJsonObject &payload)
     return source;
 }
 
+MediaTranscriptionAudioInfo readMediaTranscriptionAudioInfo(const QJsonObject &payload)
+{
+    MediaTranscriptionAudioInfo audio;
+    audio.audioId = payload.value(QStringLiteral("audio_id")).toString();
+    audio.sourceId = payload.value(QStringLiteral("source_id")).toString();
+    audio.sizeBytes = static_cast<qint64>(payload.value(QStringLiteral("size_bytes")).toDouble());
+    audio.durationSeconds = payload.value(QStringLiteral("duration_seconds")).toDouble();
+    audio.sampleRate = payload.value(QStringLiteral("sample_rate")).toInt();
+    audio.channels = payload.value(QStringLiteral("channels")).toInt();
+    return audio;
+}
+
+MediaTranscriptionTaskResult readMediaTranscriptionTaskResult(const QJsonObject &payload)
+{
+    MediaTranscriptionTaskResult result;
+    result.taskId = payload.value(QStringLiteral("task_id")).toString();
+    result.status = payload.value(QStringLiteral("status")).toString();
+    result.summary = payload.value(QStringLiteral("summary")).toString();
+    result.message = payload.value(QStringLiteral("message")).toString();
+    result.failureReason = payload.value(QStringLiteral("failure_reason")).toString();
+    result.artifactId = payload.value(QStringLiteral("artifact_id")).toString();
+    const QJsonObject transcript = payload.value(QStringLiteral("transcript")).toObject();
+    result.text = transcript.value(QStringLiteral("text")).toString();
+    const QJsonArray segments = transcript.value(QStringLiteral("segments")).toArray();
+    result.segments.reserve(segments.size());
+    for (const QJsonValue &value : segments) {
+        if (!value.isObject()) {
+            continue;
+        }
+        const QJsonObject segmentPayload = value.toObject();
+        MediaTranscriptionSegmentInfo segment;
+        segment.sentenceId = segmentPayload.value(QStringLiteral("sentence_id")).toInt();
+        segment.text = segmentPayload.value(QStringLiteral("text")).toString();
+        segment.beginMs = static_cast<qint64>(segmentPayload.value(QStringLiteral("begin_ms")).toDouble());
+        segment.endMs = static_cast<qint64>(segmentPayload.value(QStringLiteral("end_ms")).toDouble());
+        result.segments.append(segment);
+    }
+    return result;
+}
+
 MediaImageRevisionInfo readMediaImageRevisionInfo(const QJsonObject &payload)
 {
     MediaImageRevisionInfo revision;
@@ -2885,6 +2925,55 @@ void BackendClient::importMediaSource(const QString &projectId, const QString &f
     });
 }
 
+void BackendClient::prepareMediaTranscriptionAudio(const QString &projectId, const QString &sourceId)
+{
+    if (projectId.trimmed().isEmpty() || sourceId.trimmed().isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("prepare_transcription_audio"), QStringLiteral("转写准备缺少受控视频素材。"));
+        return;
+    }
+    QNetworkReply *reply = networkManager_.get(createRequest(
+        buildMediaAgentTranscriptionAudioUrl(projectId.trimmed(), sourceId.trimmed()), 5 * 60 * 1000));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        handleMediaTranscriptionAudioReply(reply);
+    });
+}
+
+void BackendClient::startMediaTranscription(
+    const QString &projectId,
+    const QString &sourceId,
+    const QString &audioId,
+    const QStringList &languageHints)
+{
+    if (projectId.trimmed().isEmpty() || sourceId.trimmed().isEmpty() || audioId.trimmed().isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("start_transcription"), QStringLiteral("提交转写缺少受控音频。"));
+        return;
+    }
+    QJsonObject payload;
+    payload.insert(QStringLiteral("source_id"), sourceId.trimmed());
+    payload.insert(QStringLiteral("audio_id"), audioId.trimmed());
+    payload.insert(QStringLiteral("language_hints"), QJsonArray::fromStringList(languageHints));
+    payload.insert(QStringLiteral("speaker_diarization"), false);
+    QNetworkReply *reply = networkManager_.post(
+        createRequest(buildMediaAgentTranscriptionStartUrl(projectId.trimmed()), 10000),
+        QJsonDocument(payload).toJson(QJsonDocument::Compact));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        handleMediaTranscriptionStartReply(reply);
+    });
+}
+
+void BackendClient::requestMediaTranscriptionResult(const QString &taskId)
+{
+    if (taskId.trimmed().isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("transcription_task_result"), QStringLiteral("转写任务 ID 为空。"));
+        return;
+    }
+    QNetworkReply *reply = networkManager_.get(
+        createRequest(buildMediaAgentTranscriptionResultUrl(taskId.trimmed()), 10000));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        handleMediaTranscriptionResultReply(reply);
+    });
+}
+
 void BackendClient::requestMediaAssetRevisions(const QString &projectId, const QString &assetId)
 {
     if (projectId.trimmed().isEmpty() || assetId.trimmed().isEmpty()) {
@@ -5009,6 +5098,31 @@ QUrl BackendClient::buildMediaAgentMediaSourceUploadUrl(const QString &projectId
     return url;
 }
 
+QUrl BackendClient::buildMediaAgentTranscriptionAudioUrl(const QString &projectId, const QString &sourceId) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/agents/media_agent/projects/%1/media-sources/%2/transcription-audio")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(projectId)),
+                         QString::fromUtf8(QUrl::toPercentEncoding(sourceId))));
+    return url;
+}
+
+QUrl BackendClient::buildMediaAgentTranscriptionStartUrl(const QString &projectId) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/agents/media_agent/projects/%1/transcriptions/start")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(projectId))));
+    return url;
+}
+
+QUrl BackendClient::buildMediaAgentTranscriptionResultUrl(const QString &taskId) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/agents/media_agent/transcriptions/%1/result")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(taskId))));
+    return url;
+}
+
 QUrl BackendClient::buildMediaAgentAssetRevisionsUrl(
     const QString &projectId,
     const QString &assetId) const
@@ -6395,6 +6509,93 @@ void BackendClient::handleDataTransformationExportResultReply(QNetworkReply *rep
     }
     emit dataTransformationExportFailed(payload.value(QStringLiteral("message")).toString(
         QStringLiteral("字段加工未完成，请在任务历史中查看原因。")));
+}
+
+void BackendClient::handleMediaTranscriptionAudioReply(QNetworkReply *reply)
+{
+    if (reply->error() != QNetworkReply::NoError) {
+        const QString message = replyErrorMessage(reply);
+        reply->deleteLater();
+        emit mediaAgentFailed(QStringLiteral("prepare_transcription_audio"), message);
+        return;
+    }
+    const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+    reply->deleteLater();
+    if (!document.isObject()) {
+        emit mediaAgentFailed(QStringLiteral("prepare_transcription_audio"), QStringLiteral("转写音频准备响应无效。"));
+        return;
+    }
+    const QJsonObject payload = document.object();
+    const MediaSourceInfo source = readMediaSourceInfo(payload.value(QStringLiteral("source")).toObject());
+    const MediaTranscriptionAudioInfo audio = readMediaTranscriptionAudioInfo(
+        payload.value(QStringLiteral("audio")).toObject());
+    if (source.projectScope.isEmpty() || source.sourceId.isEmpty() || audio.audioId.isEmpty()
+        || audio.sourceId != source.sourceId || audio.sampleRate != 16000 || audio.channels != 1) {
+        emit mediaAgentFailed(
+            QStringLiteral("prepare_transcription_audio"),
+            QStringLiteral("转写准备响应缺少有效的受控 16 kHz 单声道音频。"));
+        return;
+    }
+    emit mediaTranscriptionAudioPrepared(source.projectScope, audio);
+}
+
+void BackendClient::handleMediaTranscriptionStartReply(QNetworkReply *reply)
+{
+    if (reply->error() != QNetworkReply::NoError) {
+        const QString message = replyErrorMessage(reply);
+        reply->deleteLater();
+        emit mediaAgentFailed(QStringLiteral("start_transcription"), message);
+        return;
+    }
+    const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+    reply->deleteLater();
+    const QJsonObject payload = document.object();
+    const QString taskId = payload.value(QStringLiteral("task_id")).toString().trimmed();
+    if (!document.isObject() || taskId.isEmpty()
+        || payload.value(QStringLiteral("status")).toString() != QStringLiteral("queued")) {
+        emit mediaAgentFailed(QStringLiteral("start_transcription"), QStringLiteral("转写任务未返回有效受理状态。"));
+        return;
+    }
+    emit mediaTranscriptionTaskStarted(taskId);
+}
+
+void BackendClient::handleMediaTranscriptionResultReply(QNetworkReply *reply)
+{
+    if (reply->error() != QNetworkReply::NoError) {
+        const QString message = replyErrorMessage(reply);
+        reply->deleteLater();
+        emit mediaAgentFailed(QStringLiteral("transcription_task_result"), message);
+        return;
+    }
+    const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+    reply->deleteLater();
+    if (!document.isObject()) {
+        emit mediaAgentFailed(QStringLiteral("transcription_task_result"), QStringLiteral("转写结果响应格式无效。"));
+        return;
+    }
+    const MediaTranscriptionTaskResult result = readMediaTranscriptionTaskResult(document.object());
+    if (result.taskId.isEmpty() || result.status.isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("transcription_task_result"), QStringLiteral("转写结果缺少任务状态。"));
+        return;
+    }
+    if (result.status == QStringLiteral("queued") || result.status == QStringLiteral("pending")
+        || result.status == QStringLiteral("running")) {
+        emit mediaTranscriptionTaskStillRunning(result.taskId, result.status, result.summary);
+        return;
+    }
+    if (result.status == QStringLiteral("cancelled")) {
+        emit mediaTranscriptionTaskCancelled(
+            result.taskId,
+            result.message.isEmpty() ? QStringLiteral("转写任务已取消，未生成转写结果。") : result.message);
+        return;
+    }
+    if (result.status == QStringLiteral("completed") && !result.text.isEmpty() && !result.segments.isEmpty()) {
+        emit mediaTranscriptionTaskCompleted(result);
+        return;
+    }
+    emit mediaAgentFailed(
+        QStringLiteral("transcription_task_result"),
+        result.message.isEmpty() ? QStringLiteral("转写未完成，请在任务历史中查看原因。") : result.message);
 }
 
 void BackendClient::handleMediaImageRevisionTaskStartReply(QNetworkReply *reply)
