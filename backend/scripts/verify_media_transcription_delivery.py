@@ -58,12 +58,12 @@ from app.services.qwen_audio_transcription import (
 from main import create_app
 
 
-def _write_wav(path: Path) -> None:
+def _write_wav(path: Path, *, seconds: int = 1) -> None:
     with wave.open(str(path), "wb") as target:
         target.setnchannels(1)
         target.setsampwidth(2)
         target.setframerate(16_000)
-        target.writeframes(b"\x00\x00" * 16_000)
+        target.writeframes(b"\x00\x00" * (16_000 * seconds))
 
 
 def _probe_json() -> str:
@@ -158,6 +158,50 @@ def _prepare_source(project_id: str):  # type: ignore[no-untyped-def]
     return source, audio
 
 
+def _prepare_chunked_source(project_id: str):  # type: ignore[no-untyped-def]
+    def chunked_runner(command: tuple[str, ...] | list[str], timeout: float) -> MediaProcessResult:
+        normalized = tuple(command)
+        if normalized[0] == "fixture-ffprobe":
+            return MediaProcessResult(
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "format": {"format_name": "mov,mp4,m4a,3gp,3g2,mj2", "duration": "230.000"},
+                        "streams": [
+                            {"index": 0, "codec_type": "video", "codec_name": "h264", "width": 320, "height": 180},
+                            {"index": 1, "codec_type": "audio", "codec_name": "aac", "sample_rate": "48000", "channels": 2},
+                        ],
+                    }
+                ),
+                stderr="",
+            )
+        if normalized[0] == "fixture-ffmpeg":
+            _write_wav(Path(normalized[-1]), seconds=230)
+            return MediaProcessResult(returncode=0, stdout="", stderr="")
+        raise AssertionError(f"unexpected fixture tool: {normalized[0]} timeout={timeout}")
+
+    source = import_media_source_bytes(
+        project_scope=project_id,
+        filename="chunked-fixture.mp4",
+        content=b"synthetic-chunked-video-fixture",
+    )
+    probe_media_source(
+        source_id=source.source_id,
+        expected_project_scope=project_id,
+        ffprobe_executable="fixture-ffprobe",
+        command_runner=chunked_runner,
+    )
+    audio = extract_primary_audio_for_transcription(
+        source_id=source.source_id,
+        expected_project_scope=project_id,
+        ffprobe_executable="fixture-ffprobe",
+        ffmpeg_executable="fixture-ffmpeg",
+        command_runner=chunked_runner,
+    )
+    assert audio.chunk_count == 2
+    return source, audio
+
+
 async def _run() -> None:
     project = create_media_project(title="媒体转写交付夹具")
     source, audio = _prepare_source(project.project_id)
@@ -188,6 +232,57 @@ async def _run() -> None:
     calls = list_workflow_tool_calls(success_task_id)
     assert len(calls) == 1 and calls[0].result["verification_passed"] is True
     assert calls[0].request["source_id"] == source.source_id
+
+    # 超过单请求上限的音轨会在受控层分段；每段只提交一次，随后回填原视频时间轴。
+    chunked_source, chunked_audio = _prepare_chunked_source(project.project_id)
+    chunked_request = MediaTranscriptionRequest(
+        source_id=chunked_source.source_id,
+        audio_id=chunked_audio.audio_id,
+        language_hints=["en"],
+    )
+    chunked_task_id = "task_media_transcription_89abcdef0123"
+    create_media_transcription_queued_run(task_id=chunked_task_id, project_id=project.project_id, request=chunked_request)
+    submitted_sizes: list[int] = []
+
+    async def chunked_transcriber(**kwargs: object) -> QwenAudioTranscriptionResult:
+        audio_input = kwargs["audio"]
+        submitted_sizes.append(len(getattr(audio_input, "audio_bytes")))
+        part_number = len(submitted_sizes)
+        return QwenAudioTranscriptionResult(
+            provider="qwen_audio",
+            model="qwen-audio-3.1-asr-flash",
+            request_id=f"chunked-provider-request-{part_number}",
+            text=f"segment {part_number}",
+            segments=(
+                QwenAudioTranscriptSegment(
+                    sentence_id=7,
+                    text=f"segment {part_number}",
+                    begin_ms=100,
+                    end_ms=900,
+                    words=(QwenAudioWord(text="segment", begin_ms=100, end_ms=700),),
+                ),
+            ),
+            duration_seconds=1,
+            input_tokens=10,
+            output_tokens=2,
+            total_tokens=12,
+            usage_reported=True,
+        )
+
+    chunked = await run_media_transcription_task(
+        task_id=chunked_task_id,
+        project_id=project.project_id,
+        request=chunked_request,
+        runtime=_runtime(),
+        transcriber=chunked_transcriber,
+    )
+    assert chunked.status == "completed", chunked
+    assert submitted_sizes and len(submitted_sizes) == 2 and all(size <= 7 * 1024 * 1024 for size in submitted_sizes)
+    assert chunked.transcript is not None and [segment.begin_ms for segment in chunked.transcript.segments] == [100, 210_100]
+    chunked_run = load_workflow_run(chunked_task_id)
+    assert chunked_run is not None and chunked_run.metrics.provider_model_request_total == 2
+    assert chunked_run.metrics.provider_total_tokens == 24
+    assert chunked_run.steps[0].output["provider_usage"]["request_count"] == 2
 
     # 跨项目只能在读取受控 WAV 前失败，模型替身不能被触发。
     other_project = create_media_project(title="隔离项目")

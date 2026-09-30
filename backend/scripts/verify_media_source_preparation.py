@@ -27,6 +27,7 @@ from app.services.media_source_preparation import (
     media_transcription_preparation_status,
     probe_media_source,
     read_transcription_audio_bytes,
+    read_transcription_audio_chunks,
 )
 from app.api.health import health
 
@@ -39,7 +40,7 @@ def _write_pcm_wav(path: Path, *, seconds: int = 2) -> None:
         target.writeframes(b"\x00\x00" * (16_000 * seconds))
 
 
-def _fixture_probe(*, with_audio: bool) -> str:
+def _fixture_probe(*, with_audio: bool, duration_seconds: float = 2.0) -> str:
     streams: list[dict[str, object]] = [
         {
             "index": 0,
@@ -63,7 +64,7 @@ def _fixture_probe(*, with_audio: bool) -> str:
         )
     return json.dumps(
         {
-            "format": {"format_name": "mov,mp4,m4a,3gp,3g2,mj2", "duration": "2.000"},
+            "format": {"format_name": "mov,mp4,m4a,3gp,3g2,mj2", "duration": f"{duration_seconds:.3f}"},
             "streams": streams,
         }
     )
@@ -218,6 +219,70 @@ def _verify_no_audio_and_tamper_rejection() -> None:
         assert calls == 1
 
 
+def _verify_oversize_audio_is_split_and_reused() -> None:
+    commands: list[tuple[str, ...]] = []
+
+    def runner(command: tuple[str, ...] | list[str], _timeout: float) -> MediaProcessResult:
+        normalized = tuple(command)
+        commands.append(normalized)
+        if normalized[0] == "fixture-ffprobe":
+            return MediaProcessResult(returncode=0, stdout=_fixture_probe(with_audio=True, duration_seconds=230.0), stderr="")
+        if normalized[0] == "fixture-ffmpeg":
+            _write_pcm_wav(Path(normalized[-1]), seconds=230)
+            return MediaProcessResult(returncode=0, stdout="", stderr="")
+        raise AssertionError(f"unexpected fixture command: {normalized[0]}")
+
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        source = import_media_source_bytes(
+            project_scope="project_demo",
+            filename="long-demo.mp4",
+            content=b"synthetic-long-video-fixture",
+            root_dir=root,
+        )
+        audio = extract_primary_audio_for_transcription(
+            source_id=source.source_id,
+            expected_project_scope="project_demo",
+            root_dir=root,
+            ffprobe_executable="fixture-ffprobe",
+            ffmpeg_executable="fixture-ffmpeg",
+            command_runner=runner,
+        )
+        assert audio.chunk_count == 2
+        assert audio.size_bytes > 7 * 1024 * 1024
+        restored, chunks = read_transcription_audio_chunks(
+            source_id=source.source_id,
+            audio_id=audio.audio_id,
+            expected_project_scope="project_demo",
+            root_dir=root,
+        )
+        assert restored == audio and len(chunks) == 2
+        assert chunks[0].begin_ms == 0 and chunks[0].end_ms == chunks[1].begin_ms
+        assert chunks[1].end_ms == 230_000
+        assert all(len(chunk.audio_bytes) <= 7 * 1024 * 1024 for chunk in chunks)
+        try:
+            read_transcription_audio_bytes(
+                source_id=source.source_id,
+                audio_id=audio.audio_id,
+                expected_project_scope="project_demo",
+                root_dir=root,
+            )
+        except MediaSourcePreparationError as exc:
+            assert "多个转写分段" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected multi-chunk compatibility reader rejection")
+        reused = extract_primary_audio_for_transcription(
+            source_id=source.source_id,
+            expected_project_scope="project_demo",
+            root_dir=root,
+            ffprobe_executable="fixture-ffprobe",
+            ffmpeg_executable="fixture-ffmpeg",
+            command_runner=runner,
+        )
+        assert reused == audio
+        assert [command[0] for command in commands].count("fixture-ffmpeg") == 1
+
+
 def main() -> None:
     status = media_transcription_preparation_status()
     assert isinstance(status["ready"], bool)
@@ -226,6 +291,7 @@ def main() -> None:
     assert health_response.capabilities["media_transcription_preparation"].ready == status["ready"]
     _verify_import_probe_extract_and_reuse()
     _verify_no_audio_and_tamper_rejection()
+    _verify_oversize_audio_is_split_and_reused()
     print("Media source preparation verification passed.")
 
 

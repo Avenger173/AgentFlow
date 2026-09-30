@@ -4024,6 +4024,27 @@ void MainWindow::setupVideoWorkspace()
                 return;
             }
             videoTranscriptionAudioId = audio.audioId;
+            if (audio.chunkCount > 1) {
+                const auto answer = QMessageBox::question(
+                    this,
+                    QStringLiteral("确认分段转写"),
+                    QStringLiteral("该视频的规范化音轨需要分为 %1 段。继续将按顺序调用语音模型 %1 次，"
+                                   "并合并为一份带原视频时间戳的转写结果。")
+                        .arg(audio.chunkCount),
+                    QMessageBox::Yes | QMessageBox::No,
+                    QMessageBox::Yes);
+                if (answer != QMessageBox::Yes) {
+                    videoTranscriptionPending = false;
+                    videoTranscriptionAudioId.clear();
+                    ui->videoChooseButton->setEnabled(true);
+                    ui->videoTranscribeButton->setEnabled(true);
+                    ui->videoDelegateButton->setEnabled(true);
+                    updateVideoCandidateButton();
+                    ui->videoStatusLabel->setText(
+                        QStringLiteral("已准备 %1 段受控音轨；尚未调用语音模型。").arg(audio.chunkCount));
+                    return;
+                }
+            }
             ui->videoStatusLabel->setText(QStringLiteral("受控音轨已准备完成，正在提交转写任务…"));
             backendClient->startMediaTranscription(videoProjectId, videoSourceId, videoTranscriptionAudioId);
         });

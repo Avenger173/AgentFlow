@@ -2813,7 +2813,7 @@ QPushButton#navGroupButton:hover {
 <property name="minimumSize"><size><width>0</width><height>40</height></size></property>
 <property name="enabled"><bool>false</bool></property>
 <property name="text"><string>提交转写</string></property>
-<property name="toolTip"><string>提取受控音轨后提交一次语音转写</string></property>
+<property name="toolTip"><string>提取受控音轨后提交语音转写；超过单段上限时会先确认分段调用次数</string></property>
 </widget></item>
 <item><widget class="QLabel" name="videoGoalHeader">
 <property name="objectName"><string>sectionTitle</string></property>

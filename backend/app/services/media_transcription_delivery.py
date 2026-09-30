@@ -8,7 +8,7 @@ Provider 失败语义、JSON 交付回读与恢复。它不读取客户端路径
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from datetime import UTC, datetime
 from hashlib import sha256
 import json
@@ -45,13 +45,19 @@ from app.schemas.workflow import (
     WorkflowStepRun,
     WorkflowToolCall,
 )
-from app.services.media_source_preparation import MediaSourcePreparationError, read_transcription_audio_bytes
+from app.services.media_source_preparation import (
+    MediaSourcePreparationError,
+    MediaTranscriptionAudioChunk,
+    read_transcription_audio_chunks,
+)
 from app.services.model_gateway import AudioModelRuntime, ModelGatewayError, resolve_audio_model_runtime_for_route
 from app.services.qwen_audio_transcription import (
     QwenAudioTranscriptionInput,
     QwenAudioTranscriptionOutcomeUnknownError,
     QwenAudioTranscriptionProviderError,
     QwenAudioTranscriptionResult,
+    QwenAudioTranscriptSegment,
+    QwenAudioWord,
     transcribe_qwen_audio,
 )
 from app.services.task_event_stream import publish_live_task_event
@@ -104,7 +110,7 @@ async def run_media_transcription_task(
     route_audit: ModelRouteAuditSnapshot | None = None,
     transcriber: Transcriber = transcribe_qwen_audio,
 ) -> MediaTranscriptionTaskResultResponse:
-    """仅提交一次已验证 WAV，并把回读成功的 JSON 作为唯一交付物。"""
+    """提交用户确认的受控 WAV 包，并把合并后的回读 JSON 作为唯一交付物。"""
 
     started_at = _now()
     started_clock = perf_counter()
@@ -130,8 +136,8 @@ async def run_media_transcription_task(
         message="正在校验受控音轨和语音转写模型配置。",
     )
     try:
-        audio_info, audio_bytes = await asyncio.to_thread(
-            read_transcription_audio_bytes,
+        audio_info, audio_chunks = await asyncio.to_thread(
+            read_transcription_audio_chunks,
             source_id=request.source_id,
             audio_id=request.audio_id,
             expected_project_scope=project_id,
@@ -161,36 +167,60 @@ async def run_media_transcription_task(
         event="tool_started",
         agent_id=MEDIA_AGENT_ID,
         step_id=MEDIA_TRANSCRIPTION_STEP_ID,
-        message="正在向已配置的语音模型提交一段受控 WAV。",
+        message=(
+            "正在向已配置的语音模型提交受控 WAV。"
+            if len(audio_chunks) == 1
+            else f"正在按顺序提交 {len(audio_chunks)} 段受控 WAV，并在本地合并时间轴。"
+        ),
     )
+    provider_results: list[QwenAudioTranscriptionResult] = []
     try:
-        provider_result = await transcriber(
-            audio=QwenAudioTranscriptionInput(audio_bytes=audio_bytes, audio_format="wav"),
-            language_hints=tuple(request.language_hints),
-            speaker_diarization=request.speaker_diarization,
-            runtime=active_runtime,
-        )
+        for index, chunk in enumerate(audio_chunks, start=1):
+            if len(audio_chunks) > 1:
+                await publish_live_task_event(
+                    task_id=task_id,
+                    event="tool_progress",
+                    agent_id=MEDIA_AGENT_ID,
+                    step_id=MEDIA_TRANSCRIPTION_STEP_ID,
+                    message=f"正在转写第 {index}/{len(audio_chunks)} 段受控音频。",
+                )
+            provider_results.append(
+                await transcriber(
+                    audio=QwenAudioTranscriptionInput(audio_bytes=chunk.audio_bytes, audio_format="wav"),
+                    language_hints=tuple(request.language_hints),
+                    speaker_diarization=request.speaker_diarization,
+                    runtime=active_runtime,
+                )
+            )
     except QwenAudioTranscriptionOutcomeUnknownError as exc:
         return await _persist_failed_task(
             task_id=task_id,
             project_id=project_id,
             request=request,
-            message=f"{exc} 为避免重复计费，任务不会自动重试。",
+            message=_chunk_failure_message(exc, len(provider_results), len(audio_chunks), outcome_unknown=True),
             duration_ms=_duration_ms(started_clock),
             failure_reason="provider_outcome_unknown",
             route_audit=active_audit,
             runtime=active_runtime,
+            provider_result=_merge_chunked_provider_results(audio_chunks[: len(provider_results)], provider_results)
+            if provider_results
+            else None,
+            provider_request_count=len(provider_results),
         )
     except QwenAudioTranscriptionProviderError as exc:
         return await _persist_failed_task(
             task_id=task_id,
             project_id=project_id,
             request=request,
-            message=str(exc),
+            message=_chunk_failure_message(exc, len(provider_results), len(audio_chunks), outcome_unknown=False),
             duration_ms=_duration_ms(started_clock),
             failure_reason="provider_rejected",
             route_audit=active_audit,
             runtime=active_runtime,
+            provider_result=_merge_chunked_provider_results(audio_chunks[: len(provider_results)], provider_results)
+            if provider_results
+            else None,
+            provider_request_count=len(provider_results),
         )
     except ModelGatewayError as exc:
         return await _persist_failed_task(
@@ -202,6 +232,10 @@ async def run_media_transcription_task(
             failure_reason="validation_failed",
             route_audit=active_audit,
             runtime=active_runtime,
+            provider_result=_merge_chunked_provider_results(audio_chunks[: len(provider_results)], provider_results)
+            if provider_results
+            else None,
+            provider_request_count=len(provider_results),
         )
     except Exception:  # pragma: no cover - 外部适配器异常必须收束成可解释终态。
         return await _persist_failed_task(
@@ -213,9 +247,15 @@ async def run_media_transcription_task(
             failure_reason="unexpected",
             route_audit=active_audit,
             runtime=active_runtime,
+            provider_result=_merge_chunked_provider_results(audio_chunks[: len(provider_results)], provider_results)
+            if provider_results
+            else None,
+            provider_request_count=len(provider_results),
         )
 
+    provider_result: QwenAudioTranscriptionResult | None = None
     try:
+        provider_result = _merge_chunked_provider_results(audio_chunks, provider_results)
         transcript = _transcript_from_provider(provider_result)
         artifact, payload = await asyncio.to_thread(
             _write_verified_transcript_artifact,
@@ -225,8 +265,9 @@ async def run_media_transcription_task(
             audio=audio_info,
             transcript=transcript,
             result=provider_result,
+            provider_request_count=len(provider_results),
         )
-    except (OSError, ValueError, MediaSourcePreparationError) as exc:
+    except (OSError, ValueError, MediaSourcePreparationError, ModelGatewayError) as exc:
         return await _persist_failed_task(
             task_id=task_id,
             project_id=project_id,
@@ -237,6 +278,7 @@ async def run_media_transcription_task(
             route_audit=active_audit,
             runtime=active_runtime,
             provider_result=provider_result,
+            provider_request_count=len(provider_results),
         )
 
     duration_ms = _duration_ms(started_clock)
@@ -255,6 +297,7 @@ async def run_media_transcription_task(
         route_audit=active_audit,
         runtime=active_runtime,
         provider_result=provider_result,
+        provider_request_count=len(provider_results),
     )
     with _TASK_LOCK:
         save_workflow_run(
@@ -412,6 +455,79 @@ def _transcript_from_provider(result: QwenAudioTranscriptionResult) -> MediaTran
     )
 
 
+def _merge_chunked_provider_results(
+    chunks: tuple[MediaTranscriptionAudioChunk, ...] | list[MediaTranscriptionAudioChunk],
+    results: list[QwenAudioTranscriptionResult],
+) -> QwenAudioTranscriptionResult:
+    """将每段本地时间戳映射回原视频；不试图猜测或修补段间被截断的语句。"""
+
+    if not chunks or len(chunks) != len(results):
+        raise ValueError("转写分段与 Provider 结果数量不一致。")
+    first = results[0]
+    if any(item.provider != first.provider or item.model != first.model for item in results[1:]):
+        raise ModelGatewayError("同一次媒体转写的 Provider 或模型发生变化，已拒绝合并结果。")
+    merged_segments: list[QwenAudioTranscriptSegment] = []
+    text_parts: list[str] = []
+    next_sentence_id = 0
+    for chunk, result in zip(chunks, results, strict=True):
+        text_parts.append(result.text)
+        for segment in sorted(result.segments, key=lambda item: (item.begin_ms, item.end_ms, item.sentence_id)):
+            begin_ms = min(chunk.end_ms, max(chunk.begin_ms, chunk.begin_ms + segment.begin_ms))
+            end_ms = min(chunk.end_ms, max(begin_ms, chunk.begin_ms + segment.end_ms))
+            if not segment.text or end_ms < begin_ms:
+                continue
+            words = tuple(
+                QwenAudioWord(
+                    text=word.text,
+                    begin_ms=min(chunk.end_ms, max(begin_ms, chunk.begin_ms + word.begin_ms)),
+                    end_ms=min(chunk.end_ms, max(begin_ms, chunk.begin_ms + word.end_ms)),
+                    punctuation=word.punctuation,
+                )
+                for word in segment.words
+                if word.text
+            )
+            merged_segments.append(
+                QwenAudioTranscriptSegment(
+                    sentence_id=next_sentence_id,
+                    text=segment.text,
+                    begin_ms=begin_ms,
+                    end_ms=end_ms,
+                    speaker_id=segment.speaker_id,
+                    words=words,
+                )
+            )
+            next_sentence_id += 1
+    if not merged_segments:
+        raise ModelGatewayError("分段转写未返回可用于字幕的稳定句级时间戳。")
+    return QwenAudioTranscriptionResult(
+        provider=first.provider,
+        model=first.model,
+        request_id="|".join(item.request_id for item in results),
+        text="\n".join(part for part in text_parts if part),
+        segments=tuple(merged_segments),
+        duration_seconds=_sum_optional_int(item.duration_seconds for item in results),
+        input_tokens=_sum_optional_int(item.input_tokens for item in results),
+        output_tokens=_sum_optional_int(item.output_tokens for item in results),
+        total_tokens=_sum_optional_int(item.total_tokens for item in results),
+        usage_reported=all(item.usage_reported for item in results),
+    )
+
+
+def _sum_optional_int(values: Iterable[int | None]) -> int | None:
+    normalized = list(values)
+    if not normalized or any(not isinstance(item, int) for item in normalized):
+        return None
+    return sum(normalized)
+
+
+def _chunk_failure_message(exc: Exception, completed_count: int, total_count: int, *, outcome_unknown: bool) -> str:
+    if total_count <= 1:
+        return f"{exc} {'为避免重复计费，任务不会自动重试。' if outcome_unknown else ''}".strip()
+    attempted_index = completed_count + 1
+    suffix = "为避免重复计费，任务不会自动重试。" if outcome_unknown else "本次任务不会自动重试。"
+    return f"第 {attempted_index}/{total_count} 段转写未完成；前 {completed_count} 段已提交。{exc} {suffix}"
+
+
 def _write_verified_transcript_artifact(
     *,
     task_id: str,
@@ -420,6 +536,7 @@ def _write_verified_transcript_artifact(
     audio: MediaTranscriptionAudioInfo,
     transcript: MediaTranscriptInfo,
     result: QwenAudioTranscriptionResult,
+    provider_request_count: int = 1,
 ) -> tuple[WorkflowArtifact, MediaTranscriptionArtifactPayload]:
     payload = MediaTranscriptionArtifactPayload(
         task_id=task_id,
@@ -430,7 +547,7 @@ def _write_verified_transcript_artifact(
         provider=result.provider,
         model=result.model,
         provider_request_id_sha256=_hash_text(result.request_id),
-        provider_usage=_provider_usage(result),
+        provider_usage=_provider_usage(result, request_count=provider_request_count),
         created_at=_now(),
     )
     path = _artifact_path(task_id)
@@ -474,7 +591,7 @@ def _load_verified_transcript_artifact(
     ):
         raise ValueError("受控转写 JSON 与任务检查点不匹配。")
     # 重启对账前再次确认源和派生 WAV 没有被篡改或跨项目替换。
-    verified_audio, _ = read_transcription_audio_bytes(
+    verified_audio, _ = read_transcription_audio_chunks(
         source_id=request.source_id,
         audio_id=request.audio_id,
         expected_project_scope=payload.project_id,
@@ -549,13 +666,14 @@ def _build_run(
     route_audit: ModelRouteAuditSnapshot | None = None,
     runtime: AudioModelRuntime | None = None,
     provider_result: QwenAudioTranscriptionResult | None = None,
+    provider_request_count: int = 0,
 ) -> WorkflowRun:
     output = _base_output(project_id=project_id, request=request)
     output.update({"message": message, "failure_reason": failure_reason, "verification_passed": artifact is not None})
     if runtime is not None:
         output.update({"provider": runtime.provider, "model": runtime.model})
     if provider_result is not None:
-        output.update(_provider_result_output(provider_result))
+        output.update(_provider_result_output(provider_result, request_count=provider_request_count))
     if transcript is not None:
         output["transcript"] = transcript.model_dump(mode="json")
     if artifact is not None:
@@ -570,8 +688,10 @@ def _build_run(
         step_failed=1 if status == "failed" else 0,
         tool_call_total=1 if status in {"running", "completed", "failed"} and runtime is not None else 0,
         tool_call_failed=1 if status == "failed" and runtime is not None else 0,
-        provider_model_request_total=1 if provider_result is not None else 0,
-        provider_usage_reported_request_total=1 if provider_result is not None and provider_result.usage_reported else 0,
+        provider_model_request_total=provider_request_count if provider_result is not None else 0,
+        provider_usage_reported_request_total=provider_request_count
+        if provider_result is not None and provider_result.usage_reported
+        else 0,
         provider_input_tokens=provider_result.input_tokens if provider_result is not None else None,
         provider_output_tokens=provider_result.output_tokens if provider_result is not None else None,
         provider_total_tokens=provider_result.total_tokens if provider_result is not None else None,
@@ -610,6 +730,7 @@ async def _persist_failed_task(
     route_audit: ModelRouteAuditSnapshot | None = None,
     runtime: AudioModelRuntime | None = None,
     provider_result: QwenAudioTranscriptionResult | None = None,
+    provider_request_count: int = 0,
 ) -> MediaTranscriptionTaskResultResponse:
     failed = _build_run(
         task_id=task_id,
@@ -624,6 +745,7 @@ async def _persist_failed_task(
         route_audit=route_audit,
         runtime=runtime,
         provider_result=provider_result,
+        provider_request_count=provider_request_count,
     )
     with _TASK_LOCK:
         save_workflow_run(
@@ -700,9 +822,14 @@ def _persist_reconciled_completion(
                     "step_failed": 0,
                     "tool_call_total": max(1, run.metrics.tool_call_total),
                     "tool_call_failed": 0,
-                    "provider_model_request_total": max(1, run.metrics.provider_model_request_total),
+                    "provider_model_request_total": max(
+                        _usage_int(payload.provider_usage.get("request_count")) or 0,
+                        run.metrics.provider_model_request_total,
+                    ),
                     "provider_usage_reported_request_total": max(
-                        1 if bool(payload.provider_usage.get("usage_reported")) else 0,
+                        (_usage_int(payload.provider_usage.get("request_count")) or 0)
+                        if bool(payload.provider_usage.get("usage_reported"))
+                        else 0,
                         run.metrics.provider_usage_reported_request_total,
                     ),
                     "provider_input_tokens": _usage_int(payload.provider_usage.get("input_tokens")),
@@ -846,9 +973,10 @@ def _base_output(*, project_id: str, request: MediaTranscriptionRequest) -> dict
     }
 
 
-def _provider_usage(result: QwenAudioTranscriptionResult) -> dict[str, int | bool | None]:
+def _provider_usage(result: QwenAudioTranscriptionResult, *, request_count: int = 1) -> dict[str, int | bool | None]:
     return {
         "usage_reported": result.usage_reported,
+        "request_count": request_count,
         "duration_seconds": result.duration_seconds,
         "input_tokens": result.input_tokens,
         "output_tokens": result.output_tokens,
@@ -856,12 +984,12 @@ def _provider_usage(result: QwenAudioTranscriptionResult) -> dict[str, int | boo
     }
 
 
-def _provider_result_output(result: QwenAudioTranscriptionResult) -> dict[str, object]:
+def _provider_result_output(result: QwenAudioTranscriptionResult, *, request_count: int = 1) -> dict[str, object]:
     return {
         "provider": result.provider,
         "model": result.model,
         "provider_request_id_sha256": _hash_text(result.request_id),
-        "provider_usage": _provider_usage(result),
+        "provider_usage": _provider_usage(result, request_count=request_count),
     }
 
 

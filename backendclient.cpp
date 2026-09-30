@@ -597,6 +597,7 @@ MediaTranscriptionAudioInfo readMediaTranscriptionAudioInfo(const QJsonObject &p
     audio.durationSeconds = payload.value(QStringLiteral("duration_seconds")).toDouble();
     audio.sampleRate = payload.value(QStringLiteral("sample_rate")).toInt();
     audio.channels = payload.value(QStringLiteral("channels")).toInt();
+    audio.chunkCount = payload.value(QStringLiteral("chunk_count")).toInt(1);
     return audio;
 }
 
@@ -6765,7 +6766,8 @@ void BackendClient::handleMediaTranscriptionAudioReply(QNetworkReply *reply)
     const MediaTranscriptionAudioInfo audio = readMediaTranscriptionAudioInfo(
         payload.value(QStringLiteral("audio")).toObject());
     if (source.projectScope.isEmpty() || source.sourceId.isEmpty() || audio.audioId.isEmpty()
-        || audio.sourceId != source.sourceId || audio.sampleRate != 16000 || audio.channels != 1) {
+        || audio.sourceId != source.sourceId || audio.sampleRate != 16000 || audio.channels != 1
+        || audio.chunkCount < 1 || audio.chunkCount > 8) {
         emit mediaAgentFailed(
             QStringLiteral("prepare_transcription_audio"),
             QStringLiteral("转写准备响应缺少有效的受控 16 kHz 单声道音频。"));

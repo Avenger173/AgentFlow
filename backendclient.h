@@ -499,6 +499,7 @@ struct MediaTranscriptionAudioInfo
     double durationSeconds = 0.0;
     int sampleRate = 0;
     int channels = 0;
+    int chunkCount = 1;
 };
 
 struct MediaTranscriptionSegmentInfo

@@ -36,6 +36,11 @@ from app.schemas.media_edl import MediaEditDecisionList, MediaEdlRenderInfo
 
 MAX_MEDIA_SOURCE_BYTES = 256 * 1024 * 1024
 MAX_TRANSCRIPTION_AUDIO_BYTES = 7 * 1024 * 1024
+# 16 kHz / 单声道 / s16le WAV 每秒 32,000 bytes。210 秒留出文件头与实现余量，
+# 既满足当前 Qwen 单请求 7 MiB 限制，也避免把分段策略暴露给桌面端。
+MAX_TRANSCRIPTION_CHUNK_SECONDS = 210
+MAX_TRANSCRIPTION_CHUNKS = 8
+MAX_TRANSCRIPTION_TOTAL_AUDIO_BYTES = MAX_TRANSCRIPTION_AUDIO_BYTES * MAX_TRANSCRIPTION_CHUNKS
 MAX_EDL_RENDER_BYTES = 256 * 1024 * 1024
 EDL_RENDER_DURATION_TOLERANCE_MS = 500
 _SOURCE_ID_PATTERN = re.compile(r"^ms_[0-9a-f]{16}$")
@@ -72,6 +77,27 @@ class MediaProcessResult:
     returncode: int
     stdout: str
     stderr: str
+
+
+@dataclass(frozen=True)
+class MediaTranscriptionAudioChunk:
+    """一个已回读且可单独提交给 ASR 的受控 WAV 分段。"""
+
+    chunk_index: int
+    begin_ms: int
+    end_ms: int
+    audio_bytes: bytes
+
+
+@dataclass(frozen=True)
+class _TranscriptionWavMetadata:
+    sha256: str
+    size_bytes: int
+    frame_count: int
+
+    @property
+    def duration_seconds(self) -> float:
+        return round(self.frame_count / 16_000.0, 3)
 
 
 MediaCommandRunner = Callable[[Sequence[str], float], MediaProcessResult]
@@ -294,12 +320,15 @@ def extract_primary_audio_for_transcription(
             explicit=ffmpeg_executable,
             allow_fixture=command_runner is not None,
         )
+        if probe.duration_seconds is not None and probe.duration_seconds > MAX_TRANSCRIPTION_CHUNK_SECONDS * MAX_TRANSCRIPTION_CHUNKS:
+            raise MediaSourcePreparationError(
+                f"当前短视频最长支持 {MAX_TRANSCRIPTION_CHUNK_SECONDS * MAX_TRANSCRIPTION_CHUNKS // 60} 分钟转写，请先截取需要的片段。"
+            )
+
         audio_id = _new_id("mda")
         derived_dir = source_dir / "derived"
         derived_dir.mkdir(exist_ok=True)
-        temporary_path = _resolve_source_file(derived_dir, f"{audio_id}.tmp.wav")
-        final_relative = f"derived/{audio_id}.wav"
-        final_path = _resolve_source_file(source_dir, final_relative)
+        temporary_path = _resolve_source_file(derived_dir, f"{audio_id}.source.tmp.wav")
         result = (command_runner or _run_media_command)(
             (
                 executable,
@@ -326,20 +355,25 @@ def extract_primary_audio_for_transcription(
         if result.returncode != 0:
             temporary_path.unlink(missing_ok=True)
             raise MediaToolExecutionError("ffmpeg 无法从当前媒体生成转写音轨。")
+        pending_paths: list[tuple[Path, Path]] = []
         try:
-            audio = _verify_transcription_wav(
-                path=temporary_path,
+            audio, record, pending_paths = _prepare_transcription_audio_bundle(
+                source_dir=source_dir,
+                derived_dir=derived_dir,
+                source_path=temporary_path,
                 audio_id=audio_id,
                 source_id=source_id,
                 source_sha256=manifest["source_sha256"],
                 source_stream_index=audio_stream.stream_index,
             )
-            os.replace(temporary_path, final_path)
+            for pending_path, final_path in pending_paths:
+                os.replace(pending_path, final_path)
         except Exception:
             temporary_path.unlink(missing_ok=True)
-            final_path.unlink(missing_ok=True)
+            for pending_path, final_path in pending_paths:
+                pending_path.unlink(missing_ok=True)
+                final_path.unlink(missing_ok=True)
             raise
-        record = audio.model_dump(mode="json") | {"file": final_relative}
         manifest["derived_audio"].append(record)
         _write_manifest(source_dir, manifest)
         return audio
@@ -352,7 +386,27 @@ def read_transcription_audio_bytes(
     expected_project_scope: str | None = None,
     root_dir: Path | None = None,
 ) -> tuple[MediaTranscriptionAudioInfo, bytes]:
-    """供后续 ASR Tool 读取已经回读过的派生 WAV，不暴露其存储路径。"""
+    """兼容旧的单段读取方；分段媒体必须使用 ``read_transcription_audio_chunks``。"""
+
+    audio, chunks = read_transcription_audio_chunks(
+        source_id=source_id,
+        audio_id=audio_id,
+        expected_project_scope=expected_project_scope,
+        root_dir=root_dir,
+    )
+    if len(chunks) != 1:
+        raise MediaSourcePreparationError("该受控音频包含多个转写分段，必须按顺序提交并合并时间轴。")
+    return audio, chunks[0].audio_bytes
+
+
+def read_transcription_audio_chunks(
+    *,
+    source_id: str,
+    audio_id: str,
+    expected_project_scope: str | None = None,
+    root_dir: Path | None = None,
+) -> tuple[MediaTranscriptionAudioInfo, tuple[MediaTranscriptionAudioChunk, ...]]:
+    """读取并回读每个受控 ASR 分段，绝不暴露内部存储路径。"""
 
     source_dir, manifest = _load_source_manifest(source_id, root_dir=root_dir)
     _require_project_scope(manifest, expected_project_scope)
@@ -361,17 +415,7 @@ def read_transcription_audio_bytes(
         if record.get("audio_id") != audio_id:
             continue
         audio = _derived_audio_info(record)
-        path = _resolve_source_file(source_dir, str(record.get("file", "")))
-        if not path.is_file() or _sha256_file(path) != audio.sha256:
-            raise MediaSourcePreparationError("转写音频不存在或已被修改，需要重新提取。")
-        _verify_transcription_wav(
-            path=path,
-            audio_id=audio.audio_id,
-            source_id=audio.source_id,
-            source_sha256=audio.source_sha256,
-            source_stream_index=audio.source_stream_index,
-        )
-        return audio, path.read_bytes()
+        return audio, _read_verified_transcription_audio_chunks(source_dir=source_dir, record=record, audio=audio)
     raise MediaSourcePreparationError("未找到指定的受控转写音频。")
 
 
@@ -684,21 +728,189 @@ def _find_verified_derived_audio(
             continue
         if audio.source_sha256 != source_sha256 or audio.source_stream_index != stream_index:
             continue
-        path = _resolve_source_file(source_dir, str(record.get("file", "")))
-        if not path.is_file() or _sha256_file(path) != audio.sha256:
-            continue
         try:
-            _verify_transcription_wav(
-                path=path,
-                audio_id=audio.audio_id,
-                source_id=audio.source_id,
-                source_sha256=audio.source_sha256,
-                source_stream_index=audio.source_stream_index,
-            )
+            _read_verified_transcription_audio_chunks(source_dir=source_dir, record=record, audio=audio)
         except MediaSourcePreparationError:
             continue
         return audio
     return None
+
+
+def _prepare_transcription_audio_bundle(
+    *,
+    source_dir: Path,
+    derived_dir: Path,
+    source_path: Path,
+    audio_id: str,
+    source_id: str,
+    source_sha256: str,
+    source_stream_index: int,
+) -> tuple[MediaTranscriptionAudioInfo, dict[str, Any], list[tuple[Path, Path]]]:
+    """将完整 WAV 保持在受控目录内，并仅在超过 Provider 上限时按固定边界分段。"""
+
+    source_metadata = _inspect_transcription_wav(path=source_path, enforce_size_limit=False)
+    if source_metadata.size_bytes <= MAX_TRANSCRIPTION_AUDIO_BYTES:
+        audio = _audio_info_from_wav(
+            metadata=_inspect_transcription_wav(path=source_path, enforce_size_limit=True),
+            audio_id=audio_id,
+            source_id=source_id,
+            source_sha256=source_sha256,
+            source_stream_index=source_stream_index,
+            chunk_count=1,
+        )
+        final_relative = f"derived/{audio_id}.wav"
+        final_path = _resolve_source_file(source_dir, final_relative)
+        return audio, audio.model_dump(mode="json") | {"file": final_relative}, [(source_path, final_path)]
+
+    required_chunk_count = (source_metadata.frame_count + MAX_TRANSCRIPTION_CHUNK_SECONDS * 16_000 - 1) // (
+        MAX_TRANSCRIPTION_CHUNK_SECONDS * 16_000
+    )
+    if required_chunk_count > MAX_TRANSCRIPTION_CHUNKS or source_metadata.size_bytes > MAX_TRANSCRIPTION_TOTAL_AUDIO_BYTES:
+        raise MediaSourcePreparationError(
+            f"当前短视频最多支持 {MAX_TRANSCRIPTION_CHUNK_SECONDS * MAX_TRANSCRIPTION_CHUNKS // 60} 分钟转写，请先截取需要的片段。"
+        )
+
+    pending_paths: list[tuple[Path, Path]] = []
+    chunks: list[dict[str, object]] = []
+    try:
+        with wave.open(str(source_path), "rb") as source:
+            frame_offset = 0
+            chunk_index = 0
+            while frame_offset < source_metadata.frame_count:
+                frame_count = min(MAX_TRANSCRIPTION_CHUNK_SECONDS * 16_000, source_metadata.frame_count - frame_offset)
+                pending_path = _resolve_source_file(derived_dir, f"{audio_id}.part{chunk_index + 1:03d}.tmp.wav")
+                final_relative = f"derived/{audio_id}.part{chunk_index + 1:03d}.wav"
+                final_path = _resolve_source_file(source_dir, final_relative)
+                with wave.open(str(pending_path), "wb") as target:
+                    target.setnchannels(1)
+                    target.setsampwidth(2)
+                    target.setframerate(16_000)
+                    target.writeframes(source.readframes(frame_count))
+                metadata = _inspect_transcription_wav(path=pending_path, enforce_size_limit=True)
+                begin_ms = int(round(frame_offset * 1000 / 16_000))
+                frame_offset += frame_count
+                end_ms = int(round(frame_offset * 1000 / 16_000))
+                chunks.append(
+                    {
+                        "chunk_index": chunk_index,
+                        "file": final_relative,
+                        "sha256": metadata.sha256,
+                        "size_bytes": metadata.size_bytes,
+                        "duration_seconds": metadata.duration_seconds,
+                        "begin_ms": begin_ms,
+                        "end_ms": end_ms,
+                    }
+                )
+                pending_paths.append((pending_path, final_path))
+                chunk_index += 1
+    except (OSError, wave.Error) as exc:
+        for pending_path, _ in pending_paths:
+            pending_path.unlink(missing_ok=True)
+        raise MediaToolExecutionError("无法将规范化转写音频切分为可验证的 WAV 分段。") from exc
+    finally:
+        source_path.unlink(missing_ok=True)
+
+    if len(chunks) != required_chunk_count:
+        for pending_path, _ in pending_paths:
+            pending_path.unlink(missing_ok=True)
+        raise MediaToolExecutionError("规范化转写音频分段数量与受控时长不一致。")
+
+    audio = MediaTranscriptionAudioInfo(
+        audio_id=audio_id,
+        source_id=source_id,
+        source_sha256=source_sha256,
+        source_stream_index=source_stream_index,
+        sha256=_transcription_bundle_sha256(chunks),
+        size_bytes=sum(int(item["size_bytes"]) for item in chunks),
+        duration_seconds=source_metadata.duration_seconds,
+        chunk_count=len(chunks),
+        created_at=_utc_now(),
+    )
+    return audio, audio.model_dump(mode="json") | {"chunks": chunks}, pending_paths
+
+
+def _read_verified_transcription_audio_chunks(
+    *, source_dir: Path, record: dict[str, Any], audio: MediaTranscriptionAudioInfo
+) -> tuple[MediaTranscriptionAudioChunk, ...]:
+    raw_chunks = record.get("chunks")
+    if raw_chunks is None:
+        path = _resolve_source_file(source_dir, str(record.get("file", "")))
+        metadata = _inspect_transcription_wav(path=path, enforce_size_limit=True)
+        if audio.chunk_count != 1 or metadata.sha256 != audio.sha256 or metadata.size_bytes != audio.size_bytes:
+            raise MediaSourcePreparationError("转写音频清单与已回读的 WAV 不一致。")
+        if abs(metadata.duration_seconds - audio.duration_seconds) > 0.01:
+            raise MediaSourcePreparationError("转写音频时长与清单不一致。")
+        return (
+            MediaTranscriptionAudioChunk(
+                chunk_index=0,
+                begin_ms=0,
+                end_ms=int(round(metadata.duration_seconds * 1000)),
+                audio_bytes=path.read_bytes(),
+            ),
+        )
+
+    if not isinstance(raw_chunks, list) or len(raw_chunks) != audio.chunk_count or not raw_chunks:
+        raise MediaSourcePreparationError("转写音频分段清单无效。")
+    chunks: list[MediaTranscriptionAudioChunk] = []
+    verified_records: list[dict[str, object]] = []
+    previous_end_ms = 0
+    for expected_index, raw in enumerate(raw_chunks):
+        if not isinstance(raw, dict):
+            raise MediaSourcePreparationError("转写音频分段清单无效。")
+        try:
+            chunk_index = int(raw["chunk_index"])
+            begin_ms = int(raw["begin_ms"])
+            end_ms = int(raw["end_ms"])
+            expected_size = int(raw["size_bytes"])
+            expected_sha256 = str(raw["sha256"])
+            expected_duration = float(raw["duration_seconds"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MediaSourcePreparationError("转写音频分段清单字段无效。") from exc
+        if chunk_index != expected_index or begin_ms != previous_end_ms or end_ms <= begin_ms:
+            raise MediaSourcePreparationError("转写音频分段时间范围无效。")
+        path = _resolve_source_file(source_dir, str(raw.get("file", "")))
+        metadata = _inspect_transcription_wav(path=path, enforce_size_limit=True)
+        if (
+            metadata.sha256 != expected_sha256
+            or metadata.size_bytes != expected_size
+            or abs(metadata.duration_seconds - expected_duration) > 0.01
+            or abs(metadata.duration_seconds * 1000 - (end_ms - begin_ms)) > 1.0
+        ):
+            raise MediaSourcePreparationError("转写音频分段已被修改或与清单不一致。")
+        verified_records.append(
+            {
+                "chunk_index": chunk_index,
+                "sha256": metadata.sha256,
+                "size_bytes": metadata.size_bytes,
+                "duration_seconds": metadata.duration_seconds,
+                "begin_ms": begin_ms,
+                "end_ms": end_ms,
+            }
+        )
+        chunks.append(
+            MediaTranscriptionAudioChunk(
+                chunk_index=chunk_index,
+                begin_ms=begin_ms,
+                end_ms=end_ms,
+                audio_bytes=path.read_bytes(),
+            )
+        )
+        previous_end_ms = end_ms
+    if (
+        _transcription_bundle_sha256(verified_records) != audio.sha256
+        or sum(len(chunk.audio_bytes) for chunk in chunks) != audio.size_bytes
+        or abs(previous_end_ms / 1000.0 - audio.duration_seconds) > 0.01
+    ):
+        raise MediaSourcePreparationError("转写音频包与分段回读结果不一致。")
+    return tuple(chunks)
+
+
+def _transcription_bundle_sha256(chunks: Sequence[dict[str, object]]) -> str:
+    canonical = "\n".join(
+        f"{int(item['chunk_index'])}:{int(item['begin_ms'])}:{int(item['end_ms'])}:{str(item['sha256'])}"
+        for item in chunks
+    )
+    return _sha256_bytes(canonical.encode("ascii"))
 
 
 def _verify_transcription_wav(
@@ -709,11 +921,45 @@ def _verify_transcription_wav(
     source_sha256: str,
     source_stream_index: int,
 ) -> MediaTranscriptionAudioInfo:
+    metadata = _inspect_transcription_wav(path=path, enforce_size_limit=True)
+    return _audio_info_from_wav(
+        metadata=metadata,
+        audio_id=audio_id,
+        source_id=source_id,
+        source_sha256=source_sha256,
+        source_stream_index=source_stream_index,
+        chunk_count=1,
+    )
+
+
+def _audio_info_from_wav(
+    *,
+    metadata: _TranscriptionWavMetadata,
+    audio_id: str,
+    source_id: str,
+    source_sha256: str,
+    source_stream_index: int,
+    chunk_count: int,
+) -> MediaTranscriptionAudioInfo:
+    return MediaTranscriptionAudioInfo(
+        audio_id=audio_id,
+        source_id=source_id,
+        source_sha256=source_sha256,
+        source_stream_index=source_stream_index,
+        sha256=metadata.sha256,
+        size_bytes=metadata.size_bytes,
+        duration_seconds=metadata.duration_seconds,
+        chunk_count=chunk_count,
+        created_at=_utc_now(),
+    )
+
+
+def _inspect_transcription_wav(*, path: Path, enforce_size_limit: bool) -> _TranscriptionWavMetadata:
     if not path.is_file():
         raise MediaToolExecutionError("ffmpeg 未生成可回读的转写音频。")
     size_bytes = path.stat().st_size
-    if not 0 < size_bytes <= MAX_TRANSCRIPTION_AUDIO_BYTES:
-        raise MediaSourcePreparationError("规范化转写音频超过 7 MB 上限，需要先切分媒体。")
+    if size_bytes < 1 or (enforce_size_limit and size_bytes > MAX_TRANSCRIPTION_AUDIO_BYTES):
+        raise MediaSourcePreparationError("规范化转写音频分段超过 7 MB 上限。")
     try:
         with wave.open(str(path), "rb") as source:
             sample_rate = source.getframerate()
@@ -725,16 +971,7 @@ def _verify_transcription_wav(
         raise MediaToolExecutionError("ffmpeg 输出不是可读取的 WAV 音频。") from exc
     if sample_rate != 16_000 or channels != 1 or sample_width != 2 or compression != "NONE":
         raise MediaToolExecutionError("ffmpeg 输出未满足 16 kHz 单声道 PCM WAV 契约。")
-    return MediaTranscriptionAudioInfo(
-        audio_id=audio_id,
-        source_id=source_id,
-        source_sha256=source_sha256,
-        source_stream_index=source_stream_index,
-        sha256=_sha256_file(path),
-        size_bytes=size_bytes,
-        duration_seconds=round(frames / float(sample_rate), 3),
-        created_at=_utc_now(),
-    )
+    return _TranscriptionWavMetadata(sha256=_sha256_file(path), size_bytes=size_bytes, frame_count=frames)
 
 
 def _load_source_manifest(source_id: str, *, root_dir: Path | None) -> tuple[Path, dict[str, Any]]:

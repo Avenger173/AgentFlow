@@ -59,17 +59,19 @@ class MediaProbeInfo(BaseModel):
 
 
 class MediaTranscriptionAudioInfo(BaseModel):
-    """为 ASR 固定为单声道 16 kHz PCM WAV 的受控派生文件。"""
+    """为 ASR 固定为单声道 16 kHz PCM WAV 的受控派生音频包。"""
 
     audio_id: str = Field(pattern=r"^mda_[0-9a-f]{16}$")
     source_id: str = Field(pattern=r"^ms_[0-9a-f]{16}$")
     source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     source_stream_index: int = Field(ge=0)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    size_bytes: int = Field(ge=1, le=7 * 1024 * 1024)
+    # 单个 WAV 仍被限制在 7 MiB；此处是受控音频包的总大小，供短视频按段提交。
+    size_bytes: int = Field(ge=1, le=8 * 7 * 1024 * 1024)
     duration_seconds: float = Field(ge=0)
     sample_rate: Literal[16_000] = 16_000
     channels: Literal[1] = 1
+    chunk_count: int = Field(default=1, ge=1, le=8)
     created_at: str
 
 
