@@ -106,14 +106,15 @@ def load_media_edl_planning_context(
             "当前短视频剪辑最多支持 3 分钟。"
         )
     raw_segments = tuple(sorted(payload.transcript.segments, key=lambda item: (item.begin_ms, item.end_ms, item.sentence_id)))
-    segments = tuple(
+    normalized_segments = tuple(
         raw_segments[span.source_index].model_copy(
             update={"text": span.text, "begin_ms": span.begin_ms, "end_ms": span.end_ms, "words": []}
         )
         for span in normalize_cumulative_transcript_spans(raw_segments)
     )
+    segments = _filter_unrenderable_planning_segments(normalized_segments)
     if not segments:
-        raise MediaEdlPlanningError("已验证转写没有可用于候选剪辑的句段。")
+        raise MediaEdlPlanningError("已验证转写没有可用于当前受限剪辑的句段。")
     if len(segments) > MAX_EDL_PLANNING_SEGMENTS:
         raise MediaEdlPlanningError("当前候选剪辑只支持最多 320 个转写句段，长媒体尚未实现。")
     if len({segment.sentence_id for segment in segments}) != len(segments):
@@ -127,6 +128,23 @@ def load_media_edl_planning_context(
         source_sha256=source.source_sha256,
         segments=segments,
         duration_constraint=duration_constraint,
+    )
+
+
+def _filter_unrenderable_planning_segments(
+    segments: tuple[MediaTranscriptionSegmentInfo, ...],
+) -> tuple[MediaTranscriptionSegmentInfo, ...]:
+    """Hide timestamp envelopes that no permitted EDL could ever render.
+
+    This is intentionally scoped to planning. The verified transcript artifact remains
+    unchanged for review and subtitles; only a span longer than the global EDL budget
+    is excluded from the model's selectable sentence IDs.
+    """
+
+    return tuple(
+        segment
+        for segment in segments
+        if segment.end_ms - segment.begin_ms <= MAX_EDL_OUTPUT_DURATION_MS
     )
 
 
@@ -218,10 +236,16 @@ def build_media_edl_candidate(
         MediaEdlClip(begin_ms=selection.begin_ms, end_ms=selection.end_ms)
         for selection in normalized_selections
     ]
+    normalized_duration_ms = sum(clip.end_ms - clip.begin_ms for clip in normalized_clips)
+    if normalized_duration_ms > MAX_EDL_OUTPUT_DURATION_MS:
+        raise MediaEdlPlanningError(
+            f"模型候选总时长 {_format_duration(normalized_duration_ms)} 超过当前 3 分钟上限，"
+            "且无法在可用转写句段边界收紧；未创建可确认候选或 MP4。"
+        )
     try:
         edl = MediaEditDecisionList(source_id=context.source_id, clips=normalized_clips)
     except ValueError as exc:
-        raise MediaEdlPlanningError("模型候选的时间顺序或总时长不满足受限 EDL 规则。") from exc
+        raise MediaEdlPlanningError(f"模型候选未通过受限 EDL 校验：{exc}") from exc
     _validate_candidate_duration(edl=edl, constraint=context.duration_constraint)
     return (
         MediaEdlCandidateInfo(

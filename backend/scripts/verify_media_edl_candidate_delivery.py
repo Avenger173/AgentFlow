@@ -146,6 +146,28 @@ async def _run() -> dict[str, object]:
         (30, "conclusion", 2_300, 3_600),
     ]
 
+    oversized_span_payload = payload.model_copy(
+        update={
+            "transcript": MediaTranscriptInfo(
+                text="broad timestamp envelope with usable child spans",
+                segments=[
+                    MediaTranscriptionSegmentInfo(sentence_id=40, text="broad envelope", begin_ms=0, end_ms=180_001),
+                    MediaTranscriptionSegmentInfo(sentence_id=50, text="first usable span", begin_ms=1_000, end_ms=15_000),
+                    MediaTranscriptionSegmentInfo(sentence_id=60, text="second usable span", begin_ms=16_000, end_ms=31_000),
+                ],
+            )
+        }
+    )
+    oversized_span_context = load_media_edl_planning_context(
+        project_id=project.project_id,
+        request=request,
+        transcript_loader=lambda **_: oversized_span_payload,
+    )
+    assert [(item.sentence_id, item.begin_ms, item.end_ms) for item in oversized_span_context.segments] == [
+        (50, 1_000, 15_000),
+        (60, 16_000, 31_000),
+    ]
+
     duration_request = MediaEdlCandidateRequest(
         transcription_task_id=payload.task_id,
         goal="保留核心讲解，控制在 60 到 90 秒。",
