@@ -24,6 +24,7 @@ from app.schemas.media_edl import (
 from app.schemas.media_source import MediaTranscriptionArtifactPayload, MediaTranscriptionSegmentInfo
 from app.services.media_source_preparation import MediaSourcePreparationError, get_media_source
 from app.services.media_transcription_delivery import load_verified_media_transcription_payload
+from app.services.media_transcript_timing import normalize_cumulative_transcript_spans
 from app.services.model_gateway import ModelRuntime
 
 
@@ -61,7 +62,13 @@ def load_media_edl_planning_context(
         raise MediaEdlPlanningError(str(exc)) from exc
     if source.source_sha256 != payload.audio.source_sha256:
         raise MediaEdlPlanningError("媒体源哈希与已验证转写交付不一致。")
-    segments = tuple(sorted(payload.transcript.segments, key=lambda item: (item.begin_ms, item.end_ms, item.sentence_id)))
+    raw_segments = tuple(sorted(payload.transcript.segments, key=lambda item: (item.begin_ms, item.end_ms, item.sentence_id)))
+    segments = tuple(
+        raw_segments[span.source_index].model_copy(
+            update={"text": span.text, "begin_ms": span.begin_ms, "end_ms": span.end_ms, "words": []}
+        )
+        for span in normalize_cumulative_transcript_spans(raw_segments)
+    )
     if not segments:
         raise MediaEdlPlanningError("已验证转写没有可用于候选剪辑的句段。")
     if len(segments) > MAX_EDL_PLANNING_SEGMENTS:
@@ -92,6 +99,7 @@ async def generate_media_edl_model_candidate(
                 "sentence_id": segment.sentence_id,
                 "begin_ms": segment.begin_ms,
                 "end_ms": segment.end_ms,
+                "duration_ms": segment.end_ms - segment.begin_ms,
                 "text": segment.text,
             }
             for segment in context.segments
@@ -220,7 +228,8 @@ def build_media_edl_planning_system_prompt() -> str:
         "你是 AgentFlow 的受限视频剪辑候选规划器。只返回一个 JSON 对象，不要 Markdown、解释、推理过程或额外字段。"
         "你只根据用户目标和提供的转写句段选择片段；不能读取文件、不能调用工具、不能渲染视频、不能假设未提供的画面内容。"
         "只能引用给定的 sentence_id，不能编造毫秒时间、文件路径、模型名、字幕、费用或新素材。"
-        "候选必须按给定 begin_ms 的升序列出，不能按相关性排序、重复或重叠；最多 8 段，总时长不超过 180000 ms。目标不明确时请求澄清。"
+        "候选必须按给定 begin_ms 的升序列出，不能按相关性排序、重复或重叠；最多 8 段，总时长不超过 180000 ms。"
+        "返回前必须依据每段的 begin_ms/end_ms 自行核算所选范围的总时长；用户目标写明更短时长时，应优先满足该时长，宁可少选也不能超时。目标不明确时请求澄清。"
         "候选会等待用户单独确认，不会自动执行。\n"
         "JSON 契约："
         '{"action":"candidate|clarify","selections":[{"start_sentence_id":0,"end_sentence_id":0,"reason":""}],'

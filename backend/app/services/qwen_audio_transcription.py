@@ -20,6 +20,7 @@ from app.services.model_gateway import (
     ModelGatewayError,
     resolve_audio_model_runtime_for_route,
 )
+from app.services.media_transcript_timing import NormalizedTranscriptSpan, normalize_cumulative_transcript_spans
 
 
 _MULTIMODAL_GENERATION_PATH = "/services/aigc/multimodal-generation/generation"
@@ -272,7 +273,19 @@ def _build_transcription_result(
         for segment in event_segments:
             segments[segment.sentence_id] = segment
 
-    ordered_segments = tuple(segments[key] for key in sorted(segments))
+    raw_ordered_segments = tuple(segments[key] for key in sorted(segments))
+    normalized_spans = normalize_cumulative_transcript_spans(raw_ordered_segments)
+    ordered_segments = tuple(
+        QwenAudioTranscriptSegment(
+            sentence_id=raw_ordered_segments[span.source_index].sentence_id,
+            text=span.text,
+            begin_ms=span.begin_ms,
+            end_ms=span.end_ms,
+            speaker_id=raw_ordered_segments[span.source_index].speaker_id,
+            words=_words_for_normalized_span(raw_ordered_segments[span.source_index], span),
+        )
+        for span in normalized_spans
+    )
     if not final_text:
         final_text = "".join(segment.text for segment in ordered_segments)
     if not final_text or not ordered_segments:
@@ -288,6 +301,29 @@ def _build_transcription_result(
         output_tokens=_optional_int(usage.get("output_tokens")),
         total_tokens=_optional_int(usage.get("total_tokens")),
         usage_reported=bool(usage),
+    )
+
+
+def _words_for_normalized_span(
+    segment: QwenAudioTranscriptSegment,
+    span: NormalizedTranscriptSpan,
+) -> tuple[QwenAudioWord, ...]:
+    """Keep only words belonging to a cumulative snapshot's newly added range."""
+
+    begin_ms = span.begin_ms
+    end_ms = span.end_ms
+    previous_end_ms = span.previous_snapshot_end_ms
+    return tuple(
+        QwenAudioWord(
+            text=word.text,
+            begin_ms=max(begin_ms, word.begin_ms),
+            end_ms=min(end_ms, word.end_ms),
+            punctuation=word.punctuation,
+        )
+        for word in segment.words
+        if word.end_ms >= begin_ms
+        and word.begin_ms <= end_ms
+        and (previous_end_ms is None or word.end_ms > previous_end_ms)
     )
 
 

@@ -165,6 +165,30 @@ async def _verify_short_audio_json_result() -> None:
     assert result.total_tokens == 7
 
 
+async def _verify_cumulative_sentence_snapshot_normalization() -> None:
+    """Growing provider snapshots must not become multiple clips from time zero."""
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        events = b"".join(
+            (
+                _sse({"output": {"sentence": {"sentence_id": 1, "sentence_end": True, "begin_time": 240, "end_time": 1000, "text": "Intro"}}}),
+                _sse({"output": {"sentence": {"sentence_id": 2, "sentence_end": True, "begin_time": 240, "end_time": 2200, "text": "Intro product"}}}),
+                _sse({"output": {"sentence": {"sentence_id": 3, "sentence_end": True, "begin_time": 240, "end_time": 2600, "text": "stale"}}}),
+                _sse({"output": {"sentence": {"sentence_id": 4, "sentence_end": True, "begin_time": 240, "end_time": 3400, "text": "Intro product demo"}}}),
+            )
+        )
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=events)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await transcribe_qwen_audio(audio=AUDIO, runtime=RUNTIME, client=client)
+
+    assert [(item.sentence_id, item.text, item.begin_ms, item.end_ms) for item in result.segments] == [
+        (1, "Intro", 240, 1000),
+        (2, "product", 1000, 2200),
+        (4, "demo", 2200, 3400),
+    ]
+
+
 async def _verify_failures() -> None:
     async def rejected(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(400, json={"code": "InvalidParameter", "message": "audio format rejected"})
@@ -211,6 +235,7 @@ async def _verify_failures() -> None:
 def main() -> None:
     asyncio.run(_verify_success())
     asyncio.run(_verify_short_audio_json_result())
+    asyncio.run(_verify_cumulative_sentence_snapshot_normalization())
     asyncio.run(_verify_failures())
     print("Qwen Audio transcription adapter verification passed.")
 

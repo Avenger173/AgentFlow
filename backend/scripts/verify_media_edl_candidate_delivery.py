@@ -118,6 +118,31 @@ async def _run() -> dict[str, object]:
     )
     assert context.source_id == source.source_id and len(context.segments) == 3
 
+    # 历史 Provider 可能把逐步增长的识别快照当作稳定句段；候选规划必须只读纠正，
+    # 不能让每个后续片段重新从零秒开始，也不要求客户重做一次转写。
+    cumulative_payload = payload.model_copy(
+        update={
+            "transcript": MediaTranscriptInfo(
+                text="Intro product conclusion",
+                segments=[
+                    MediaTranscriptionSegmentInfo(sentence_id=10, text="Intro", begin_ms=240, end_ms=1_000),
+                    MediaTranscriptionSegmentInfo(sentence_id=20, text="Intro product", begin_ms=240, end_ms=2_300),
+                    MediaTranscriptionSegmentInfo(sentence_id=30, text="Intro product conclusion", begin_ms=240, end_ms=3_600),
+                ],
+            )
+        }
+    )
+    cumulative_context = load_media_edl_planning_context(
+        project_id=project.project_id,
+        request=request,
+        transcript_loader=lambda **_: cumulative_payload,
+    )
+    assert [(item.sentence_id, item.text, item.begin_ms, item.end_ms) for item in cumulative_context.segments] == [
+        (10, "Intro", 240, 1_000),
+        (20, "product", 1_000, 2_300),
+        (30, "conclusion", 2_300, 3_600),
+    ]
+
     cross_project = create_media_project(title="EDL candidate isolation fixture")
     try:
         load_media_edl_planning_context(
