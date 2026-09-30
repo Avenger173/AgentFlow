@@ -353,6 +353,7 @@ ctest --test-dir build\dev -C Debug --output-on-failure
 
 ## 文档导航
 
+- [新电脑重建与迁移指南](docs/NEW_COMPUTER_SETUP.md)
 - [当前项目状态](docs/PROJECT_STATUS.md)
 - [开发路线与阶段门禁](docs/DEVELOPMENT_ROADMAP.md)
 - [Agent 与 Workflow 规格](docs/AGENT_SPECIFICATIONS.md)
