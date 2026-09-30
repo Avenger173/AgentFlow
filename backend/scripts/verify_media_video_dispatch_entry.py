@@ -95,6 +95,23 @@ def main() -> None:
             assert "转写" in handoff["expected_output"]
             assert "尚未" in handoff["expected_output"]
 
+            followup = client.post(
+                "/api/chat",
+                json={
+                    "message": "@多媒体助手 把刚才那版剪辑改短一些，只保留操作步骤并导出字幕。",
+                    "agent_hints": [{"agent_id": "media_agent", "source": "mention"}],
+                    "materials": [material],
+                },
+            )
+            assert followup.status_code == 200, followup.text
+            followup_plan = followup.json()["workflow_plan"]
+            assert followup_plan["intent"] == "media_video_edit"
+            assert followup_plan["next_action"] == "open_video_workspace"
+            assert [(step["agent"], step["action"]) for step in _specialist_steps(followup_plan)] == [
+                ("media_agent", "open_video_workspace")
+            ]
+            assert followup_plan["workspace_scope"]["external_services"] == []
+
             missing_source = client.post(
                 "/api/chat",
                 json={"message": "@多媒体助手 请从这段视频剪出介绍产品功能的片段。"},

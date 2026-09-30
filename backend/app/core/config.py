@@ -248,6 +248,17 @@ class Settings:
         ).resolve()
 
     @property
+    def media_edl_subtitle_output_dir(self) -> Path:
+        """返回由已验证转写映射出的 SRT 交付目录。"""
+
+        return Path(
+            os.getenv(
+                "AGENTFLOW_MEDIA_EDL_SUBTITLE_OUTPUT_DIR",
+                self.output_dir / "media_subtitles",
+            )
+        ).resolve()
+
+    @property
     def data_analysis_output_dir(self) -> Path:
         """返回数据工作台正式 Excel 交付物的固定输出目录。
 

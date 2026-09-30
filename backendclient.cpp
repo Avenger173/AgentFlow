@@ -645,6 +645,7 @@ MediaEdlCandidateTaskResult readMediaEdlCandidateTaskResult(const QJsonObject &p
     }
     result.sourceId = candidate.value(QStringLiteral("source_id")).toString();
     result.transcriptionTaskId = candidate.value(QStringLiteral("transcription_task_id")).toString();
+    result.parentCandidateTaskId = candidate.value(QStringLiteral("parent_candidate_task_id")).toString();
     result.goal = candidate.value(QStringLiteral("goal")).toString();
     result.requiresConfirmation = candidate.value(QStringLiteral("requires_confirmation")).toBool();
     result.targetMinDurationMs = static_cast<qint64>(candidate.value(QStringLiteral("target_min_duration_ms")).toDouble(1));
@@ -3078,7 +3079,8 @@ void BackendClient::requestMediaTranscriptionResult(const QString &taskId)
 void BackendClient::startMediaEdlCandidate(
     const QString &projectId,
     const QString &transcriptionTaskId,
-    const QString &goal)
+    const QString &goal,
+    const QString &parentCandidateTaskId)
 {
     if (projectId.trimmed().isEmpty() || transcriptionTaskId.trimmed().isEmpty() || goal.trimmed().size() < 2) {
         emit mediaAgentFailed(QStringLiteral("start_edl_candidate"), QStringLiteral("生成剪辑候选缺少已完成转写或剪辑目标。"));
@@ -3087,6 +3089,9 @@ void BackendClient::startMediaEdlCandidate(
     QJsonObject payload;
     payload.insert(QStringLiteral("transcription_task_id"), transcriptionTaskId.trimmed());
     payload.insert(QStringLiteral("goal"), goal.trimmed());
+    if (!parentCandidateTaskId.trimmed().isEmpty()) {
+        payload.insert(QStringLiteral("parent_candidate_task_id"), parentCandidateTaskId.trimmed());
+    }
     QNetworkReply *reply = networkManager_.post(
         createRequest(buildMediaAgentEdlCandidateStartUrl(projectId.trimmed()), 10000),
         QJsonDocument(payload).toJson(QJsonDocument::Compact));
@@ -3169,6 +3174,29 @@ void BackendClient::requestMediaEdlRenderDownload(const QString &projectId, cons
     reply->setProperty("media_edl_task_id", taskId.trimmed());
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         handleMediaEdlRenderDownloadReply(reply);
+    });
+}
+
+void BackendClient::requestMediaEdlSubtitleDownload(
+    const QString &projectId,
+    const QString &candidateTaskId,
+    const QString &subtitleKind)
+{
+    if (projectId.trimmed().isEmpty() || candidateTaskId.trimmed().isEmpty()
+        || (subtitleKind != QStringLiteral("full") && subtitleKind != QStringLiteral("cut"))) {
+        emit mediaAgentFailed(QStringLiteral("download_edl_subtitle"), QStringLiteral("保存 SRT 缺少候选任务或字幕类型。"));
+        return;
+    }
+    QNetworkReply *reply = networkManager_.get(
+        createRequest(
+            buildMediaAgentEdlSubtitleDownloadUrl(
+                projectId.trimmed(), candidateTaskId.trimmed(), subtitleKind),
+            30000));
+    reply->setProperty("media_edl_subtitle_project_id", projectId.trimmed());
+    reply->setProperty("media_edl_subtitle_task_id", candidateTaskId.trimmed());
+    reply->setProperty("media_edl_subtitle_kind", subtitleKind);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        handleMediaEdlSubtitleDownloadReply(reply);
     });
 }
 
@@ -5362,6 +5390,19 @@ QUrl BackendClient::buildMediaAgentEdlRenderDownloadUrl(const QString &projectId
     return url;
 }
 
+QUrl BackendClient::buildMediaAgentEdlSubtitleDownloadUrl(
+    const QString &projectId,
+    const QString &candidateTaskId,
+    const QString &subtitleKind) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/agents/media_agent/projects/%1/edl-candidates/%2/subtitles/%3/download")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(projectId)),
+                         QString::fromUtf8(QUrl::toPercentEncoding(candidateTaskId)),
+                         QString::fromUtf8(QUrl::toPercentEncoding(subtitleKind))));
+    return url;
+}
+
 QUrl BackendClient::buildMediaAgentAssetRevisionsUrl(
     const QString &projectId,
     const QString &assetId) const
@@ -6973,6 +7014,26 @@ void BackendClient::handleMediaEdlRenderDownloadReply(QNetworkReply *reply)
         return;
     }
     emit mediaEdlRenderDownloaded(projectId, taskId, content);
+}
+
+void BackendClient::handleMediaEdlSubtitleDownloadReply(QNetworkReply *reply)
+{
+    const QString projectId = reply->property("media_edl_subtitle_project_id").toString();
+    const QString candidateTaskId = reply->property("media_edl_subtitle_task_id").toString();
+    const QString subtitleKind = reply->property("media_edl_subtitle_kind").toString();
+    if (reply->error() != QNetworkReply::NoError) {
+        const QString message = replyErrorMessage(reply);
+        reply->deleteLater();
+        emit mediaAgentFailed(QStringLiteral("download_edl_subtitle"), message);
+        return;
+    }
+    const QByteArray content = reply->readAll();
+    reply->deleteLater();
+    if (content.isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("download_edl_subtitle"), QStringLiteral("已验证 SRT 的下载内容为空。"));
+        return;
+    }
+    emit mediaEdlSubtitleDownloaded(projectId, candidateTaskId, subtitleKind, content);
 }
 
 void BackendClient::handleMediaImageRevisionTaskStartReply(QNetworkReply *reply)

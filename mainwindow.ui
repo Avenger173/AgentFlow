@@ -2831,6 +2831,20 @@ QPushButton#navGroupButton:hover {
 <property name="text"><string>生成剪辑候选</string></property>
 <property name="toolTip"><string>使用已完成转写和当前剪辑目标生成待确认片段；不会渲染或修改视频。</string></property>
 </widget></item>
+<item><widget class="QPushButton" name="videoFullSrtButton">
+<property name="objectName"><string>ghostButton</string></property>
+<property name="minimumSize"><size><width>0</width><height>36</height></size></property>
+<property name="enabled"><bool>false</bool></property>
+<property name="text"><string>保存完整 SRT</string></property>
+<property name="toolTip"><string>从已验证转写导出完整时间轴字幕；不会重新调用语音模型。</string></property>
+</widget></item>
+<item><widget class="QPushButton" name="videoCutSrtButton">
+<property name="objectName"><string>ghostButton</string></property>
+<property name="minimumSize"><size><width>0</width><height>36</height></size></property>
+<property name="enabled"><bool>false</bool></property>
+<property name="text"><string>保存成片 SRT</string></property>
+<property name="toolTip"><string>按当前候选片段映射成片时间轴字幕；不会重新调用语音模型。</string></property>
+</widget></item>
 <item><widget class="QPushButton" name="videoRenderButton">
 <property name="objectName"><string>primaryButton</string></property>
 <property name="minimumSize"><size><width>0</width><height>40</height></size></property>

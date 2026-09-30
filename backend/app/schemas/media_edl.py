@@ -95,6 +95,11 @@ class MediaEdlCandidateRequest(BaseModel):
     """Request a candidate EDL from one already-verified transcription task."""
 
     transcription_task_id: str = Field(pattern=r"^task_media_transcription_[0-9a-f]{12}$")
+    # 继续修改只引用同一受控转写产生的旧候选；模型仍只能从本轮受限句段中重新选择。
+    parent_candidate_task_id: str | None = Field(
+        default=None,
+        pattern=r"^task_media_edl_plan_[0-9a-f]{12}$",
+    )
     goal: str = Field(min_length=2, max_length=1_200)
 
     @model_validator(mode="after")
@@ -160,6 +165,10 @@ class MediaEdlCandidateInfo(BaseModel):
 
     source_id: str = Field(pattern=r"^ms_[0-9a-f]{16}$")
     transcription_task_id: str = Field(pattern=r"^task_media_transcription_[0-9a-f]{12}$")
+    parent_candidate_task_id: str | None = Field(
+        default=None,
+        pattern=r"^task_media_edl_plan_[0-9a-f]{12}$",
+    )
     goal: str = Field(min_length=2, max_length=1_200)
     selections: list[MediaEdlCandidateSelection] = Field(min_length=1, max_length=MAX_EDL_CLIPS)
     edl: MediaEditDecisionList

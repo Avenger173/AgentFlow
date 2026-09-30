@@ -14,6 +14,7 @@ from typing import Awaitable, Callable
 
 from pydantic import ValidationError
 
+from app.database.task_repository import load_workflow_run
 from app.schemas.media_edl import (
     MediaEdlCandidateInfo,
     MediaEdlCandidateRequest,
@@ -82,6 +83,7 @@ class MediaEdlPlanningContext:
     source_sha256: str
     segments: tuple[MediaTranscriptionSegmentInfo, ...]
     duration_constraint: MediaEdlDurationConstraint = _DEFAULT_DURATION_CONSTRAINT
+    parent_candidate: MediaEdlCandidateInfo | None = None
 
 
 def load_media_edl_planning_context(
@@ -99,6 +101,11 @@ def load_media_edl_planning_context(
         raise MediaEdlPlanningError(str(exc)) from exc
     if source.source_sha256 != payload.audio.source_sha256:
         raise MediaEdlPlanningError("媒体源哈希与已验证转写交付不一致。")
+    parent_candidate = _load_parent_candidate(
+        project_id=project_id,
+        request=request,
+        source_id=source.source_id,
+    )
     duration_constraint = parse_media_edl_duration_constraint(request.goal)
     if duration_constraint.minimum_duration_ms > MAX_EDL_OUTPUT_DURATION_MS:
         raise MediaEdlPlanningError(
@@ -128,7 +135,49 @@ def load_media_edl_planning_context(
         source_sha256=source.source_sha256,
         segments=segments,
         duration_constraint=duration_constraint,
+        parent_candidate=parent_candidate,
     )
+
+
+def _load_parent_candidate(
+    *,
+    project_id: str,
+    request: MediaEdlCandidateRequest,
+    source_id: str,
+) -> MediaEdlCandidateInfo | None:
+    """Load only a completed, same-scope candidate as the revision parent.
+
+    A follow-up request must never borrow a candidate from another project or another
+    transcript.  The parent is context for the planner, not an instruction to reuse
+    stale clip ranges unchanged.
+    """
+
+    task_id = request.parent_candidate_task_id
+    if task_id is None:
+        return None
+    run = load_workflow_run(task_id)
+    if run is None or run.status != "completed":
+        raise MediaEdlPlanningError("上一版候选不存在或尚未完成，无法继续修改。")
+    step = next(
+        (
+            item
+            for item in run.steps
+            if item.step_id == "media_edl_candidate" and item.action == "media.plan_edl_candidate"
+        ),
+        None,
+    )
+    if step is None or step.output.get("project_id") != project_id:
+        raise MediaEdlPlanningError("上一版候选不属于当前视频项目。")
+    raw_candidate = step.output.get("candidate")
+    if not isinstance(raw_candidate, dict):
+        raise MediaEdlPlanningError("上一版候选没有可继续修改的已验证片段。")
+    try:
+        candidate = MediaEdlCandidateInfo.model_validate(raw_candidate)
+    except ValidationError as exc:
+        raise MediaEdlPlanningError("上一版候选记录不完整，无法继续修改。") from exc
+    if candidate.source_id != source_id or candidate.transcription_task_id != request.transcription_task_id:
+        raise MediaEdlPlanningError("上一版候选与当前受控视频或转写不匹配。")
+    return candidate
 
 
 def _filter_unrenderable_planning_segments(
@@ -172,6 +221,20 @@ async def generate_media_edl_model_candidate(
             for segment in context.segments
         ],
     }
+    if context.parent_candidate is not None:
+        payload["previous_candidate"] = {
+            "task_id": context.request.parent_candidate_task_id,
+            "goal": context.parent_candidate.goal,
+            "selections": [
+                {
+                    "start_sentence_id": selection.start_sentence_id,
+                    "end_sentence_id": selection.end_sentence_id,
+                    "begin_ms": selection.begin_ms,
+                    "end_ms": selection.end_ms,
+                }
+                for selection in context.parent_candidate.selections
+            ],
+        }
     content = await runtime.chat_json(
         system_prompt=build_media_edl_planning_system_prompt(),
         user_message=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
@@ -251,6 +314,7 @@ def build_media_edl_candidate(
         MediaEdlCandidateInfo(
             source_id=context.source_id,
             transcription_task_id=context.request.transcription_task_id,
+            parent_candidate_task_id=context.request.parent_candidate_task_id,
             goal=context.request.goal,
             selections=normalized_selections,
             edl=edl,
@@ -424,6 +488,7 @@ def build_media_edl_planning_system_prompt() -> str:
         "你只根据用户目标和提供的转写句段选择片段；不能读取文件、不能调用工具、不能渲染视频、不能假设未提供的画面内容。"
         "只能引用给定的 sentence_id，不能编造毫秒时间、文件路径、模型名、字幕、费用或新素材。"
         "候选必须按给定 begin_ms 的升序列出，不能按相关性排序、重复或重叠；最多 8 段。"
+        "若提供 previous_candidate，它只表示上一版剪辑；请按当前目标在给定句段中修改或重选，不能引用未提供的内容。"
         "duration_constraint 是硬约束：返回前必须依据每段的 begin_ms/end_ms 核算合并后总时长，并严格落入其 minimum_total_duration_ms 到 maximum_total_duration_ms。"
         "宁可少选也不能超时；目标不明确时请求澄清。"
         "候选会等待用户单独确认，不会自动执行。\n"

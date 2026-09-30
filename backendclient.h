@@ -550,6 +550,7 @@ struct MediaEdlCandidateTaskResult
     QString clarificationQuestion;
     QString sourceId;
     QString transcriptionTaskId;
+    QString parentCandidateTaskId;
     QString goal;
     bool hasCandidate = false;
     bool requiresConfirmation = false;
@@ -1525,7 +1526,8 @@ public:
     void startMediaEdlCandidate(
         const QString &projectId,
         const QString &transcriptionTaskId,
-        const QString &goal);
+        const QString &goal,
+        const QString &parentCandidateTaskId = QString());
     void requestMediaEdlCandidateResult(const QString &taskId);
     void startMediaEdlRender(
         const QString &projectId,
@@ -1533,6 +1535,10 @@ public:
         const QList<MediaEdlClipInfo> &clips);
     void requestMediaEdlRenderResult(const QString &taskId);
     void requestMediaEdlRenderDownload(const QString &projectId, const QString &taskId);
+    void requestMediaEdlSubtitleDownload(
+        const QString &projectId,
+        const QString &candidateTaskId,
+        const QString &subtitleKind);
     void requestMediaAssetRevisions(const QString &projectId, const QString &assetId);
     void requestMediaImageLayerStack(
         const QString &projectId,
@@ -1940,6 +1946,11 @@ signals:
     void mediaEdlRenderTaskCompleted(const MediaEdlRenderTaskResult &result);
     void mediaEdlRenderTaskCancelled(const QString &taskId, const QString &message);
     void mediaEdlRenderDownloaded(const QString &projectId, const QString &taskId, const QByteArray &content);
+    void mediaEdlSubtitleDownloaded(
+        const QString &projectId,
+        const QString &candidateTaskId,
+        const QString &subtitleKind,
+        const QByteArray &content);
     void mediaAssetRevisionsReceived(const MediaAssetRevisionListResult &result);
     void mediaImageLayerStackReceived(const MediaImageLayerStackResult &result);
     void mediaImageRevisionCreated(const MediaImageRevisionInfo &revision);
@@ -2053,6 +2064,10 @@ private:
     QUrl buildMediaAgentEdlRenderStartUrl(const QString &projectId) const;
     QUrl buildMediaAgentEdlRenderResultUrl(const QString &taskId) const;
     QUrl buildMediaAgentEdlRenderDownloadUrl(const QString &projectId, const QString &taskId) const;
+    QUrl buildMediaAgentEdlSubtitleDownloadUrl(
+        const QString &projectId,
+        const QString &candidateTaskId,
+        const QString &subtitleKind) const;
     QUrl buildMediaAgentAssetRevisionsUrl(const QString &projectId, const QString &assetId) const;
     QUrl buildMediaAgentRevisionLayerStackUrl(
         const QString &projectId,
@@ -2178,6 +2193,7 @@ private:
     void handleMediaEdlRenderStartReply(QNetworkReply *reply);
     void handleMediaEdlRenderResultReply(QNetworkReply *reply);
     void handleMediaEdlRenderDownloadReply(QNetworkReply *reply);
+    void handleMediaEdlSubtitleDownloadReply(QNetworkReply *reply);
     void handleMediaImageRevisionTaskStartReply(QNetworkReply *reply);
     void handleMediaImageRevisionTaskResultReply(QNetworkReply *reply);
     void handleMediaImageAiEditTaskStartReply(QNetworkReply *reply);

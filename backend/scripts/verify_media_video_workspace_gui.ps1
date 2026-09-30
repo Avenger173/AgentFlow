@@ -101,25 +101,35 @@ try {
     Invoke-Element -Element $videoNavigation
 
     $chooseButton = Wait-Element -Description "choose video button" -Find {
-        Find-ByName -Root $mainWindow -Name "选择视频"
+        Find-ByIdSuffix -Root $mainWindow -Suffix ".videoChooseButton"
     }
     $goalEdit = Wait-Element -Description "video goal editor" -Find {
         Find-ByIdSuffix -Root $mainWindow -Suffix ".videoGoalEdit"
     }
-    $importButton = Wait-Element -Description "import controlled source button" -Find {
-        Find-ByName -Root $mainWindow -Name "导入受控素材"
+    $candidateButton = Wait-Element -Description "generate candidate button" -Find {
+        Find-ByIdSuffix -Root $mainWindow -Suffix ".videoCandidateButton"
+    }
+    $fullSrtButton = Wait-Element -Description "full SRT button" -Find {
+        Find-ByIdSuffix -Root $mainWindow -Suffix ".videoFullSrtButton"
+    }
+    $cutSrtButton = Wait-Element -Description "cut SRT button" -Find {
+        Find-ByIdSuffix -Root $mainWindow -Suffix ".videoCutSrtButton"
+    }
+    $renderButton = Wait-Element -Description "render MP4 button" -Find {
+        Find-ByIdSuffix -Root $mainWindow -Suffix ".videoRenderButton"
     }
     $delegateButton = Wait-Element -Description "delegate video button" -Find {
-        Find-ByName -Root $mainWindow -Name "交给调度台"
+        Find-ByIdSuffix -Root $mainWindow -Suffix ".videoDelegateButton"
     }
     $transcribeButton = Wait-Element -Description "submit transcription button" -Find {
-        Find-ByName -Root $mainWindow -Name "提交转写"
+        Find-ByIdSuffix -Root $mainWindow -Suffix ".videoTranscribeButton"
     }
     if (!$chooseButton.Current.IsEnabled -or !$goalEdit.Current.IsEnabled) {
         throw "Video workspace must allow material selection and goal entry."
     }
-    if ($importButton.Current.IsEnabled -or $transcribeButton.Current.IsEnabled -or $delegateButton.Current.IsEnabled) {
-        throw "Video import, transcription and delegation must stay disabled before selecting a local file."
+    if ($transcribeButton.Current.IsEnabled -or $candidateButton.Current.IsEnabled -or $fullSrtButton.Current.IsEnabled `
+        -or $cutSrtButton.Current.IsEnabled -or $renderButton.Current.IsEnabled -or $delegateButton.Current.IsEnabled) {
+        throw "Video actions must stay disabled before selecting and transcribing a local file."
     }
     Save-Screenshot -Window $mainWindow -Path (Join-Path $evidenceDir "video-workspace-open.png")
     Write-Output "Media video workspace GUI smoke passed."

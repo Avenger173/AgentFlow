@@ -204,6 +204,7 @@ private:
     void confirmVideoEdlRender();
     void requestVideoEdlRenderResult();
     void saveVideoEdlRender();
+    void saveVideoEdlSubtitle(const QString &subtitleKind);
     void delegateVideoSourceToCommander();
     QString formatVideoTranscript(const MediaTranscriptionTaskResult &result) const;
     QString formatVideoEdlCandidate(const MediaEdlCandidateTaskResult &result) const;
@@ -212,6 +213,7 @@ private:
     void resetVideoEdlRenderUi();
     void updateVideoCandidateButton();
     void updateVideoEdlRenderButton();
+    void updateVideoSubtitleButtons();
     void updateVideoPlaybackUi(qint64 positionMs = -1);
     void importDataDatasetFromFile();
     void refreshDataDatasets();
@@ -913,6 +915,9 @@ private:
     QList<MediaEdlClipInfo> videoEdlCandidateClips;
     QString videoEdlCandidateGoal;
     bool videoEdlCandidateReadyForRender = false;
+    bool videoEdlSubtitleDownloadPending = false;
+    QString videoEdlSubtitleSavePath;
+    QString videoEdlSubtitleKind;
     QString videoEdlRenderTaskId;
     bool videoEdlRenderPending = false;
     bool videoEdlRenderRunning = false;

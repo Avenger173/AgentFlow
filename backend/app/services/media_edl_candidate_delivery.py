@@ -420,6 +420,7 @@ def _build_run(
     output: dict[str, object] = {
         "project_id": project_id,
         "transcription_task_id": request.transcription_task_id,
+        "parent_candidate_task_id": request.parent_candidate_task_id,
         "goal": request.goal,
         "message": message,
         "failure_reason": failure_reason,
@@ -534,6 +535,7 @@ def _request_from_output(output: dict[str, object]) -> MediaEdlCandidateRequest:
     return MediaEdlCandidateRequest.model_validate(
         {
             "transcription_task_id": output.get("transcription_task_id"),
+            "parent_candidate_task_id": output.get("parent_candidate_task_id"),
             "goal": output.get("goal"),
         }
     )

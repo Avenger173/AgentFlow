@@ -113,6 +113,7 @@ from app.services.media_edl_candidate_delivery import (
     get_media_edl_candidate_task_result,
     run_media_edl_candidate_task,
 )
+from app.services.media_edl_subtitle_delivery import resolve_media_edl_subtitle_download
 from app.services.task_event_stream import (
     finish_live_task_event_stream,
     has_live_task_event_stream,
@@ -375,6 +376,26 @@ async def get_media_edl_candidate_result_endpoint(task_id: str) -> MediaEdlCandi
             message="正在校验转写交付并生成待确认的候选片段。",
         )
     raise HTTPException(status_code=404, detail=f"Media EDL candidate task '{task_id}' was not found.")
+
+
+@router.get("/projects/{project_id}/edl-candidates/{task_id}/subtitles/{subtitle_kind}/download")
+async def download_media_edl_subtitle_endpoint(
+    project_id: str,
+    task_id: str,
+    subtitle_kind: Literal["full", "cut"],
+) -> FileResponse:
+    """Deliver a deterministic SRT for one verified candidate without rerunning ASR."""
+
+    try:
+        path, filename = await asyncio.to_thread(
+            resolve_media_edl_subtitle_download,
+            project_id=project_id,
+            candidate_task_id=task_id,
+            subtitle_kind=subtitle_kind,
+        )
+        return FileResponse(path, media_type="application/x-subrip", filename=filename)
+    except MediaSourcePreparationError as exc:
+        raise _media_source_error_to_http(exc) from exc
 
 
 @router.post(
