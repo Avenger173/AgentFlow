@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+import re
 from typing import Awaitable, Callable
 
 from pydantic import ValidationError
@@ -20,6 +21,7 @@ from app.schemas.media_edl import (
     MediaEdlModelCandidate,
     MediaEditDecisionList,
     MediaEdlClip,
+    MAX_EDL_OUTPUT_DURATION_MS,
 )
 from app.schemas.media_source import MediaTranscriptionArtifactPayload, MediaTranscriptionSegmentInfo
 from app.services.media_source_preparation import MediaSourcePreparationError, get_media_source
@@ -32,10 +34,44 @@ MAX_EDL_PLANNING_SEGMENTS = 320
 MAX_EDL_PLANNING_CHARACTERS = 32_000
 Planner = Callable[..., Awaitable[MediaEdlModelCandidate]]
 TranscriptLoader = Callable[..., MediaTranscriptionArtifactPayload]
+_DURATION_VALUE = r"(?:\d+(?:\.\d+)?|[一二三四五六七八九十两])"
+_DURATION_UNIT = r"(?:秒(?:钟)?|s(?:ec(?:onds?)?)?|分钟|分(?:钟)?|min(?:utes?)?)"
+_DURATION_RANGE = re.compile(
+    rf"(?P<minimum>{_DURATION_VALUE})\s*(?P<minimum_unit>{_DURATION_UNIT})?\s*"
+    rf"(?:到|至|[-~～—])\s*(?P<maximum>{_DURATION_VALUE})\s*(?P<maximum_unit>{_DURATION_UNIT})",
+    re.IGNORECASE,
+)
+_DURATION_CEILING = re.compile(
+    rf"(?P<maximum>{_DURATION_VALUE})\s*(?P<unit>{_DURATION_UNIT})\s*(?:以内|之内|以内|内|以下)",
+    re.IGNORECASE,
+)
+_DURATION_CEILING_PREFIX = re.compile(
+    rf"(?:控制在|限制在|不超过|不多于|至多|最多|小于|少于)\s*"
+    rf"(?P<maximum>{_DURATION_VALUE})\s*(?P<unit>{_DURATION_UNIT})",
+    re.IGNORECASE,
+)
+_CHINESE_NUMBERS = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
 
 
 class MediaEdlPlanningError(ValueError):
     """A safe candidate-planning failure which never exposes transcript text or paths."""
+
+
+@dataclass(frozen=True)
+class MediaEdlDurationConstraint:
+    """A deterministic duration requirement extracted from the user goal."""
+
+    minimum_duration_ms: int = 1
+    maximum_duration_ms: int = MAX_EDL_OUTPUT_DURATION_MS
+
+    @property
+    def label(self) -> str:
+        if self.minimum_duration_ms <= 1:
+            return f"不超过 {_format_duration(self.maximum_duration_ms)}"
+        return f"{_format_duration(self.minimum_duration_ms)} 到 {_format_duration(self.maximum_duration_ms)}"
+
+
+_DEFAULT_DURATION_CONSTRAINT = MediaEdlDurationConstraint()
 
 
 @dataclass(frozen=True)
@@ -45,6 +81,7 @@ class MediaEdlPlanningContext:
     source_id: str
     source_sha256: str
     segments: tuple[MediaTranscriptionSegmentInfo, ...]
+    duration_constraint: MediaEdlDurationConstraint = _DEFAULT_DURATION_CONSTRAINT
 
 
 def load_media_edl_planning_context(
@@ -62,6 +99,12 @@ def load_media_edl_planning_context(
         raise MediaEdlPlanningError(str(exc)) from exc
     if source.source_sha256 != payload.audio.source_sha256:
         raise MediaEdlPlanningError("媒体源哈希与已验证转写交付不一致。")
+    duration_constraint = parse_media_edl_duration_constraint(request.goal)
+    if duration_constraint.minimum_duration_ms > MAX_EDL_OUTPUT_DURATION_MS:
+        raise MediaEdlPlanningError(
+            f"剪辑目标要求至少 {_format_duration(duration_constraint.minimum_duration_ms)}，"
+            "当前短视频剪辑最多支持 3 分钟。"
+        )
     raw_segments = tuple(sorted(payload.transcript.segments, key=lambda item: (item.begin_ms, item.end_ms, item.sentence_id)))
     segments = tuple(
         raw_segments[span.source_index].model_copy(
@@ -83,6 +126,7 @@ def load_media_edl_planning_context(
         source_id=source.source_id,
         source_sha256=source.source_sha256,
         segments=segments,
+        duration_constraint=duration_constraint,
     )
 
 
@@ -94,6 +138,11 @@ async def generate_media_edl_model_candidate(
     payload = {
         "goal": context.request.goal,
         "source_id": context.source_id,
+        "duration_constraint": {
+            "minimum_total_duration_ms": context.duration_constraint.minimum_duration_ms,
+            "maximum_total_duration_ms": context.duration_constraint.maximum_duration_ms,
+            "display": context.duration_constraint.label,
+        },
         "segments": [
             {
                 "sentence_id": segment.sentence_id,
@@ -161,6 +210,10 @@ def build_media_edl_candidate(
             )
         )
     normalized_selections = _normalize_candidate_selections(selections)
+    normalized_selections, duration_adjusted = _fit_candidate_duration_constraint(
+        selections=normalized_selections,
+        context=context,
+    )
     normalized_clips = [
         MediaEdlClip(begin_ms=selection.begin_ms, end_ms=selection.end_ms)
         for selection in normalized_selections
@@ -169,6 +222,7 @@ def build_media_edl_candidate(
         edl = MediaEditDecisionList(source_id=context.source_id, clips=normalized_clips)
     except ValueError as exc:
         raise MediaEdlPlanningError("模型候选的时间顺序或总时长不满足受限 EDL 规则。") from exc
+    _validate_candidate_duration(edl=edl, constraint=context.duration_constraint)
     return (
         MediaEdlCandidateInfo(
             source_id=context.source_id,
@@ -176,6 +230,9 @@ def build_media_edl_candidate(
             goal=context.request.goal,
             selections=normalized_selections,
             edl=edl,
+            target_min_duration_ms=context.duration_constraint.minimum_duration_ms,
+            target_max_duration_ms=context.duration_constraint.maximum_duration_ms,
+            duration_adjusted=duration_adjusted,
         ),
         None,
     )
@@ -223,13 +280,128 @@ def _merged_candidate_reason(first: str, second: str) -> str:
     return "；".join(unique_parts)[:240]
 
 
+def _fit_candidate_duration_constraint(
+    *,
+    selections: list[MediaEdlCandidateSelection],
+    context: MediaEdlPlanningContext,
+) -> tuple[list[MediaEdlCandidateSelection], bool]:
+    """Conservatively shorten an overlong explicit target at transcript boundaries.
+
+    The model has already selected the semantic content.  This helper may only drop
+    trailing selected content or shorten the final retained selection to a supplied
+    sentence boundary.  It never reorders, expands, invents, or renders a clip.
+    """
+
+    constraint = context.duration_constraint
+    total_duration_ms = sum(item.end_ms - item.begin_ms for item in selections)
+    if total_duration_ms <= constraint.maximum_duration_ms:
+        return selections, False
+    if constraint.maximum_duration_ms >= MAX_EDL_OUTPUT_DURATION_MS:
+        return selections, False
+
+    position_by_sentence_id = {segment.sentence_id: index for index, segment in enumerate(context.segments)}
+    fitted: list[MediaEdlCandidateSelection] = []
+    fitted_duration_ms = 0
+    for selection in selections:
+        selection_duration_ms = selection.end_ms - selection.begin_ms
+        if fitted_duration_ms + selection_duration_ms <= constraint.maximum_duration_ms:
+            fitted.append(selection)
+            fitted_duration_ms += selection_duration_ms
+            continue
+
+        remaining_duration_ms = constraint.maximum_duration_ms - fitted_duration_ms
+        start_index = position_by_sentence_id.get(selection.start_sentence_id)
+        end_index = position_by_sentence_id.get(selection.end_sentence_id)
+        if start_index is None or end_index is None or end_index < start_index:
+            break
+        truncated_end: MediaTranscriptionSegmentInfo | None = None
+        for segment in context.segments[start_index : end_index + 1]:
+            if segment.end_ms - selection.begin_ms <= remaining_duration_ms:
+                truncated_end = segment
+            else:
+                break
+        if truncated_end is not None and truncated_end.end_ms > selection.begin_ms:
+            fitted.append(
+                selection.model_copy(
+                    update={
+                        "end_sentence_id": truncated_end.sentence_id,
+                        "end_ms": truncated_end.end_ms,
+                    }
+                )
+            )
+        break
+
+    fitted_duration_ms = sum(item.end_ms - item.begin_ms for item in fitted)
+    if constraint.minimum_duration_ms <= fitted_duration_ms <= constraint.maximum_duration_ms:
+        return fitted, True
+    return selections, False
+
+
+def parse_media_edl_duration_constraint(goal: str) -> MediaEdlDurationConstraint:
+    """Parse common Chinese duration goals without asking a model to interpret policy."""
+
+    compact_goal = " ".join(goal.lower().split())
+    range_match = _DURATION_RANGE.search(compact_goal)
+    if range_match is not None:
+        minimum_unit = range_match.group("minimum_unit") or range_match.group("maximum_unit")
+        maximum_unit = range_match.group("maximum_unit")
+        minimum_duration_ms = _duration_to_ms(range_match.group("minimum"), minimum_unit)
+        maximum_duration_ms = _duration_to_ms(range_match.group("maximum"), maximum_unit)
+        if minimum_duration_ms is not None and maximum_duration_ms is not None and minimum_duration_ms <= maximum_duration_ms:
+            return MediaEdlDurationConstraint(
+                minimum_duration_ms=minimum_duration_ms,
+                maximum_duration_ms=min(maximum_duration_ms, MAX_EDL_OUTPUT_DURATION_MS),
+            )
+
+    for pattern in (_DURATION_CEILING, _DURATION_CEILING_PREFIX):
+        ceiling_match = pattern.search(compact_goal)
+        if ceiling_match is None:
+            continue
+        ceiling_duration_ms = _duration_to_ms(ceiling_match.group("maximum"), ceiling_match.group("unit"))
+        if ceiling_duration_ms is not None:
+            return MediaEdlDurationConstraint(
+                maximum_duration_ms=min(ceiling_duration_ms, MAX_EDL_OUTPUT_DURATION_MS),
+            )
+    return _DEFAULT_DURATION_CONSTRAINT
+
+
+def _duration_to_ms(raw_value: str, raw_unit: str | None) -> int | None:
+    if not raw_unit:
+        return None
+    try:
+        value = float(raw_value)
+    except ValueError:
+        value = float(_CHINESE_NUMBERS.get(raw_value, 0))
+    if value <= 0:
+        return None
+    unit = raw_unit.lower()
+    multiplier = 60_000 if unit.startswith(("分", "min")) else 1_000
+    return max(1, int(value * multiplier))
+
+
+def _validate_candidate_duration(*, edl: MediaEditDecisionList, constraint: MediaEdlDurationConstraint) -> None:
+    duration_ms = edl.requested_duration_ms
+    if constraint.minimum_duration_ms <= duration_ms <= constraint.maximum_duration_ms:
+        return
+    raise MediaEdlPlanningError(
+        f"模型候选总时长 {_format_duration(duration_ms)}，不满足用户目标“{constraint.label}”；"
+        "已停止，未创建可确认候选或 MP4。"
+    )
+
+
+def _format_duration(duration_ms: int) -> str:
+    seconds = max(0, int(round(duration_ms / 1_000)))
+    return f"{seconds} 秒"
+
+
 def build_media_edl_planning_system_prompt() -> str:
     return (
         "你是 AgentFlow 的受限视频剪辑候选规划器。只返回一个 JSON 对象，不要 Markdown、解释、推理过程或额外字段。"
         "你只根据用户目标和提供的转写句段选择片段；不能读取文件、不能调用工具、不能渲染视频、不能假设未提供的画面内容。"
         "只能引用给定的 sentence_id，不能编造毫秒时间、文件路径、模型名、字幕、费用或新素材。"
-        "候选必须按给定 begin_ms 的升序列出，不能按相关性排序、重复或重叠；最多 8 段，总时长不超过 180000 ms。"
-        "返回前必须依据每段的 begin_ms/end_ms 自行核算所选范围的总时长；用户目标写明更短时长时，应优先满足该时长，宁可少选也不能超时。目标不明确时请求澄清。"
+        "候选必须按给定 begin_ms 的升序列出，不能按相关性排序、重复或重叠；最多 8 段。"
+        "duration_constraint 是硬约束：返回前必须依据每段的 begin_ms/end_ms 核算合并后总时长，并严格落入其 minimum_total_duration_ms 到 maximum_total_duration_ms。"
+        "宁可少选也不能超时；目标不明确时请求澄清。"
         "候选会等待用户单独确认，不会自动执行。\n"
         "JSON 契约："
         '{"action":"candidate|clarify","selections":[{"start_sentence_id":0,"end_sentence_id":0,"reason":""}],'

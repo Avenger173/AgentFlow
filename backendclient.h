@@ -553,6 +553,9 @@ struct MediaEdlCandidateTaskResult
     QString goal;
     bool hasCandidate = false;
     bool requiresConfirmation = false;
+    qint64 targetMinDurationMs = 1;
+    qint64 targetMaxDurationMs = 180000;
+    bool durationAdjusted = false;
     QList<MediaEdlCandidateSelectionInfo> selections;
     QList<MediaEdlClipInfo> edlClips;
 };

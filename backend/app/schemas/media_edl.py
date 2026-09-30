@@ -163,7 +163,18 @@ class MediaEdlCandidateInfo(BaseModel):
     goal: str = Field(min_length=2, max_length=1_200)
     selections: list[MediaEdlCandidateSelection] = Field(min_length=1, max_length=MAX_EDL_CLIPS)
     edl: MediaEditDecisionList
+    target_min_duration_ms: int = Field(default=1, ge=1, le=MAX_EDL_OUTPUT_DURATION_MS)
+    target_max_duration_ms: int = Field(default=MAX_EDL_OUTPUT_DURATION_MS, ge=1, le=MAX_EDL_OUTPUT_DURATION_MS)
+    duration_adjusted: bool = False
     requires_confirmation: Literal[True] = True
+
+    @model_validator(mode="after")
+    def validate_duration_target(self) -> "MediaEdlCandidateInfo":
+        if self.target_min_duration_ms > self.target_max_duration_ms:
+            raise ValueError("候选剪辑的目标时长范围无效。")
+        if not self.target_min_duration_ms <= self.edl.requested_duration_ms <= self.target_max_duration_ms:
+            raise ValueError("候选剪辑时长不满足其目标范围。")
+        return self
 
 
 class MediaEdlCandidateStartResponse(BaseModel):

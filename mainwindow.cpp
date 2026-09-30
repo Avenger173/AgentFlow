@@ -4635,7 +4635,16 @@ QString MainWindow::formatVideoEdlCandidate(const MediaEdlCandidateTaskResult &r
             .arg(seconds % 60, 2, 10, QLatin1Char('0'));
     };
     QStringList lines;
-    lines.reserve(result.selections.size());
+    qint64 candidateDurationMs = 0;
+    for (const MediaEdlClipInfo &clip : result.edlClips) {
+        candidateDurationMs += qMax<qint64>(0, clip.endMs - clip.beginMs);
+    }
+    lines.reserve(result.selections.size() + 1);
+    lines.append(QStringLiteral("目标时长：%1 - %2 · 候选时长：%3%4")
+                     .arg(formatTime(result.targetMinDurationMs),
+                          formatTime(result.targetMaxDurationMs),
+                          formatTime(candidateDurationMs),
+                          result.durationAdjusted ? QStringLiteral(" · 已按句段边界收紧") : QString()));
     for (qsizetype index = 0; index < result.selections.size(); ++index) {
         const MediaEdlCandidateSelectionInfo &selection = result.selections.at(index);
         lines.append(QStringLiteral("片段 %1  [%2 - %3]\n理由：%4\n依据：转写句段 %5-%6")

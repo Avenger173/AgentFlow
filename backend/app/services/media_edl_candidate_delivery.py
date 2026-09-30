@@ -184,8 +184,12 @@ async def run_media_edl_candidate_task(
         summary = "候选剪辑需要补充目标，尚未生成 EDL。"
         message = "模型要求澄清剪辑目标；没有创建文件或调用 FFmpeg。"
     else:
-        summary = "候选剪辑已生成，等待用户确认后才可渲染。"
-        message = "候选片段仅来自已验证转写句段；没有创建 MP4 或调用 FFmpeg。"
+        if candidate.duration_adjusted:
+            summary = "候选剪辑已按目标时长收紧，等待用户确认后才可渲染。"
+            message = "候选已在转写句段边界按目标时长收紧；没有创建 MP4 或调用 FFmpeg。"
+        else:
+            summary = "候选剪辑已生成，等待用户确认后才可渲染。"
+            message = "候选片段仅来自已验证转写句段；没有创建 MP4 或调用 FFmpeg。"
     completed = _build_run(
         task_id=task_id,
         project_id=project_id,

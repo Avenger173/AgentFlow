@@ -647,6 +647,9 @@ MediaEdlCandidateTaskResult readMediaEdlCandidateTaskResult(const QJsonObject &p
     result.transcriptionTaskId = candidate.value(QStringLiteral("transcription_task_id")).toString();
     result.goal = candidate.value(QStringLiteral("goal")).toString();
     result.requiresConfirmation = candidate.value(QStringLiteral("requires_confirmation")).toBool();
+    result.targetMinDurationMs = static_cast<qint64>(candidate.value(QStringLiteral("target_min_duration_ms")).toDouble(1));
+    result.targetMaxDurationMs = static_cast<qint64>(candidate.value(QStringLiteral("target_max_duration_ms")).toDouble(180000));
+    result.durationAdjusted = candidate.value(QStringLiteral("duration_adjusted")).toBool(false);
     const QJsonArray selections = candidate.value(QStringLiteral("selections")).toArray();
     result.selections.reserve(selections.size());
     for (const QJsonValue &value : selections) {

@@ -45,8 +45,11 @@ from app.services.media_edl_candidate_delivery import (  # noqa: E402
     run_media_edl_candidate_task,
 )
 from app.services.media_edl_planning import (  # noqa: E402
+    MediaEdlPlanningContext,
     MediaEdlPlanningError,
+    build_media_edl_candidate,
     load_media_edl_planning_context,
+    parse_media_edl_duration_constraint,
 )
 from app.services.media_source_preparation import import_media_source_bytes  # noqa: E402
 from app.services.media_workspace import create_media_project  # noqa: E402
@@ -142,6 +145,68 @@ async def _run() -> dict[str, object]:
         (20, "product", 1_000, 2_300),
         (30, "conclusion", 2_300, 3_600),
     ]
+
+    duration_request = MediaEdlCandidateRequest(
+        transcription_task_id=payload.task_id,
+        goal="保留核心讲解，控制在 60 到 90 秒。",
+    )
+    duration_constraint = parse_media_edl_duration_constraint(duration_request.goal)
+    assert (duration_constraint.minimum_duration_ms, duration_constraint.maximum_duration_ms) == (60_000, 90_000)
+    duration_context = MediaEdlPlanningContext(
+        project_id=project.project_id,
+        request=duration_request,
+        source_id=source.source_id,
+        source_sha256=source.source_sha256,
+        segments=(
+            MediaTranscriptionSegmentInfo(sentence_id=100, text="第一段", begin_ms=0, end_ms=30_000),
+            MediaTranscriptionSegmentInfo(sentence_id=200, text="第二段", begin_ms=30_000, end_ms=60_000),
+            MediaTranscriptionSegmentInfo(sentence_id=300, text="第三段", begin_ms=60_000, end_ms=90_000),
+            MediaTranscriptionSegmentInfo(sentence_id=400, text="第四段", begin_ms=90_000, end_ms=120_000),
+        ),
+        duration_constraint=duration_constraint,
+    )
+    in_range_candidate, _ = build_media_edl_candidate(
+        context=duration_context,
+        model_candidate=MediaEdlModelCandidate.model_validate(
+            {"action": "candidate", "selections": [{"start_sentence_id": 100, "end_sentence_id": 300, "reason": "保留核心。"}]}
+        ),
+    )
+    assert in_range_candidate is not None and in_range_candidate.edl.requested_duration_ms == 90_000
+    adjusted_candidate, _ = build_media_edl_candidate(
+        context=duration_context,
+        model_candidate=MediaEdlModelCandidate.model_validate(
+            {
+                "action": "candidate",
+                "selections": [
+                    {"start_sentence_id": 100, "end_sentence_id": 200, "reason": "保留前半段。"},
+                    {"start_sentence_id": 300, "end_sentence_id": 400, "reason": "超出时长。"},
+                ],
+            }
+        ),
+    )
+    assert adjusted_candidate is not None
+    assert adjusted_candidate.duration_adjusted is True
+    assert adjusted_candidate.edl.requested_duration_ms == 90_000
+    assert [(clip.begin_ms, clip.end_ms) for clip in adjusted_candidate.edl.clips] == [(0, 60_000), (60_000, 90_000)]
+    unfit_context = MediaEdlPlanningContext(
+        project_id=project.project_id,
+        request=duration_request,
+        source_id=source.source_id,
+        source_sha256=source.source_sha256,
+        segments=(MediaTranscriptionSegmentInfo(sentence_id=500, text="过长单句", begin_ms=0, end_ms=120_000),),
+        duration_constraint=duration_constraint,
+    )
+    try:
+        build_media_edl_candidate(
+            context=unfit_context,
+            model_candidate=MediaEdlModelCandidate.model_validate(
+                {"action": "candidate", "selections": [{"start_sentence_id": 500, "end_sentence_id": 500, "reason": "无法在句段边界截断。"}]}
+            ),
+        )
+    except MediaEdlPlanningError as exc:
+        assert "60 秒 到 90 秒" in str(exc)
+    else:
+        raise AssertionError("candidate without a valid sentence-boundary fit was accepted")
 
     cross_project = create_media_project(title="EDL candidate isolation fixture")
     try:
