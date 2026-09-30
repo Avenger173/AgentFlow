@@ -51,6 +51,17 @@ function Find-ByName {
     return $null
 }
 
+function Find-ByIdSuffixOrName {
+    param(
+        [System.Windows.Automation.AutomationElement]$Root,
+        [string]$Suffix,
+        [string]$Name
+    )
+    $byId = Find-ByIdSuffix -Root $Root -Suffix $Suffix
+    if ($null -ne $byId) { return $byId }
+    return Find-ByName -Root $Root -Name $Name
+}
+
 function Invoke-Element {
     param([System.Windows.Automation.AutomationElement]$Element)
     $pattern = $null
@@ -101,28 +112,28 @@ try {
     Invoke-Element -Element $videoNavigation
 
     $chooseButton = Wait-Element -Description "choose video button" -Find {
-        Find-ByIdSuffix -Root $mainWindow -Suffix ".videoChooseButton"
+        Find-ByIdSuffixOrName -Root $mainWindow -Suffix ".videoChooseButton" -Name "选择并导入视频"
     }
     $goalEdit = Wait-Element -Description "video goal editor" -Find {
-        Find-ByIdSuffix -Root $mainWindow -Suffix ".videoGoalEdit"
+        Find-ByIdSuffixOrName -Root $mainWindow -Suffix ".videoGoalEdit" -Name "剪辑目标输入"
     }
     $candidateButton = Wait-Element -Description "generate candidate button" -Find {
-        Find-ByIdSuffix -Root $mainWindow -Suffix ".videoCandidateButton"
+        Find-ByIdSuffixOrName -Root $mainWindow -Suffix ".videoCandidateButton" -Name "生成剪辑候选"
     }
     $fullSrtButton = Wait-Element -Description "full SRT button" -Find {
-        Find-ByIdSuffix -Root $mainWindow -Suffix ".videoFullSrtButton"
+        Find-ByIdSuffixOrName -Root $mainWindow -Suffix ".videoFullSrtButton" -Name "保存完整 SRT"
     }
     $cutSrtButton = Wait-Element -Description "cut SRT button" -Find {
-        Find-ByIdSuffix -Root $mainWindow -Suffix ".videoCutSrtButton"
+        Find-ByIdSuffixOrName -Root $mainWindow -Suffix ".videoCutSrtButton" -Name "保存成片 SRT"
     }
     $renderButton = Wait-Element -Description "render MP4 button" -Find {
-        Find-ByIdSuffix -Root $mainWindow -Suffix ".videoRenderButton"
+        Find-ByIdSuffixOrName -Root $mainWindow -Suffix ".videoRenderButton" -Name "确认渲染 MP4"
     }
     $delegateButton = Wait-Element -Description "delegate video button" -Find {
-        Find-ByIdSuffix -Root $mainWindow -Suffix ".videoDelegateButton"
+        Find-ByIdSuffixOrName -Root $mainWindow -Suffix ".videoDelegateButton" -Name "交给调度台"
     }
     $transcribeButton = Wait-Element -Description "submit transcription button" -Find {
-        Find-ByIdSuffix -Root $mainWindow -Suffix ".videoTranscribeButton"
+        Find-ByIdSuffixOrName -Root $mainWindow -Suffix ".videoTranscribeButton" -Name "提交转写"
     }
     if (!$chooseButton.Current.IsEnabled -or !$goalEdit.Current.IsEnabled) {
         throw "Video workspace must allow material selection and goal entry."
