@@ -270,6 +270,17 @@ class Settings:
         ).resolve()
 
     @property
+    def media_video_presentation_output_dir(self) -> Path:
+        """返回由已验证视频讲解计划转出的 PPTX 固定交付目录。"""
+
+        return Path(
+            os.getenv(
+                "AGENTFLOW_MEDIA_VIDEO_PRESENTATION_OUTPUT_DIR",
+                self.output_dir / "media_video_presentations",
+            )
+        ).resolve()
+
+    @property
     def data_analysis_output_dir(self) -> Path:
         """返回数据工作台正式 Excel 交付物的固定输出目录。
 

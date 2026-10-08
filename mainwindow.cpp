@@ -3947,6 +3947,8 @@ void MainWindow::setupVideoWorkspace()
     connect(ui->videoCandidateButton, &QPushButton::clicked, this, &MainWindow::startVideoEdlCandidate);
     connect(ui->videoBriefButton, &QPushButton::clicked, this, &MainWindow::startVideoBrief);
     connect(ui->videoBriefSaveButton, &QPushButton::clicked, this, &MainWindow::saveVideoBrief);
+    connect(ui->videoBriefPresentationButton, &QPushButton::clicked, this, &MainWindow::startVideoBriefPresentation);
+    connect(ui->videoBriefPresentationSaveButton, &QPushButton::clicked, this, &MainWindow::saveVideoBriefPresentation);
     connect(ui->videoFullSrtButton, &QPushButton::clicked, this, [this]() {
         saveVideoEdlSubtitle(QStringLiteral("full"));
     });
@@ -4411,6 +4413,102 @@ void MainWindow::setupVideoWorkspace()
             videoBriefSavePath.clear();
             updateVideoBriefButtons();
         });
+    connect(backendClient, &BackendClient::mediaVideoBriefPresentationTaskStarted, this,
+        [this](const QString &taskId) {
+            if (!videoBriefPresentationPending) {
+                return;
+            }
+            videoBriefPresentationPending = false;
+            videoBriefPresentationRunning = true;
+            videoBriefPresentationTaskId = taskId;
+            ui->videoStatusLabel->setText(QStringLiteral("讲解 PPTX 任务已受理，正在复核关键帧并写入文件…"));
+            updateVideoBriefButtons();
+            QTimer::singleShot(300, this, [this, taskId]() {
+                if (videoBriefPresentationRunning && videoBriefPresentationTaskId == taskId) {
+                    requestVideoBriefPresentationResult();
+                }
+            });
+        });
+    connect(backendClient, &BackendClient::mediaVideoBriefPresentationTaskStillRunning, this,
+        [this](const QString &taskId, const QString &, const QString &summary) {
+            if (!videoBriefPresentationRunning || videoBriefPresentationTaskId != taskId) {
+                return;
+            }
+            ui->videoStatusLabel->setText(summary.isEmpty()
+                ? QStringLiteral("讲解 PPTX 正在复核关键帧并进行文件回读…")
+                : summary);
+            QTimer::singleShot(600, this, [this, taskId]() {
+                if (videoBriefPresentationRunning && videoBriefPresentationTaskId == taskId) {
+                    requestVideoBriefPresentationResult();
+                }
+            });
+        });
+    connect(backendClient, &BackendClient::mediaVideoBriefPresentationTaskCompleted, this,
+        [this](const MediaVideoBriefPresentationTaskResult &result) {
+            if (!videoBriefPresentationRunning || videoBriefPresentationTaskId != result.taskId) {
+                return;
+            }
+            videoBriefPresentationRunning = false;
+            if (result.hasDelivery && result.videoBriefTaskId == videoBriefTaskId && result.sourceId == videoSourceId) {
+                videoBriefPresentationCompleted = true;
+                const QString current = ui->videoBriefEdit->toPlainText().trimmed();
+                ui->videoBriefEdit->setPlainText(
+                    current.isEmpty() ? formatVideoBriefPresentation(result)
+                                      : QStringLiteral("%1\n\n%2").arg(current, formatVideoBriefPresentation(result)));
+                ui->videoStatusLabel->setText(QStringLiteral("可编辑讲解 PPTX 已生成并回读验证；可另存为本地副本。"));
+            } else {
+                videoBriefPresentationTaskId.clear();
+                ui->videoStatusLabel->setText(QStringLiteral("讲解 PPTX 未展示：结果与当前讲解或受控素材不匹配。"));
+            }
+            ui->videoChooseButton->setEnabled(true);
+            ui->videoTranscribeButton->setEnabled(!videoSourceId.isEmpty());
+            ui->videoGoalEdit->setEnabled(true);
+            ui->videoBriefGoalEdit->setEnabled(true);
+            ui->videoDelegateButton->setEnabled(!videoSourceId.isEmpty());
+            updateVideoCandidateButton();
+            updateVideoEdlRenderButton();
+            updateVideoSubtitleButtons();
+            updateVideoBriefButtons();
+        });
+    connect(backendClient, &BackendClient::mediaVideoBriefPresentationTaskCancelled, this,
+        [this](const QString &taskId, const QString &message) {
+            if (!videoBriefPresentationRunning || videoBriefPresentationTaskId != taskId) {
+                return;
+            }
+            videoBriefPresentationRunning = false;
+            videoBriefPresentationTaskId.clear();
+            ui->videoChooseButton->setEnabled(true);
+            ui->videoTranscribeButton->setEnabled(!videoSourceId.isEmpty());
+            ui->videoGoalEdit->setEnabled(true);
+            ui->videoBriefGoalEdit->setEnabled(true);
+            ui->videoDelegateButton->setEnabled(!videoSourceId.isEmpty());
+            ui->videoStatusLabel->setText(message.left(180));
+            updateVideoCandidateButton();
+            updateVideoEdlRenderButton();
+            updateVideoSubtitleButtons();
+            updateVideoBriefButtons();
+        });
+    connect(backendClient, &BackendClient::mediaVideoBriefPresentationDownloaded, this,
+        [this](const QString &projectId, const QString &taskId, const QByteArray &content) {
+            if (!videoBriefPresentationDownloadPending || projectId != videoProjectId
+                || taskId != videoBriefPresentationTaskId || videoBriefPresentationSavePath.isEmpty()) {
+                return;
+            }
+            QSaveFile output(videoBriefPresentationSavePath);
+            if (!output.open(QIODevice::WriteOnly)
+                || output.write(content) != content.size()
+                || !output.commit()) {
+                ui->videoStatusLabel->setText(
+                    QStringLiteral("无法保存可编辑 PPTX：%1").arg(output.errorString().left(160)));
+            } else {
+                ui->videoStatusLabel->setText(
+                    QStringLiteral("已保存可编辑讲解 PPTX：%1")
+                        .arg(QFileInfo(videoBriefPresentationSavePath).fileName()));
+            }
+            videoBriefPresentationDownloadPending = false;
+            videoBriefPresentationSavePath.clear();
+            updateVideoBriefButtons();
+        });
     connect(backendClient, &BackendClient::mediaAgentFailed, this, [this](const QString &operation, const QString &message) {
         const bool importFailure = operation == QStringLiteral("import_media_source")
             || (operation == QStringLiteral("create_project") && videoProjectCreationPending);
@@ -4426,8 +4524,12 @@ void MainWindow::setupVideoWorkspace()
         const bool briefFailure = operation == QStringLiteral("start_video_brief")
             || operation == QStringLiteral("video_brief_task_result");
         const bool briefDownloadFailure = operation == QStringLiteral("download_video_brief");
+        const bool briefPresentationFailure = operation == QStringLiteral("start_video_brief_presentation")
+            || operation == QStringLiteral("video_brief_presentation_task_result");
+        const bool briefPresentationDownloadFailure = operation == QStringLiteral("download_video_brief_presentation");
         if (!importFailure && !transcriptionFailure && !candidateFailure && !renderFailure && !renderDownloadFailure
-            && !subtitleDownloadFailure && !briefFailure && !briefDownloadFailure) {
+            && !subtitleDownloadFailure && !briefFailure && !briefDownloadFailure && !briefPresentationFailure
+            && !briefPresentationDownloadFailure) {
             return;
         }
         if (importFailure) {
@@ -4481,6 +4583,35 @@ void MainWindow::setupVideoWorkspace()
             videoBriefSavePath.clear();
             updateVideoBriefButtons();
             ui->videoStatusLabel->setText(QStringLiteral("保存离线 HTML 未完成：%1").arg(message.left(180)));
+            return;
+        }
+        if (briefPresentationDownloadFailure) {
+            if (!videoBriefPresentationDownloadPending) {
+                return;
+            }
+            videoBriefPresentationDownloadPending = false;
+            videoBriefPresentationSavePath.clear();
+            updateVideoBriefButtons();
+            ui->videoStatusLabel->setText(QStringLiteral("保存可编辑 PPTX 未完成：%1").arg(message.left(180)));
+            return;
+        }
+        if (briefPresentationFailure) {
+            if (!videoBriefPresentationPending && !videoBriefPresentationRunning) {
+                return;
+            }
+            videoBriefPresentationPending = false;
+            videoBriefPresentationRunning = false;
+            videoBriefPresentationTaskId.clear();
+            ui->videoChooseButton->setEnabled(true);
+            ui->videoTranscribeButton->setEnabled(!videoSourceId.isEmpty());
+            ui->videoGoalEdit->setEnabled(true);
+            ui->videoBriefGoalEdit->setEnabled(true);
+            ui->videoDelegateButton->setEnabled(!videoSourceId.isEmpty());
+            updateVideoCandidateButton();
+            updateVideoEdlRenderButton();
+            updateVideoSubtitleButtons();
+            updateVideoBriefButtons();
+            ui->videoStatusLabel->setText(QStringLiteral("讲解 PPTX 未完成：%1").arg(message.left(180)));
             return;
         }
         if (briefFailure) {
@@ -4639,7 +4770,8 @@ void MainWindow::startVideoTranscription()
     if (videoProjectId.isEmpty() || videoSourceId.isEmpty() || videoTranscriptionPending || videoTranscriptionRunning
         || videoEdlCandidatePending || videoEdlCandidateRunning || videoEdlRenderPending || videoEdlRenderRunning
         || videoEdlRenderDownloadPending || videoEdlSubtitleDownloadPending || videoBriefPending || videoBriefRunning
-        || videoBriefDownloadPending) {
+        || videoBriefDownloadPending || videoBriefPresentationPending || videoBriefPresentationRunning
+        || videoBriefPresentationDownloadPending) {
         return;
     }
     if (!backendManager || !backendManager->isReady()) {
@@ -4676,7 +4808,8 @@ void MainWindow::startVideoEdlCandidate()
     if (videoProjectId.isEmpty() || videoSourceId.isEmpty() || videoCompletedTranscriptionTaskId.isEmpty()
         || videoEdlCandidatePending || videoEdlCandidateRunning || videoEdlRenderPending || videoEdlRenderRunning
         || videoEdlRenderDownloadPending || videoEdlSubtitleDownloadPending || videoBriefPending || videoBriefRunning
-        || videoBriefDownloadPending || goal.size() < 2) {
+        || videoBriefDownloadPending || videoBriefPresentationPending || videoBriefPresentationRunning
+        || videoBriefPresentationDownloadPending || goal.size() < 2) {
         return;
     }
     if (!backendManager || !backendManager->isReady()) {
@@ -4726,6 +4859,7 @@ void MainWindow::confirmVideoEdlRender()
         || videoEdlCandidateClips.isEmpty() || videoEdlRenderPending || videoEdlRenderRunning
         || videoEdlRenderCompleted || videoEdlRenderDownloadPending || videoEdlSubtitleDownloadPending
         || videoBriefPending || videoBriefRunning || videoBriefDownloadPending
+        || videoBriefPresentationPending || videoBriefPresentationRunning || videoBriefPresentationDownloadPending
         || ui->videoGoalEdit->toPlainText().simplified() != videoEdlCandidateGoal) {
         return;
     }
@@ -4843,7 +4977,9 @@ void MainWindow::startVideoBrief()
     const QString goal = ui->videoBriefGoalEdit->toPlainText().simplified();
     if (videoProjectId.isEmpty() || videoSourceId.isEmpty() || videoCompletedTranscriptionTaskId.isEmpty()
         || videoBriefPending || videoBriefRunning || videoBriefDownloadPending || videoTranscriptionPending
-        || videoTranscriptionRunning || videoEdlRenderPending || videoEdlRenderRunning || goal.size() < 2) {
+        || videoTranscriptionRunning || videoEdlRenderPending || videoEdlRenderRunning
+        || videoBriefPresentationPending || videoBriefPresentationRunning || videoBriefPresentationDownloadPending
+        || goal.size() < 2) {
         return;
     }
     if (!backendManager || !backendManager->isReady()) {
@@ -4866,6 +5002,7 @@ void MainWindow::startVideoBrief()
     videoBriefRunning = false;
     videoBriefCompleted = false;
     videoBriefTaskId.clear();
+    resetVideoBriefPresentationUi();
     ui->videoBriefEdit->clear();
     ui->videoChooseButton->setEnabled(false);
     ui->videoTranscribeButton->setEnabled(false);
@@ -4913,6 +5050,83 @@ void MainWindow::saveVideoBrief()
     ui->videoStatusLabel->setText(QStringLiteral("正在保存已验证的离线 HTML…"));
     updateVideoBriefButtons();
     backendClient->requestMediaVideoBriefDownload(videoProjectId, videoBriefTaskId);
+}
+
+void MainWindow::startVideoBriefPresentation()
+{
+    if (!videoBriefCompleted || videoBriefTaskId.isEmpty() || videoProjectId.isEmpty()
+        || videoSourceId.isEmpty() || videoBriefPending || videoBriefRunning || videoBriefDownloadPending
+        || videoBriefPresentationPending || videoBriefPresentationRunning
+        || videoBriefPresentationDownloadPending) {
+        return;
+    }
+    if (!backendManager || !backendManager->isReady()) {
+        ui->videoStatusLabel->setText(QStringLiteral("本地服务正在启动，服务就绪后再生成讲解 PPTX。"));
+        if (backendManager) {
+            backendManager->ensureStarted();
+        }
+        return;
+    }
+    const auto answer = QMessageBox::question(
+        this,
+        QStringLiteral("生成可编辑 PPTX"),
+        QStringLiteral("将复用已验证的讲解章节和关键帧，生成新的可编辑 PPTX。\n\n不会重新转写、调用模型或修改原视频。"),
+        QMessageBox::Cancel | QMessageBox::Ok,
+        QMessageBox::Cancel);
+    if (answer != QMessageBox::Ok) {
+        return;
+    }
+    videoBriefPresentationPending = true;
+    videoBriefPresentationRunning = false;
+    videoBriefPresentationCompleted = false;
+    videoBriefPresentationTaskId.clear();
+    ui->videoChooseButton->setEnabled(false);
+    ui->videoTranscribeButton->setEnabled(false);
+    ui->videoCandidateButton->setEnabled(false);
+    ui->videoGoalEdit->setEnabled(false);
+    ui->videoBriefButton->setEnabled(false);
+    ui->videoBriefGoalEdit->setEnabled(false);
+    ui->videoDelegateButton->setEnabled(false);
+    ui->videoStatusLabel->setText(QStringLiteral("正在确认已验证讲解并提交可编辑 PPTX…"));
+    updateVideoEdlRenderButton();
+    updateVideoSubtitleButtons();
+    updateVideoBriefButtons();
+    backendClient->startMediaVideoBriefPresentation(videoProjectId, videoBriefTaskId);
+}
+
+void MainWindow::requestVideoBriefPresentationResult()
+{
+    if (!videoBriefPresentationRunning || videoBriefPresentationTaskId.isEmpty()) {
+        return;
+    }
+    backendClient->requestMediaVideoBriefPresentationResult(videoBriefPresentationTaskId);
+}
+
+void MainWindow::saveVideoBriefPresentation()
+{
+    if (!videoBriefPresentationCompleted || videoBriefPresentationTaskId.isEmpty() || videoProjectId.isEmpty()
+        || videoBriefPresentationDownloadPending) {
+        return;
+    }
+    QString filename = QFileInfo(videoSourceDisplayName).completeBaseName().trimmed();
+    if (filename.isEmpty()) {
+        filename = QStringLiteral("视频讲解");
+    }
+    const QString path = QFileDialog::getSaveFileName(
+        this,
+        QStringLiteral("保存可编辑讲解 PPTX"),
+        QStringLiteral("%1_讲解.pptx").arg(filename.left(80)),
+        QStringLiteral("PowerPoint 演示文稿 (*.pptx)"));
+    if (path.isEmpty()) {
+        return;
+    }
+    videoBriefPresentationSavePath = path.endsWith(QStringLiteral(".pptx"), Qt::CaseInsensitive)
+        ? path
+        : QStringLiteral("%1.pptx").arg(path);
+    videoBriefPresentationDownloadPending = true;
+    ui->videoStatusLabel->setText(QStringLiteral("正在保存已验证的可编辑 PPTX…"));
+    updateVideoBriefButtons();
+    backendClient->requestMediaVideoBriefPresentationDownload(videoProjectId, videoBriefPresentationTaskId);
 }
 
 void MainWindow::delegateVideoSourceToCommander()
@@ -5030,6 +5244,14 @@ QString MainWindow::formatVideoBrief(const MediaVideoBriefTaskResult &result) co
     return lines.join(QStringLiteral("\n\n"));
 }
 
+QString MainWindow::formatVideoBriefPresentation(const MediaVideoBriefPresentationTaskResult &result) const
+{
+    return QStringLiteral("可编辑 PPTX 已验证\n%1 页 | %2 张受控关键帧 | %3")
+        .arg(result.slideCount)
+        .arg(result.embeddedKeyframeCount)
+        .arg(QLocale().formattedDataSize(result.sizeBytes));
+}
+
 void MainWindow::resetVideoEdlCandidateUi()
 {
     videoEdlCandidateTaskId.clear();
@@ -5066,8 +5288,19 @@ void MainWindow::resetVideoBriefUi()
     videoBriefCompleted = false;
     videoBriefDownloadPending = false;
     videoBriefSavePath.clear();
+    resetVideoBriefPresentationUi();
     ui->videoBriefEdit->clear();
     updateVideoBriefButtons();
+}
+
+void MainWindow::resetVideoBriefPresentationUi()
+{
+    videoBriefPresentationTaskId.clear();
+    videoBriefPresentationPending = false;
+    videoBriefPresentationRunning = false;
+    videoBriefPresentationCompleted = false;
+    videoBriefPresentationDownloadPending = false;
+    videoBriefPresentationSavePath.clear();
 }
 
 void MainWindow::updateVideoCandidateButton()
@@ -5083,14 +5316,18 @@ void MainWindow::updateVideoCandidateButton()
     ui->videoCandidateButton->setEnabled(!videoCompletedTranscriptionTaskId.isEmpty()
         && !videoEdlCandidatePending && !videoEdlCandidateRunning && !videoEdlRenderPending
         && !videoEdlRenderRunning && !videoEdlRenderDownloadPending && !videoEdlSubtitleDownloadPending
-        && !videoBriefPending && !videoBriefRunning && !videoBriefDownloadPending && goalReady);
+        && !videoBriefPending && !videoBriefRunning && !videoBriefDownloadPending
+        && !videoBriefPresentationPending && !videoBriefPresentationRunning
+        && !videoBriefPresentationDownloadPending && goalReady);
 }
 
 void MainWindow::updateVideoSubtitleButtons()
 {
     const bool enabled = videoEdlCandidateReadyForRender && !videoEdlCandidateTaskId.isEmpty()
         && !videoEdlCandidatePending && !videoEdlCandidateRunning
-        && !videoEdlRenderPending && !videoEdlRenderRunning && !videoEdlSubtitleDownloadPending;
+        && !videoEdlRenderPending && !videoEdlRenderRunning && !videoEdlSubtitleDownloadPending
+        && !videoBriefPresentationPending && !videoBriefPresentationRunning
+        && !videoBriefPresentationDownloadPending;
     ui->videoFullSrtButton->setEnabled(enabled);
     ui->videoCutSrtButton->setEnabled(enabled);
 }
@@ -5101,7 +5338,8 @@ void MainWindow::updateVideoBriefButtons()
     const bool conflictingTask = videoTranscriptionPending || videoTranscriptionRunning
         || videoEdlCandidatePending || videoEdlCandidateRunning
         || videoEdlRenderPending || videoEdlRenderRunning || videoEdlRenderDownloadPending
-        || videoEdlSubtitleDownloadPending;
+        || videoEdlSubtitleDownloadPending || videoBriefPresentationPending || videoBriefPresentationRunning
+        || videoBriefPresentationDownloadPending;
     ui->videoBriefButton->setText(videoBriefPending || videoBriefRunning
         ? QStringLiteral("正在生成讲解网页...")
         : QStringLiteral("生成讲解网页"));
@@ -5111,7 +5349,20 @@ void MainWindow::updateVideoBriefButtons()
     ui->videoBriefButton->setEnabled(!videoCompletedTranscriptionTaskId.isEmpty()
         && goalReady && !videoBriefPending && !videoBriefRunning && !videoBriefDownloadPending && !conflictingTask);
     ui->videoBriefSaveButton->setEnabled(videoBriefCompleted && !videoBriefDownloadPending
+        && !videoBriefPresentationPending && !videoBriefPresentationRunning && !videoBriefPresentationDownloadPending
         && !videoBriefTaskId.isEmpty());
+    ui->videoBriefPresentationButton->setText(videoBriefPresentationPending || videoBriefPresentationRunning
+        ? QStringLiteral("正在生成可编辑 PPT...")
+        : (videoBriefPresentationCompleted ? QStringLiteral("重新生成可编辑 PPT") : QStringLiteral("生成可编辑 PPT")));
+    ui->videoBriefPresentationButton->setToolTip(videoBriefPresentationPending || videoBriefPresentationRunning
+        ? QStringLiteral("正在复核既有讲解章节与受控关键帧，并写入可编辑 PPTX。")
+        : QStringLiteral("复用已验证的讲解章节和关键帧生成 PPTX；不会重新转写或调用模型。"));
+    ui->videoBriefPresentationButton->setEnabled(videoBriefCompleted && !videoBriefTaskId.isEmpty()
+        && !videoBriefPending && !videoBriefRunning && !videoBriefDownloadPending
+        && !videoBriefPresentationPending && !videoBriefPresentationRunning
+        && !videoBriefPresentationDownloadPending && !conflictingTask);
+    ui->videoBriefPresentationSaveButton->setEnabled(videoBriefPresentationCompleted
+        && !videoBriefPresentationDownloadPending && !videoBriefPresentationTaskId.isEmpty());
 }
 
 void MainWindow::updateVideoEdlRenderButton()

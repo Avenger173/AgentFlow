@@ -92,6 +92,35 @@ class PresentationStudioConfirmationError(PresentationStudioDeliveryError):
 
 
 @dataclass(frozen=True)
+class PresentationStudioEmbeddedImageAsset:
+    """已由其他受控任务验证的内存图片，可复用既有 PPTX 渲染器。"""
+
+    asset_id: str
+    image_bytes: bytes
+    credit_text: str
+    audit_source: dict[str, object]
+
+    def audit_metadata(self) -> dict[str, object]:
+        return dict(self.audit_source)
+
+
+@dataclass(frozen=True)
+class PresentationStudioEmbeddedImageResolution:
+    """内部受控图片的渲染结果，不触发图库或图像模型调用。"""
+
+    images: tuple[PresentationStudioEmbeddedImageAsset, ...]
+    warnings: tuple[str, ...] = ()
+
+    @property
+    def provider(self) -> str:
+        return "embedded"
+
+    @property
+    def label(self) -> str:
+        return "受控内嵌图片"
+
+
+@dataclass(frozen=True)
 class _StudioThemePalette:
     # 设计系统决定构图规则，不能把主题退化成仅替换几个 RGB 值。
     design_system: str
@@ -389,6 +418,48 @@ def _motion_delivery_suffix(motion: NativePresentationMotionSummary) -> str:
     if motion.enabled:
         return f"已写入 {motion.transition_slide_count} 页淡入转场和 {motion.entrance_effect_count} 个点击入场动效。"
     return "本次未写入原生动效，已自动保留为无动画的可编辑版本。"
+
+
+def write_verified_presentation_studio_plan(
+    *,
+    target: Path,
+    plan: PresentationStudioPlanResponse,
+    assets: tuple[PresentationStudioEmbeddedImageAsset, ...],
+    assets_by_slide_id: dict[str, PresentationStudioEmbeddedImageAsset],
+) -> tuple[PresentationVerification, NativePresentationMotionSummary]:
+    """复用既有版式与回读器，将已验证图片写入新的可编辑 PPTX。
+
+    这是内部适配接缝：调用方必须先完成项目范围、来源哈希和图片字节校验。函数不读取本机
+    任意图片路径，也不访问网络或模型，因此可安全承接视频关键帧等已验证媒体交付。
+    """
+
+    if not assets:
+        raise PresentationStudioDeliveryError("可编辑 PPTX 缺少已验证的内嵌图片。")
+    if target.exists():
+        raise PresentationStudioPlanConflictError("PPTX 目标文件已存在，不能覆盖已有交付。")
+    resolution = PresentationStudioEmbeddedImageResolution(images=assets)
+    try:
+        with target.open("xb") as target_file:
+            motion = _render_studio_presentation(
+                target_file,
+                plan,
+                assets=assets,
+                assets_by_slide_id=assets_by_slide_id,
+                research_sources=(),
+                structured_data=(),
+            )
+        verification = _verify_studio_presentation(
+            target,
+            plan,
+            assets=resolution,
+            research=WikimediaResearchResolution(sources=(), warnings=()),
+            structured_data=WorldBankDataResolution(chart=None, warnings=()),
+            motion=motion,
+        )
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
+    return verification, motion
 
 
 def _load_plan(task_id: str) -> PresentationStudioPlanResponse:

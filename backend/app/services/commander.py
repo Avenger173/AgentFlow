@@ -84,6 +84,10 @@ MEDIA_VIDEO_EDIT_ROUTE_KEYWORDS = (
     "保留视频", "保留介绍", "保留讲解", "视频讲解", "讲解网页", "动态讲解", "视频总结", "视频摘要",
     "关键画面", "视频做成网页",
 )
+MEDIA_VIDEO_PRESENTATION_ROUTE_KEYWORDS = (
+    "视频讲解", "讲解网页", "动态讲解", "视频总结", "视频摘要", "关键画面",
+    "视频做成ppt", "视频做成 ppt", "视频生成ppt", "视频生成 ppt",
+)
 KNOWLEDGE_ROUTE_KEYWORDS = (
     "知识库", "资料库", "根据资料", "查资料", "问资料", "引用来源",
 )
@@ -175,12 +179,20 @@ def create_commander_plan(
         lowered,
         KNOWLEDGE_DEEP_ROUTE_KEYWORDS,
     )
-    # PPT 创作拥有最高的显式意图优先级。即使调度台仍挂着上一次的数据集或资料库，
-    # “帮我做 PPT”也不能被错误解释成“分析当前数据/资料库”。
+    # PPT 创作拥有最高的显式意图优先级。唯一的例外是客户已绑定受控视频，并明确指向
+    # 视频讲解/关键帧的 PPT；该场景只能进入视频工作区复用已有讲解交付，不能把视频
+    # 素材暗中交给通用 PPT 规划器。
     presentation_requested = not history_recall_requested and _matches_any(
         lowered,
         PRESENTATION_ROUTE_KEYWORDS,
     )
+    media_video_presentation_requested = (
+        presentation_requested
+        and bool(media_source_refs)
+        and _matches_any(lowered, MEDIA_VIDEO_PRESENTATION_ROUTE_KEYWORDS)
+    )
+    if media_video_presentation_requested:
+        presentation_requested = False
     fresh_external_information_requested = (
         not history_recall_requested
         and not presentation_requested

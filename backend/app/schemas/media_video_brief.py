@@ -181,3 +181,44 @@ class MediaVideoBriefTaskResultResponse(BaseModel):
     delivery: MediaVideoBriefDeliveryInfo | None = None
     artifact_id: str | None = Field(default=None, pattern=r"^artifact_media_video_brief_[0-9a-f]{12}$")
     clarification_question: str | None = None
+
+
+class MediaVideoBriefPresentationRequest(BaseModel):
+    """将一份已验证的视频讲解计划转为可编辑 PPTX 的显式确认。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    video_brief_task_id: str = Field(pattern=r"^task_media_video_brief_[0-9a-f]{12}$")
+    confirmed: Literal[True]
+
+
+class MediaVideoBriefPresentationDeliveryInfo(BaseModel):
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size_bytes: int = Field(ge=1, le=64 * 1024 * 1024)
+    slide_count: int = Field(ge=5, le=12)
+    source_slide_count: Literal[1] = 1
+    embedded_keyframe_count: int = Field(ge=1, le=MAX_VIDEO_BRIEF_CHAPTERS)
+    created_at: str
+
+
+class MediaVideoBriefPresentationStartResponse(BaseModel):
+    task_id: str = Field(pattern=r"^task_media_video_presentation_[0-9a-f]{12}$")
+    status: Literal["queued"] = "queued"
+
+
+class MediaVideoBriefPresentationTaskResultResponse(BaseModel):
+    task_id: str = Field(pattern=r"^task_media_video_presentation_[0-9a-f]{12}$")
+    status: Literal["pending", "running", "completed", "failed", "cancelled"]
+    summary: str
+    message: str
+    failure_reason: Literal[
+        "validation_failed",
+        "tool_execution_failed",
+        "delivery_verification_failed",
+        "cancelled",
+        "unexpected",
+    ] | None = None
+    video_brief_task_id: str | None = Field(default=None, pattern=r"^task_media_video_brief_[0-9a-f]{12}$")
+    source_id: str | None = Field(default=None, pattern=r"^ms_[0-9a-f]{16}$")
+    delivery: MediaVideoBriefPresentationDeliveryInfo | None = None
+    artifact_id: str | None = Field(default=None, pattern=r"^artifact_media_video_presentation_[0-9a-f]{12}$")

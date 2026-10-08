@@ -771,6 +771,29 @@ MediaVideoBriefTaskResult readMediaVideoBriefTaskResult(const QJsonObject &paylo
     return result;
 }
 
+MediaVideoBriefPresentationTaskResult readMediaVideoBriefPresentationTaskResult(const QJsonObject &payload)
+{
+    MediaVideoBriefPresentationTaskResult result;
+    result.taskId = payload.value(QStringLiteral("task_id")).toString();
+    result.status = payload.value(QStringLiteral("status")).toString();
+    result.summary = payload.value(QStringLiteral("summary")).toString();
+    result.message = payload.value(QStringLiteral("message")).toString();
+    result.failureReason = payload.value(QStringLiteral("failure_reason")).toString();
+    result.videoBriefTaskId = payload.value(QStringLiteral("video_brief_task_id")).toString();
+    result.sourceId = payload.value(QStringLiteral("source_id")).toString();
+    result.artifactId = payload.value(QStringLiteral("artifact_id")).toString();
+
+    const QJsonObject delivery = payload.value(QStringLiteral("delivery")).toObject();
+    result.sha256 = delivery.value(QStringLiteral("sha256")).toString();
+    result.sizeBytes = static_cast<qint64>(delivery.value(QStringLiteral("size_bytes")).toDouble());
+    result.slideCount = delivery.value(QStringLiteral("slide_count")).toInt();
+    result.embeddedKeyframeCount = delivery.value(QStringLiteral("embedded_keyframe_count")).toInt();
+    result.hasDelivery = !result.videoBriefTaskId.isEmpty() && !result.sourceId.isEmpty()
+        && !result.artifactId.isEmpty() && !result.sha256.isEmpty() && result.sizeBytes > 0
+        && result.slideCount > 0 && result.embeddedKeyframeCount > 0;
+    return result;
+}
+
 MediaImageRevisionInfo readMediaImageRevisionInfo(const QJsonObject &payload)
 {
     MediaImageRevisionInfo revision;
@@ -3295,6 +3318,52 @@ void BackendClient::requestMediaVideoBriefDownload(const QString &projectId, con
     });
 }
 
+void BackendClient::startMediaVideoBriefPresentation(const QString &projectId, const QString &videoBriefTaskId)
+{
+    if (projectId.trimmed().isEmpty() || videoBriefTaskId.trimmed().isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("start_video_brief_presentation"), QStringLiteral("生成讲解 PPTX 缺少已验证的讲解网页。"));
+        return;
+    }
+    const QJsonObject payload{
+        {QStringLiteral("video_brief_task_id"), videoBriefTaskId.trimmed()},
+        {QStringLiteral("confirmed"), true},
+    };
+    QNetworkReply *reply = networkManager_.post(
+        createRequest(buildMediaAgentVideoBriefPresentationStartUrl(projectId.trimmed()), 10000),
+        QJsonDocument(payload).toJson(QJsonDocument::Compact));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        handleMediaVideoBriefPresentationStartReply(reply);
+    });
+}
+
+void BackendClient::requestMediaVideoBriefPresentationResult(const QString &taskId)
+{
+    if (taskId.trimmed().isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("video_brief_presentation_task_result"), QStringLiteral("讲解 PPTX 任务 ID 为空。"));
+        return;
+    }
+    QNetworkReply *reply = networkManager_.get(
+        createRequest(buildMediaAgentVideoBriefPresentationResultUrl(taskId.trimmed()), 10000));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        handleMediaVideoBriefPresentationResultReply(reply);
+    });
+}
+
+void BackendClient::requestMediaVideoBriefPresentationDownload(const QString &projectId, const QString &taskId)
+{
+    if (projectId.trimmed().isEmpty() || taskId.trimmed().isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("download_video_brief_presentation"), QStringLiteral("保存讲解 PPTX 缺少项目或任务。"));
+        return;
+    }
+    QNetworkReply *reply = networkManager_.get(
+        createRequest(buildMediaAgentVideoBriefPresentationDownloadUrl(projectId.trimmed(), taskId.trimmed()), 30000));
+    reply->setProperty("media_video_brief_presentation_project_id", projectId.trimmed());
+    reply->setProperty("media_video_brief_presentation_task_id", taskId.trimmed());
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        handleMediaVideoBriefPresentationDownloadReply(reply);
+    });
+}
+
 void BackendClient::requestMediaAssetRevisions(const QString &projectId, const QString &assetId)
 {
     if (projectId.trimmed().isEmpty() || assetId.trimmed().isEmpty()) {
@@ -5523,6 +5592,31 @@ QUrl BackendClient::buildMediaAgentVideoBriefDownloadUrl(const QString &projectI
     return url;
 }
 
+QUrl BackendClient::buildMediaAgentVideoBriefPresentationStartUrl(const QString &projectId) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/agents/media_agent/projects/%1/video-brief-presentations/start")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(projectId))));
+    return url;
+}
+
+QUrl BackendClient::buildMediaAgentVideoBriefPresentationResultUrl(const QString &taskId) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/agents/media_agent/video-brief-presentations/%1/result")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(taskId))));
+    return url;
+}
+
+QUrl BackendClient::buildMediaAgentVideoBriefPresentationDownloadUrl(const QString &projectId, const QString &taskId) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/agents/media_agent/projects/%1/video-brief-presentations/%2/download")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(projectId)),
+                         QString::fromUtf8(QUrl::toPercentEncoding(taskId))));
+    return url;
+}
+
 QUrl BackendClient::buildMediaAgentAssetRevisionsUrl(
     const QString &projectId,
     const QString &assetId) const
@@ -7232,6 +7326,84 @@ void BackendClient::handleMediaVideoBriefDownloadReply(QNetworkReply *reply)
         return;
     }
     emit mediaVideoBriefDownloaded(projectId, taskId, content);
+}
+
+void BackendClient::handleMediaVideoBriefPresentationStartReply(QNetworkReply *reply)
+{
+    if (reply->error() != QNetworkReply::NoError) {
+        const QString message = replyErrorMessage(reply);
+        reply->deleteLater();
+        emit mediaAgentFailed(QStringLiteral("start_video_brief_presentation"), message);
+        return;
+    }
+    const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+    reply->deleteLater();
+    const QJsonObject payload = document.object();
+    const QString taskId = payload.value(QStringLiteral("task_id")).toString().trimmed();
+    if (!document.isObject() || taskId.isEmpty()
+        || payload.value(QStringLiteral("status")).toString() != QStringLiteral("queued")) {
+        emit mediaAgentFailed(QStringLiteral("start_video_brief_presentation"), QStringLiteral("讲解 PPTX 任务未返回有效受理状态。"));
+        return;
+    }
+    emit mediaVideoBriefPresentationTaskStarted(taskId);
+}
+
+void BackendClient::handleMediaVideoBriefPresentationResultReply(QNetworkReply *reply)
+{
+    if (reply->error() != QNetworkReply::NoError) {
+        const QString message = replyErrorMessage(reply);
+        reply->deleteLater();
+        emit mediaAgentFailed(QStringLiteral("video_brief_presentation_task_result"), message);
+        return;
+    }
+    const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+    reply->deleteLater();
+    if (!document.isObject()) {
+        emit mediaAgentFailed(QStringLiteral("video_brief_presentation_task_result"), QStringLiteral("讲解 PPTX 结果响应格式无效。"));
+        return;
+    }
+    const MediaVideoBriefPresentationTaskResult result = readMediaVideoBriefPresentationTaskResult(document.object());
+    if (result.taskId.isEmpty() || result.status.isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("video_brief_presentation_task_result"), QStringLiteral("讲解 PPTX 结果缺少任务状态。"));
+        return;
+    }
+    if (result.status == QStringLiteral("queued") || result.status == QStringLiteral("pending")
+        || result.status == QStringLiteral("running")) {
+        emit mediaVideoBriefPresentationTaskStillRunning(result.taskId, result.status, result.summary);
+        return;
+    }
+    if (result.status == QStringLiteral("cancelled")) {
+        emit mediaVideoBriefPresentationTaskCancelled(
+            result.taskId,
+            result.message.isEmpty() ? QStringLiteral("讲解 PPTX 任务已取消，未生成文件。") : result.message);
+        return;
+    }
+    if (result.status == QStringLiteral("completed") && result.hasDelivery) {
+        emit mediaVideoBriefPresentationTaskCompleted(result);
+        return;
+    }
+    emit mediaAgentFailed(
+        QStringLiteral("video_brief_presentation_task_result"),
+        result.message.isEmpty() ? QStringLiteral("讲解 PPTX 未完成，请在任务历史中查看原因。") : result.message);
+}
+
+void BackendClient::handleMediaVideoBriefPresentationDownloadReply(QNetworkReply *reply)
+{
+    const QString projectId = reply->property("media_video_brief_presentation_project_id").toString();
+    const QString taskId = reply->property("media_video_brief_presentation_task_id").toString();
+    if (reply->error() != QNetworkReply::NoError) {
+        const QString message = replyErrorMessage(reply);
+        reply->deleteLater();
+        emit mediaAgentFailed(QStringLiteral("download_video_brief_presentation"), message);
+        return;
+    }
+    const QByteArray content = reply->readAll();
+    reply->deleteLater();
+    if (content.isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("download_video_brief_presentation"), QStringLiteral("已验证讲解 PPTX 的下载内容为空。"));
+        return;
+    }
+    emit mediaVideoBriefPresentationDownloaded(projectId, taskId, content);
 }
 
 void BackendClient::handleMediaImageRevisionTaskStartReply(QNetworkReply *reply)

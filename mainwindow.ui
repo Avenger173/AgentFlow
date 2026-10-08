@@ -2866,6 +2866,22 @@ QPushButton#navGroupButton:hover {
 <property name="text"><string>保存离线 HTML</string></property>
 <property name="toolTip"><string>将已验证的单文件动态讲解网页另存为本地副本。</string></property>
 </widget></item>
+<item><widget class="QPushButton" name="videoBriefPresentationButton">
+<property name="objectName"><string>secondaryButton</string></property>
+<property name="minimumSize"><size><width>0</width><height>40</height></size></property>
+<property name="enabled"><bool>false</bool></property>
+<property name="accessibleName"><string>生成视频讲解可编辑 PPT</string></property>
+<property name="text"><string>生成可编辑 PPT</string></property>
+<property name="toolTip"><string>复用已验证的讲解章节和关键帧生成 PPTX；不会重新转写或调用模型。</string></property>
+</widget></item>
+<item><widget class="QPushButton" name="videoBriefPresentationSaveButton">
+<property name="objectName"><string>ghostButton</string></property>
+<property name="minimumSize"><size><width>0</width><height>36</height></size></property>
+<property name="enabled"><bool>false</bool></property>
+<property name="accessibleName"><string>保存视频讲解可编辑 PPT</string></property>
+<property name="text"><string>保存可编辑 PPTX</string></property>
+<property name="toolTip"><string>将已验证的可编辑 PPTX 另存为本地副本。</string></property>
+</widget></item>
 <item><widget class="QPushButton" name="videoFullSrtButton">
 <property name="objectName"><string>ghostButton</string></property>
 <property name="minimumSize"><size><width>0</width><height>36</height></size></property>

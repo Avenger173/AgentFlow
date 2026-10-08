@@ -145,7 +145,7 @@ AI调度台总指挥同样可以使用：
 | 本地知识库 | 文档版本、FTS5、可选 Chroma/FastEmbed、可信问答、深度 Map-Reduce 和可选本地 OCR |
 | 记忆系统 | 会话归档、有限近轮上下文、Compaction、跨会话短事实记忆和显式确认 |
 | 模型网关 | DeepSeek、Kimi/Moonshot、OpenAI、Anthropic、Qwen 和自定义 OpenAI-compatible 服务 |
-| 多媒体助手（内部） | AI 修图最小闭环：调度台安全交接、Qwen 图像编辑路由、失败分类、可撤销 revision 和重启对账；短视频支持显式转写、候选剪辑、SRT/MP4 交付，以及基于已验证转写和受控关键帧的单文件离线讲解 HTML。图片正式复核、视频发布和结构化 PPTX 交接仍待后续验收 |
+| 多媒体助手（内部） | AI 修图最小闭环：调度台安全交接、Qwen 图像编辑路由、失败分类、可撤销 revision 和重启对账；短视频支持显式转写、候选剪辑、SRT/MP4 交付，以及基于已验证转写和受控关键帧的单文件离线讲解 HTML、可编辑 PPTX。讲解 PPTX 复用既有计划和关键帧，生成时不重复转写或调用模型。图片正式复核与视频发布仍待后续验收 |
 | 治理与审计 | 权限确认、作用域隔离、Tool 审计、任务历史、来源验证、产物回读和敏感信息过滤 |
 
 ## 工作方式
@@ -346,7 +346,7 @@ ctest --test-dir build\dev -C Debug --output-on-failure
 | --- | --- |
 | 已形成闭环 | Commander 调度、文档助手、数据工作台、本地知识库、任务历史、权限审计、分层记忆、多模型网关 |
 | 可选能力 | 本地语义索引、本地 OCR、Pexels 图片、Seedream 图片生成、联网资料核验 |
-| 正在完善 | Windows 目录式发行、真实材料体验验收、长期记忆命中可视化、用户画像聚合、多媒体正式发布验收，以及视频讲解到可编辑 PPTX 的结构化交接 |
+| 正在完善 | Windows 目录式发行、真实材料体验验收、长期记忆命中可视化、用户画像聚合和多媒体正式发布验收 |
 | 尚未作为正式能力 | 通用 Code Agent、第三方 Agent 插件市场、多用户/多租户、跨平台桌面发行 |
 
 项目状态以 [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md) 为准；开发计划与未完成边界以 [`docs/DEVELOPMENT_ROADMAP.md`](docs/DEVELOPMENT_ROADMAP.md) 为准。README 只描述当前对外可理解的产品能力，不承担开发流水账职责。
@@ -359,7 +359,7 @@ ctest --test-dir build\dev -C Debug --output-on-failure
 - [Agent 与 Workflow 规格](docs/AGENT_SPECIFICATIONS.md)
 - [Agent 工程指南](docs/AGENT_ENGINEERING_GUIDE.md)
 - [记忆系统开发计划](docs/AGENT_MEMORY_DEVELOPMENT_PLAN.md)
-- [多媒体助手开发计划（视频动态讲解 HTML 内部验证通过；PPTX 交接待实现）](docs/MULTIMEDIA_AGENT_DEVELOPMENT_PLAN.md)
+- [多媒体助手开发计划（视频动态讲解 HTML 与可编辑 PPTX 内部验证通过）](docs/MULTIMEDIA_AGENT_DEVELOPMENT_PLAN.md)
 - [多媒体助手评测与验证方案](docs/MULTIMEDIA_AGENT_EVALUATION.md)
 - [数据工作台产品规格](docs/DATA_WORKSPACE_PRODUCT_SPEC.md)
 - [知识库产品规格](docs/KNOWLEDGE_BASE_PRODUCT_SPEC.md)

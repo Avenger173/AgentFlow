@@ -332,6 +332,11 @@ def _resolve_runtime_artifact_path(artifact: WorkflowArtifact) -> Path | None:
         if not artifact.uri.startswith("agentflow-output://media_exports/"):
             return None
         outputs_root = settings.media_export_output_dir
+    elif output_scope == "media_video_presentations":
+        # 视频讲解 PPTX 复用已有讲解计划和受控关键帧写入；任务历史只能在专属根目录内打开。
+        if not artifact.uri.startswith("agentflow-output://media_video_presentations/"):
+            return None
+        outputs_root = settings.media_video_presentation_output_dir
     else:
         return None
     try:

@@ -161,6 +161,23 @@ def main() -> None:
             assert presentation_plan["next_action"] == "open_presentation_studio"
             assert not any(step["action"] == "open_video_workspace" for step in presentation_plan["steps"])
 
+            video_presentation = client.post(
+                "/api/chat",
+                json={
+                    "message": "把当前视频讲解网页整理成可编辑 PPT，保留章节和关键画面。",
+                    "agent_hints": [{"agent_id": "media_agent", "source": "mention"}],
+                    "materials": [material],
+                },
+            )
+            assert video_presentation.status_code == 200, video_presentation.text
+            video_presentation_plan = video_presentation.json()["workflow_plan"]
+            assert video_presentation_plan["intent"] == "media_video_edit"
+            assert video_presentation_plan["next_action"] == "open_video_workspace"
+            assert [(step["agent"], step["action"]) for step in _specialist_steps(video_presentation_plan)] == [
+                ("media_agent", "open_video_workspace")
+            ]
+            assert not any(step["action"] == "open_presentation_studio" for step in video_presentation_plan["steps"])
+
             image = client.post(
                 "/api/chat",
                 json={"message": "@图片助手 把人物身后的杂物去掉。"},

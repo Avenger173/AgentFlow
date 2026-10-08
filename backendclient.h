@@ -623,6 +623,26 @@ struct MediaVideoBriefTaskResult
 
 Q_DECLARE_METATYPE(MediaVideoBriefTaskResult)
 
+// 视频讲解 PPTX 只回传已验证交付的元数据；页面不接收关键帧字节或后端输出路径。
+struct MediaVideoBriefPresentationTaskResult
+{
+    QString taskId;
+    QString status;
+    QString summary;
+    QString message;
+    QString failureReason;
+    QString videoBriefTaskId;
+    QString sourceId;
+    QString artifactId;
+    QString sha256;
+    qint64 sizeBytes = 0;
+    int slideCount = 0;
+    int embeddedKeyframeCount = 0;
+    bool hasDelivery = false;
+};
+
+Q_DECLARE_METATYPE(MediaVideoBriefPresentationTaskResult)
+
 struct MediaAssetRevisionListResult
 {
     MediaImageAssetInfo asset;
@@ -1576,6 +1596,9 @@ public:
         const QString &goal);
     void requestMediaVideoBriefResult(const QString &taskId);
     void requestMediaVideoBriefDownload(const QString &projectId, const QString &taskId);
+    void startMediaVideoBriefPresentation(const QString &projectId, const QString &videoBriefTaskId);
+    void requestMediaVideoBriefPresentationResult(const QString &taskId);
+    void requestMediaVideoBriefPresentationDownload(const QString &projectId, const QString &taskId);
     void requestMediaAssetRevisions(const QString &projectId, const QString &assetId);
     void requestMediaImageLayerStack(
         const QString &projectId,
@@ -1993,6 +2016,11 @@ signals:
     void mediaVideoBriefTaskCompleted(const MediaVideoBriefTaskResult &result);
     void mediaVideoBriefTaskCancelled(const QString &taskId, const QString &message);
     void mediaVideoBriefDownloaded(const QString &projectId, const QString &taskId, const QByteArray &content);
+    void mediaVideoBriefPresentationTaskStarted(const QString &taskId);
+    void mediaVideoBriefPresentationTaskStillRunning(const QString &taskId, const QString &status, const QString &summary);
+    void mediaVideoBriefPresentationTaskCompleted(const MediaVideoBriefPresentationTaskResult &result);
+    void mediaVideoBriefPresentationTaskCancelled(const QString &taskId, const QString &message);
+    void mediaVideoBriefPresentationDownloaded(const QString &projectId, const QString &taskId, const QByteArray &content);
     void mediaAssetRevisionsReceived(const MediaAssetRevisionListResult &result);
     void mediaImageLayerStackReceived(const MediaImageLayerStackResult &result);
     void mediaImageRevisionCreated(const MediaImageRevisionInfo &revision);
@@ -2113,6 +2141,9 @@ private:
     QUrl buildMediaAgentVideoBriefStartUrl(const QString &projectId) const;
     QUrl buildMediaAgentVideoBriefResultUrl(const QString &taskId) const;
     QUrl buildMediaAgentVideoBriefDownloadUrl(const QString &projectId, const QString &taskId) const;
+    QUrl buildMediaAgentVideoBriefPresentationStartUrl(const QString &projectId) const;
+    QUrl buildMediaAgentVideoBriefPresentationResultUrl(const QString &taskId) const;
+    QUrl buildMediaAgentVideoBriefPresentationDownloadUrl(const QString &projectId, const QString &taskId) const;
     QUrl buildMediaAgentAssetRevisionsUrl(const QString &projectId, const QString &assetId) const;
     QUrl buildMediaAgentRevisionLayerStackUrl(
         const QString &projectId,
@@ -2242,6 +2273,9 @@ private:
     void handleMediaVideoBriefStartReply(QNetworkReply *reply);
     void handleMediaVideoBriefResultReply(QNetworkReply *reply);
     void handleMediaVideoBriefDownloadReply(QNetworkReply *reply);
+    void handleMediaVideoBriefPresentationStartReply(QNetworkReply *reply);
+    void handleMediaVideoBriefPresentationResultReply(QNetworkReply *reply);
+    void handleMediaVideoBriefPresentationDownloadReply(QNetworkReply *reply);
     void handleMediaImageRevisionTaskStartReply(QNetworkReply *reply);
     void handleMediaImageRevisionTaskResultReply(QNetworkReply *reply);
     void handleMediaImageAiEditTaskStartReply(QNetworkReply *reply);

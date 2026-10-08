@@ -58,6 +58,9 @@ from app.schemas.media_edl import (
     MediaEdlRenderTaskResultResponse,
 )
 from app.schemas.media_video_brief import (
+    MediaVideoBriefPresentationRequest,
+    MediaVideoBriefPresentationStartResponse,
+    MediaVideoBriefPresentationTaskResultResponse,
     MediaVideoBriefRequest,
     MediaVideoBriefStartResponse,
     MediaVideoBriefTaskResultResponse,
@@ -125,6 +128,12 @@ from app.services.media_video_brief_delivery import (
     resolve_media_video_brief_download_path,
     run_media_video_brief_task,
 )
+from app.services.media_video_brief_presentation_delivery import (
+    create_media_video_brief_presentation_queued_run,
+    get_media_video_brief_presentation_task_result,
+    resolve_media_video_brief_presentation_download_path,
+    run_media_video_brief_presentation_task,
+)
 from app.services.task_event_stream import (
     finish_live_task_event_stream,
     has_live_task_event_stream,
@@ -143,6 +152,7 @@ _BACKGROUND_MEDIA_TRANSCRIPTION_TASKS: set[asyncio.Task[None]] = set()
 _BACKGROUND_MEDIA_EDL_TASKS: set[asyncio.Task[None]] = set()
 _BACKGROUND_MEDIA_EDL_CANDIDATE_TASKS: set[asyncio.Task[None]] = set()
 _BACKGROUND_MEDIA_VIDEO_BRIEF_TASKS: set[asyncio.Task[None]] = set()
+_BACKGROUND_MEDIA_VIDEO_BRIEF_PRESENTATION_TASKS: set[asyncio.Task[None]] = set()
 
 
 @router.get("/projects", response_model=MediaProjectListResponse)
@@ -454,6 +464,80 @@ async def download_media_video_brief_endpoint(project_id: str, task_id: str) -> 
             task_id=task_id,
         )
         return FileResponse(path, media_type="text/html; charset=utf-8", filename=filename)
+    except MediaSourcePreparationError as exc:
+        raise _media_source_error_to_http(exc) from exc
+
+
+@router.post(
+    "/projects/{project_id}/video-brief-presentations/start",
+    response_model=MediaVideoBriefPresentationStartResponse,
+    status_code=202,
+)
+async def start_media_video_brief_presentation_endpoint(
+    project_id: str,
+    request: MediaVideoBriefPresentationRequest,
+) -> MediaVideoBriefPresentationStartResponse:
+    """确认后复用已验证的视频讲解计划，确定性生成可编辑 PPTX。"""
+
+    task_id = f"task_media_video_presentation_{uuid4().hex[:12]}"
+    try:
+        await asyncio.to_thread(get_media_project, project_id)
+        await asyncio.to_thread(
+            create_media_video_brief_presentation_queued_run,
+            task_id=task_id,
+            project_id=project_id,
+            request=request,
+        )
+    except (MediaWorkspaceError, MediaSourcePreparationError) as exc:
+        raise _media_error_to_http(exc) from exc
+    open_live_task_event_stream(task_id)
+    await publish_live_task_event(
+        task_id=task_id,
+        event="task_queued",
+        agent_id="media_agent",
+        message="视频讲解 PPTX 已受理，将复用现有讲解计划，不会重新调用模型。",
+    )
+    task = asyncio.create_task(
+        _run_media_video_brief_presentation_background(task_id=task_id, project_id=project_id, request=request)
+    )
+    _BACKGROUND_MEDIA_VIDEO_BRIEF_PRESENTATION_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_MEDIA_VIDEO_BRIEF_PRESENTATION_TASKS.discard)
+    return MediaVideoBriefPresentationStartResponse(task_id=task_id)
+
+
+@router.get(
+    "/video-brief-presentations/{task_id}/result",
+    response_model=MediaVideoBriefPresentationTaskResultResponse,
+)
+async def get_media_video_brief_presentation_result_endpoint(
+    task_id: str,
+) -> MediaVideoBriefPresentationTaskResultResponse:
+    result = get_media_video_brief_presentation_task_result(task_id)
+    if result is not None:
+        return result
+    if has_live_task_event_stream(task_id) and not live_task_event_stream_finished(task_id):
+        return MediaVideoBriefPresentationTaskResultResponse(
+            task_id=task_id,
+            status="running",
+            summary="视频讲解 PPTX 正在生成。",
+            message="正在复核讲解计划和关键帧，并写入可编辑 PPTX。",
+        )
+    raise HTTPException(status_code=404, detail=f"Media video brief presentation task '{task_id}' was not found.")
+
+
+@router.get("/projects/{project_id}/video-brief-presentations/{task_id}/download")
+async def download_media_video_brief_presentation_endpoint(project_id: str, task_id: str) -> FileResponse:
+    try:
+        path, filename = await asyncio.to_thread(
+            resolve_media_video_brief_presentation_download_path,
+            project_id=project_id,
+            task_id=task_id,
+        )
+        return FileResponse(
+            path,
+            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            filename=filename,
+        )
     except MediaSourcePreparationError as exc:
         raise _media_source_error_to_http(exc) from exc
 
@@ -1042,6 +1126,43 @@ async def _run_media_video_brief_background(
             step_id="media_video_brief",
             level="error",
             message="视频讲解网页异常结束，请在任务历史中查看记录。",
+        )
+    finally:
+        await finish_live_task_event_stream(task_id)
+
+
+async def _run_media_video_brief_presentation_background(
+    *,
+    task_id: str,
+    project_id: str,
+    request: MediaVideoBriefPresentationRequest,
+) -> None:
+    """把确定性的 PPTX 导出结果同步写入任务历史与实时状态。"""
+
+    try:
+        result = await asyncio.to_thread(
+            run_media_video_brief_presentation_task,
+            task_id=task_id,
+            project_id=project_id,
+            request=request,
+        )
+        await publish_live_task_event(
+            task_id=task_id,
+            event="task_completed" if result.status == "completed" else "task_failed",
+            agent_id="media_agent",
+            step_id="media_video_brief_presentation",
+            level="info" if result.status == "completed" else "error",
+            message=result.message,
+        )
+    except Exception:  # pragma: no cover - detached background safeguard.
+        logger.exception("Media video brief presentation task ended unexpectedly: %s", task_id)
+        await publish_live_task_event(
+            task_id=task_id,
+            event="task_failed",
+            agent_id="media_agent",
+            step_id="media_video_brief_presentation",
+            level="error",
+            message="视频讲解 PPTX 异常结束，请在任务历史中查看记录。",
         )
     finally:
         await finish_live_task_event_stream(task_id)

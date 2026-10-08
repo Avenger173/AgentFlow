@@ -1,5 +1,6 @@
 ﻿param(
-    [string]$QtBinPath = "D:\IDE\qtcreator\6.11.0\msvc2022_64\bin"
+    [string]$QtBinPath = "D:\IDE\qtcreator\6.11.0\msvc2022_64\bin",
+    [string]$ExecutablePath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -7,7 +8,11 @@ Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName System.Drawing
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-$executable = Join-Path $repoRoot "build\codex-debug\AgentFlow.exe"
+$executable = if ([string]::IsNullOrWhiteSpace($ExecutablePath)) {
+    Join-Path $repoRoot "build\codex-debug\AgentFlow.exe"
+} else {
+    $ExecutablePath
+}
 if (!(Test-Path $executable)) { throw "Missing test executable: $executable" }
 if (!(Test-Path (Join-Path $QtBinPath "Qt6Core.dll"))) { throw "Missing Qt runtime: $QtBinPath" }
 
@@ -126,6 +131,12 @@ try {
     $briefButton = Wait-Element -Description "generate video brief button" -Find {
         Find-ByIdSuffixOrName -Root $mainWindow -Suffix ".videoBriefButton" -Name "生成离线讲解网页"
     }
+    $briefPresentationButton = Wait-Element -Description "generate video brief presentation button" -Find {
+        Find-ByIdSuffixOrName -Root $mainWindow -Suffix ".videoBriefPresentationButton" -Name "生成视频讲解可编辑 PPT"
+    }
+    $briefPresentationSaveButton = Wait-Element -Description "save video brief presentation button" -Find {
+        Find-ByIdSuffixOrName -Root $mainWindow -Suffix ".videoBriefPresentationSaveButton" -Name "保存视频讲解可编辑 PPT"
+    }
     $fullSrtButton = Wait-Element -Description "full SRT button" -Find {
         Find-ByIdSuffixOrName -Root $mainWindow -Suffix ".videoFullSrtButton" -Name "保存完整 SRT"
     }
@@ -146,6 +157,7 @@ try {
     }
     if ($transcribeButton.Current.IsEnabled -or $candidateButton.Current.IsEnabled -or $fullSrtButton.Current.IsEnabled `
         -or $cutSrtButton.Current.IsEnabled -or $renderButton.Current.IsEnabled -or $briefButton.Current.IsEnabled `
+        -or $briefPresentationButton.Current.IsEnabled -or $briefPresentationSaveButton.Current.IsEnabled `
         -or $delegateButton.Current.IsEnabled) {
         throw "Video actions must stay disabled before selecting and transcribing a local file."
     }

@@ -16,6 +16,7 @@ from app.services.media_transcription_delivery import recover_interrupted_media_
 from app.services.media_edl_delivery import recover_interrupted_media_edl_tasks
 from app.services.media_edl_candidate_delivery import recover_interrupted_media_edl_candidate_tasks
 from app.services.media_video_brief_delivery import recover_interrupted_media_video_brief_tasks
+from app.services.media_video_brief_presentation_delivery import recover_interrupted_media_video_brief_presentation_tasks
 
 
 @asynccontextmanager
@@ -31,6 +32,9 @@ async def _agentflow_lifespan(app: FastAPI):
     recovered_media_edl_task_ids = await asyncio.to_thread(recover_interrupted_media_edl_tasks)
     recovered_media_edl_candidate_task_ids = await asyncio.to_thread(recover_interrupted_media_edl_candidate_tasks)
     recovered_media_video_brief_task_ids = await asyncio.to_thread(recover_interrupted_media_video_brief_tasks)
+    recovered_media_video_brief_presentation_task_ids = await asyncio.to_thread(
+        recover_interrupted_media_video_brief_presentation_tasks
+    )
     recovered_task_ids = await asyncio.to_thread(recover_interrupted_runtime_jobs)
     recovered_knowledge_job_ids = await asyncio.to_thread(recover_interrupted_knowledge_index_jobs)
     recovered_knowledge_deletion_ids = await asyncio.to_thread(recover_pending_knowledge_base_deletions)
@@ -44,6 +48,9 @@ async def _agentflow_lifespan(app: FastAPI):
     app.state.recovered_media_edl_task_count = len(recovered_media_edl_task_ids)
     app.state.recovered_media_edl_candidate_task_count = len(recovered_media_edl_candidate_task_ids)
     app.state.recovered_media_video_brief_task_count = len(recovered_media_video_brief_task_ids)
+    app.state.recovered_media_video_brief_presentation_task_count = len(
+        recovered_media_video_brief_presentation_task_ids
+    )
     # 知识库索引同样不能在重启后盲目续跑。K1 先收束为失败并等待显式重试，避免磁盘上半写
     # FTS 或未来 Chroma 目录被误当成已验证 generation。
     app.state.recovered_knowledge_index_job_count = len(recovered_knowledge_job_ids)
