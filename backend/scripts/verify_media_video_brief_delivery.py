@@ -140,10 +140,15 @@ async def _run() -> dict[str, object]:
         source_sha256=sha256(source_bytes).hexdigest(),
         request=request,
     )
+    assert (context.requested_chapter_min, context.requested_chapter_max) == (1, 6)
+    ranged_request = MediaVideoBriefRequest(
+        transcription_task_id="task_media_transcription_0123456789ab",
+        goal="请整理为三到五章的离线视频讲解网页。",
+    )
     loaded_project_ids: list[str] = []
 
     def verified_transcript_loader(*, task_id: str, expected_project_id: str) -> SimpleNamespace:
-        assert task_id == request.transcription_task_id
+        assert task_id in {request.transcription_task_id, ranged_request.transcription_task_id}
         loaded_project_ids.append(expected_project_id)
         return SimpleNamespace(
             project_id=project.project_id,
@@ -161,6 +166,48 @@ async def _run() -> dict[str, object]:
     plan, clarification = build_media_video_brief_plan(context=context, model_plan=_model_plan())
     assert plan is not None and clarification is None and len(plan.chapters) == 2
     assert plan.chapters[0].begin_ms == 200 and plan.chapters[1].keyframe_timestamp_ms == 3400
+
+    ranged_context = load_media_video_brief_planning_context(
+        project_id=project.project_id,
+        request=ranged_request,
+        transcript_loader=verified_transcript_loader,
+    )
+    assert (ranged_context.requested_chapter_min, ranged_context.requested_chapter_max) == (3, 5)
+    try:
+        build_media_video_brief_plan(context=ranged_context, model_plan=_model_plan())
+    except MediaVideoBriefPlanningError as exc:
+        assert "3-5" in str(exc)
+    else:
+        raise AssertionError("an explicit chapter range must reject a short model plan")
+    accepted_ranged_plan = MediaVideoBriefModelPlan(
+        action="brief",
+        title="产品演示讲解",
+        chapters=[
+            MediaVideoBriefModelChapter(
+                title="问题背景",
+                sentence_ids=[10],
+                facts=[MediaVideoBriefModelFact(text="视频先展示问题背景。", sentence_ids=[10])],
+                layout="chapter",
+                animation="appear",
+            ),
+            MediaVideoBriefModelChapter(
+                title="处理流程",
+                sentence_ids=[20],
+                facts=[MediaVideoBriefModelFact(text="视频随后介绍核心处理流程。", sentence_ids=[20])],
+                layout="evidence",
+                animation="fade",
+            ),
+            MediaVideoBriefModelChapter(
+                title="交付结果",
+                sentence_ids=[30],
+                facts=[MediaVideoBriefModelFact(text="视频最后说明交付结果与后续动作。", sentence_ids=[30])],
+                layout="summary",
+                animation="auto_animate",
+            ),
+        ],
+    )
+    accepted_plan, _ = build_media_video_brief_plan(context=ranged_context, model_plan=accepted_ranged_plan)
+    assert accepted_plan is not None and len(accepted_plan.chapters) == 3
 
     try:
         parse_media_video_brief_model_plan('{"action":"brief","title":"x","chapters":[],"javascript":"alert(1)"}')

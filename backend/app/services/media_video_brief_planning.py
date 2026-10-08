@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
@@ -14,6 +15,7 @@ from pydantic import ValidationError
 
 from app.schemas.media_source import MediaTranscriptionArtifactPayload, MediaTranscriptionSegmentInfo
 from app.schemas.media_video_brief import (
+    MAX_VIDEO_BRIEF_CHAPTERS,
     MediaVideoBriefChapterInfo,
     MediaVideoBriefFactInfo,
     MediaVideoBriefModelChapter,
@@ -30,6 +32,13 @@ from app.services.model_gateway import ModelRuntime
 MAX_VIDEO_BRIEF_PLANNING_SEGMENTS = 320
 MAX_VIDEO_BRIEF_PLANNING_CHARACTERS = 32_000
 
+# 只把用户明确写出的章节数量转成硬约束，避免从普通描述中臆测篇幅。
+_CHINESE_CHAPTER_NUMBERS = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6}
+_EXPLICIT_CHAPTER_RANGE = re.compile(
+    r"(?:整理(?:为|成)?|制作(?:为|成)?|生成(?:为|成)?|输出(?:为|成)?|概括(?:为|成)?|分(?:为|成)?|按)\s*"
+    r"([1-6一二三四五六])\s*(?:[-~～至到]\s*([1-6一二三四五六]))?\s*(?:个)?(?:章节|章)"
+)
+
 Planner = Callable[..., Awaitable[MediaVideoBriefModelPlan]]
 TranscriptLoader = Callable[..., MediaTranscriptionArtifactPayload]
 
@@ -45,6 +54,8 @@ class MediaVideoBriefPlanningContext:
     source_id: str
     source_sha256: str
     segments: tuple[MediaTranscriptionSegmentInfo, ...]
+    requested_chapter_min: int = 1
+    requested_chapter_max: int = 6
 
 
 def load_media_video_brief_planning_context(
@@ -84,12 +95,15 @@ def load_media_video_brief_planning_context(
         raise MediaVideoBriefPlanningError("当前转写上下文超过视频讲解上限，请先截取更短的素材。")
     if len({item.sentence_id for item in normalized}) != len(normalized):
         raise MediaVideoBriefPlanningError("已验证转写存在重复句段标识，无法安全生成视频讲解。")
+    requested_chapter_min, requested_chapter_max = _resolve_requested_chapter_range(request.goal)
     return MediaVideoBriefPlanningContext(
         project_id=project_id,
         request=request,
         source_id=source.source_id,
         source_sha256=source.source_sha256,
         segments=normalized,
+        requested_chapter_min=requested_chapter_min,
+        requested_chapter_max=requested_chapter_max,
     )
 
 
@@ -100,6 +114,10 @@ async def generate_media_video_brief_model_plan(
 
     payload = {
         "goal": context.request.goal,
+        "chapter_count_range": {
+            "min": context.requested_chapter_min,
+            "max": context.requested_chapter_max,
+        },
         "segments": [
             {"sentence_id": item.sentence_id, "text": item.text}
             for item in context.segments
@@ -171,6 +189,12 @@ def build_media_video_brief_plan(
 
     if model_plan.action == "clarify":
         return None, model_plan.clarification_question
+    chapter_count = len(model_plan.chapters)
+    if not context.requested_chapter_min <= chapter_count <= context.requested_chapter_max:
+        raise MediaVideoBriefPlanningError(
+            f"模型返回 {chapter_count} 章，不符合用户要求的 "
+            f"{context.requested_chapter_min}-{context.requested_chapter_max} 章。"
+        )
     by_sentence_id = {item.sentence_id: item for item in context.segments}
     chapters: list[MediaVideoBriefChapterInfo] = []
     for raw_chapter in model_plan.chapters:
@@ -240,6 +264,23 @@ def _resolve_segments(
     return resolved
 
 
+def _resolve_requested_chapter_range(goal: str) -> tuple[int, int]:
+    """仅接受用户明确给出的“整理为三到五章”式范围。"""
+
+    match = _EXPLICIT_CHAPTER_RANGE.search(goal)
+    if match is None:
+        return 1, MAX_VIDEO_BRIEF_CHAPTERS
+    minimum = _chapter_number_value(match.group(1))
+    maximum = _chapter_number_value(match.group(2)) if match.group(2) else minimum
+    if minimum > maximum:
+        raise MediaVideoBriefPlanningError("视频讲解目标中的章节范围无效。")
+    return minimum, maximum
+
+
+def _chapter_number_value(raw: str) -> int:
+    return _CHINESE_CHAPTER_NUMBERS.get(raw, int(raw) if raw.isascii() else 0)
+
+
 def build_media_video_brief_planning_system_prompt() -> str:
     return (
         "你是 AgentFlow 的受限视频讲解规划器。只返回一个 JSON 对象，不要 Markdown、解释、推理过程或额外字段。"
@@ -247,6 +288,7 @@ def build_media_video_brief_planning_system_prompt() -> str:
         "你只能根据用户目标和给定的转写句段概括视频内容；不能读取视频、不能假设画面细节、不能调用工具。"
         "只能引用给定的 sentence_id，不能输出毫秒时间、文件路径、图片、HTML、CSS、JavaScript、模型名、费用或新素材。"
         "每个 fact 都必须是其 sentence_ids 中原话的保守概括，不能加入未提供的事实；章节最多 6 个、每章最多 3 个事实。"
+        "用户消息中的 chapter_count_range 是硬约束；当它给出最小和最大章节数时，brief 必须返回该闭区间内的章节数。"
         "目标不清晰或转写不够支持时只请求澄清。交付会由系统从句段自动生成关键帧和离线网页。\n"
         "当 action 为 brief 时，使用这个完整形状："
         '{"action":"brief","title":"简短总标题","chapters":[{"title":"章节标题","sentence_ids":[0],"facts":[{"text":"保守概括","sentence_ids":[0]}],"layout":"chapter","animation":"appear"}],"clarification_question":""}'
