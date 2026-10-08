@@ -57,6 +57,11 @@ from app.schemas.media_edl import (
     MediaEdlRenderStartResponse,
     MediaEdlRenderTaskResultResponse,
 )
+from app.schemas.media_video_brief import (
+    MediaVideoBriefRequest,
+    MediaVideoBriefStartResponse,
+    MediaVideoBriefTaskResultResponse,
+)
 from app.services.media_workspace import (
     MediaWorkspaceConflictError,
     MediaWorkspaceError,
@@ -114,6 +119,12 @@ from app.services.media_edl_candidate_delivery import (
     run_media_edl_candidate_task,
 )
 from app.services.media_edl_subtitle_delivery import resolve_media_edl_subtitle_download
+from app.services.media_video_brief_delivery import (
+    create_media_video_brief_queued_run,
+    get_media_video_brief_task_result,
+    resolve_media_video_brief_download_path,
+    run_media_video_brief_task,
+)
 from app.services.task_event_stream import (
     finish_live_task_event_stream,
     has_live_task_event_stream,
@@ -131,6 +142,7 @@ _BACKGROUND_MEDIA_AI_EDIT_TASKS: set[asyncio.Task[None]] = set()
 _BACKGROUND_MEDIA_TRANSCRIPTION_TASKS: set[asyncio.Task[None]] = set()
 _BACKGROUND_MEDIA_EDL_TASKS: set[asyncio.Task[None]] = set()
 _BACKGROUND_MEDIA_EDL_CANDIDATE_TASKS: set[asyncio.Task[None]] = set()
+_BACKGROUND_MEDIA_VIDEO_BRIEF_TASKS: set[asyncio.Task[None]] = set()
 
 
 @router.get("/projects", response_model=MediaProjectListResponse)
@@ -376,6 +388,74 @@ async def get_media_edl_candidate_result_endpoint(task_id: str) -> MediaEdlCandi
             message="正在校验转写交付并生成待确认的候选片段。",
         )
     raise HTTPException(status_code=404, detail=f"Media EDL candidate task '{task_id}' was not found.")
+
+
+@router.post(
+    "/projects/{project_id}/video-briefs/start",
+    response_model=MediaVideoBriefStartResponse,
+    status_code=202,
+)
+async def start_media_video_brief_endpoint(
+    project_id: str,
+    request: MediaVideoBriefRequest,
+) -> MediaVideoBriefStartResponse:
+    """显式创建一次视频讲解交付；模型不能生成网页代码或选择文件路径。"""
+
+    task_id = f"task_media_video_brief_{uuid4().hex[:12]}"
+    try:
+        await asyncio.to_thread(get_media_project, project_id)
+        await asyncio.to_thread(
+            create_media_video_brief_queued_run,
+            task_id=task_id,
+            project_id=project_id,
+            request=request,
+        )
+    except MediaWorkspaceError as exc:
+        raise _media_error_to_http(exc) from exc
+    open_live_task_event_stream(task_id)
+    await publish_live_task_event(
+        task_id=task_id,
+        event="task_queued",
+        agent_id="media_agent",
+        message="视频讲解网页已受理，尚未向模型发送转写上下文。",
+    )
+    task = asyncio.create_task(
+        _run_media_video_brief_background(task_id=task_id, project_id=project_id, request=request)
+    )
+    _BACKGROUND_MEDIA_VIDEO_BRIEF_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_MEDIA_VIDEO_BRIEF_TASKS.discard)
+    return MediaVideoBriefStartResponse(task_id=task_id)
+
+
+@router.get(
+    "/video-briefs/{task_id}/result",
+    response_model=MediaVideoBriefTaskResultResponse,
+)
+async def get_media_video_brief_result_endpoint(task_id: str) -> MediaVideoBriefTaskResultResponse:
+    result = get_media_video_brief_task_result(task_id)
+    if result is not None:
+        return result
+    if has_live_task_event_stream(task_id) and not live_task_event_stream_finished(task_id):
+        return MediaVideoBriefTaskResultResponse(
+            task_id=task_id,
+            status="running",
+            summary="视频讲解网页正在生成。",
+            message="正在生成受限讲解计划并回读离线 HTML 交付。",
+        )
+    raise HTTPException(status_code=404, detail=f"Media video brief task '{task_id}' was not found.")
+
+
+@router.get("/projects/{project_id}/video-briefs/{task_id}/download")
+async def download_media_video_brief_endpoint(project_id: str, task_id: str) -> FileResponse:
+    try:
+        path, filename = await asyncio.to_thread(
+            resolve_media_video_brief_download_path,
+            project_id=project_id,
+            task_id=task_id,
+        )
+        return FileResponse(path, media_type="text/html; charset=utf-8", filename=filename)
+    except MediaSourcePreparationError as exc:
+        raise _media_source_error_to_http(exc) from exc
 
 
 @router.get("/projects/{project_id}/edl-candidates/{task_id}/subtitles/{subtitle_kind}/download")
@@ -938,6 +1018,30 @@ async def _run_media_edl_candidate_background(
             step_id="media_edl_candidate",
             level="error",
             message="候选剪辑异常结束，请在任务历史中查看记录。",
+        )
+    finally:
+        await finish_live_task_event_stream(task_id)
+
+
+async def _run_media_video_brief_background(
+    *,
+    task_id: str,
+    project_id: str,
+    request: MediaVideoBriefRequest,
+) -> None:
+    """关闭实时流，并让服务层保存可审计的终态。"""
+
+    try:
+        await run_media_video_brief_task(task_id=task_id, project_id=project_id, request=request)
+    except Exception:  # pragma: no cover - detached background safeguard.
+        logger.exception("Media video brief task ended unexpectedly: %s", task_id)
+        await publish_live_task_event(
+            task_id=task_id,
+            event="task_failed",
+            agent_id="media_agent",
+            step_id="media_video_brief",
+            level="error",
+            message="视频讲解网页异常结束，请在任务历史中查看记录。",
         )
     finally:
         await finish_live_task_event_stream(task_id)

@@ -1,6 +1,6 @@
 id: media_agent
-name: 图片助手
-description: 将用户的图片编辑目标交接给受控图片工作区；用户选择当前图片版本并确认后，才会调用配置的 AI 修图模型。
+name: 多媒体助手
+description: 将图片编辑或视频剪辑、讲解目标交接给受控工作区；模型调用、文件生成和确认均在工作区显式完成。
 category: 多媒体处理
 version: 0.1.0
 icon: icons/vision.svg
@@ -16,6 +16,7 @@ llm:
   allow_override: true
 tools:
   - ui.open_media_workspace
+  - ui.open_video_workspace
 permissions:
   file_read: false
   file_write: false
@@ -29,3 +30,4 @@ capabilities:
   - 图片 AI 编辑目标交接
   - 受控图片版本与预览
   - 用户确认后提交 AI 修图
+  - 受控短视频剪辑与离线讲解网页交接

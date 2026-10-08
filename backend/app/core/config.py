@@ -259,6 +259,17 @@ class Settings:
         ).resolve()
 
     @property
+    def media_video_brief_output_dir(self) -> Path:
+        """返回视频讲解 HTML 的固定交付目录。"""
+
+        return Path(
+            os.getenv(
+                "AGENTFLOW_MEDIA_VIDEO_BRIEF_OUTPUT_DIR",
+                self.output_dir / "media_video_briefs",
+            )
+        ).resolve()
+
+    @property
     def data_analysis_output_dir(self) -> Path:
         """返回数据工作台正式 Excel 交付物的固定输出目录。
 

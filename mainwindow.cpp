@@ -3945,6 +3945,8 @@ void MainWindow::setupVideoWorkspace()
     connect(ui->videoChooseButton, &QPushButton::clicked, this, &MainWindow::chooseVideoSourceFile);
     connect(ui->videoTranscribeButton, &QPushButton::clicked, this, &MainWindow::startVideoTranscription);
     connect(ui->videoCandidateButton, &QPushButton::clicked, this, &MainWindow::startVideoEdlCandidate);
+    connect(ui->videoBriefButton, &QPushButton::clicked, this, &MainWindow::startVideoBrief);
+    connect(ui->videoBriefSaveButton, &QPushButton::clicked, this, &MainWindow::saveVideoBrief);
     connect(ui->videoFullSrtButton, &QPushButton::clicked, this, [this]() {
         saveVideoEdlSubtitle(QStringLiteral("full"));
     });
@@ -3966,6 +3968,9 @@ void MainWindow::setupVideoWorkspace()
             && ui->videoGoalEdit->toPlainText().simplified() != videoEdlCandidateGoal) {
             ui->videoStatusLabel->setText(QStringLiteral("剪辑目标已修改，请重新生成候选后再确认渲染。"));
         }
+    });
+    connect(ui->videoBriefGoalEdit, &QPlainTextEdit::textChanged, this, [this]() {
+        updateVideoBriefButtons();
     });
     connect(ui->videoPlayButton, &QToolButton::clicked, this, [this]() {
         if (!videoPlayer_ || videoLocalSourcePath.isEmpty()) {
@@ -4018,6 +4023,7 @@ void MainWindow::setupVideoWorkspace()
         ui->videoTranscribeButton->setEnabled(true);
         ui->videoDelegateButton->setEnabled(true);
         updateVideoCandidateButton();
+        updateVideoBriefButtons();
         ui->videoStatusLabel->setText(
             QStringLiteral("已导入受控素材；可主动提交一次转写，尚未调用模型。"));
         ui->videoSourceMeta->setText(
@@ -4095,6 +4101,7 @@ void MainWindow::setupVideoWorkspace()
             ui->videoTranscribeButton->setText(QStringLiteral("重新提交转写"));
             ui->videoDelegateButton->setEnabled(true);
             updateVideoCandidateButton();
+            updateVideoBriefButtons();
             ui->videoStatusLabel->setText(QStringLiteral("转写已完成并通过结构化交付回读；填写目标后可生成待确认的剪辑候选。"));
         });
     connect(backendClient, &BackendClient::mediaTranscriptionTaskCancelled, this,
@@ -4167,6 +4174,7 @@ void MainWindow::setupVideoWorkspace()
             updateVideoCandidateButton();
             updateVideoEdlRenderButton();
             updateVideoSubtitleButtons();
+            updateVideoBriefButtons();
         });
     connect(backendClient, &BackendClient::mediaEdlCandidateTaskCancelled, this,
         [this](const QString &taskId, const QString &message) {
@@ -4179,6 +4187,7 @@ void MainWindow::setupVideoWorkspace()
             ui->videoGoalEdit->setEnabled(true);
             ui->videoDelegateButton->setEnabled(!videoSourceId.isEmpty());
             updateVideoCandidateButton();
+            updateVideoBriefButtons();
             updateVideoEdlRenderButton();
             updateVideoSubtitleButtons();
             ui->videoStatusLabel->setText(message.left(180));
@@ -4303,6 +4312,105 @@ void MainWindow::setupVideoWorkspace()
             videoEdlSubtitleKind.clear();
             updateVideoSubtitleButtons();
         });
+    connect(backendClient, &BackendClient::mediaVideoBriefTaskStarted, this, [this](const QString &taskId) {
+        if (!videoBriefPending) {
+            return;
+        }
+        videoBriefPending = false;
+        videoBriefRunning = true;
+        videoBriefTaskId = taskId;
+        ui->videoStatusLabel->setText(QStringLiteral("讲解网页任务已受理，正在生成章节与关键帧…"));
+        updateVideoBriefButtons();
+        QTimer::singleShot(450, this, [this, taskId]() {
+            if (videoBriefRunning && videoBriefTaskId == taskId) {
+                requestVideoBriefResult();
+            }
+        });
+    });
+    connect(backendClient, &BackendClient::mediaVideoBriefTaskStillRunning, this,
+        [this](const QString &taskId, const QString &, const QString &summary) {
+            if (!videoBriefRunning || videoBriefTaskId != taskId) {
+                return;
+            }
+            ui->videoStatusLabel->setText(summary.isEmpty()
+                ? QStringLiteral("讲解网页正在生成，等待关键帧和离线 HTML 回读…")
+                : summary);
+            QTimer::singleShot(800, this, [this, taskId]() {
+                if (videoBriefRunning && videoBriefTaskId == taskId) {
+                    requestVideoBriefResult();
+                }
+            });
+        });
+    connect(backendClient, &BackendClient::mediaVideoBriefTaskCompleted, this,
+        [this](const MediaVideoBriefTaskResult &result) {
+            if (!videoBriefRunning || videoBriefTaskId != result.taskId) {
+                return;
+            }
+            videoBriefRunning = false;
+            if (result.hasDelivery && result.sourceId == videoSourceId
+                && result.transcriptionTaskId == videoCompletedTranscriptionTaskId) {
+                videoBriefCompleted = true;
+                ui->videoBriefEdit->setPlainText(formatVideoBrief(result));
+                ui->videoStatusLabel->setText(
+                    QStringLiteral("离线讲解网页已生成并回读验证；可另存为单文件 HTML。"));
+            } else if (!result.clarificationQuestion.trimmed().isEmpty()) {
+                ui->videoBriefEdit->setPlainText(
+                    QStringLiteral("需要补充：%1\n\n本轮没有提取关键帧或生成 HTML。")
+                        .arg(result.clarificationQuestion.trimmed()));
+                ui->videoStatusLabel->setText(QStringLiteral("请补充讲解目标后，再显式生成网页。"));
+            } else {
+                videoBriefTaskId.clear();
+                ui->videoBriefEdit->setPlainText(QStringLiteral("讲解网页结果未通过当前素材与转写绑定校验。"));
+                ui->videoStatusLabel->setText(QStringLiteral("讲解网页未展示：结果与当前受控素材或转写不匹配。"));
+            }
+            ui->videoChooseButton->setEnabled(true);
+            ui->videoTranscribeButton->setEnabled(!videoSourceId.isEmpty());
+            ui->videoGoalEdit->setEnabled(true);
+            ui->videoBriefGoalEdit->setEnabled(true);
+            ui->videoDelegateButton->setEnabled(!videoSourceId.isEmpty());
+            updateVideoCandidateButton();
+            updateVideoEdlRenderButton();
+            updateVideoSubtitleButtons();
+            updateVideoBriefButtons();
+        });
+    connect(backendClient, &BackendClient::mediaVideoBriefTaskCancelled, this,
+        [this](const QString &taskId, const QString &message) {
+            if (!videoBriefRunning || videoBriefTaskId != taskId) {
+                return;
+            }
+            videoBriefRunning = false;
+            videoBriefTaskId.clear();
+            ui->videoChooseButton->setEnabled(true);
+            ui->videoTranscribeButton->setEnabled(!videoSourceId.isEmpty());
+            ui->videoGoalEdit->setEnabled(true);
+            ui->videoBriefGoalEdit->setEnabled(true);
+            ui->videoDelegateButton->setEnabled(!videoSourceId.isEmpty());
+            ui->videoStatusLabel->setText(message.left(180));
+            updateVideoCandidateButton();
+            updateVideoEdlRenderButton();
+            updateVideoSubtitleButtons();
+            updateVideoBriefButtons();
+        });
+    connect(backendClient, &BackendClient::mediaVideoBriefDownloaded, this,
+        [this](const QString &projectId, const QString &taskId, const QByteArray &content) {
+            if (!videoBriefDownloadPending || projectId != videoProjectId || taskId != videoBriefTaskId
+                || videoBriefSavePath.isEmpty()) {
+                return;
+            }
+            QSaveFile output(videoBriefSavePath);
+            if (!output.open(QIODevice::WriteOnly)
+                || output.write(content) != content.size()
+                || !output.commit()) {
+                ui->videoStatusLabel->setText(
+                    QStringLiteral("无法保存离线 HTML：%1").arg(output.errorString().left(160)));
+            } else {
+                ui->videoStatusLabel->setText(
+                    QStringLiteral("已保存离线讲解网页：%1").arg(QFileInfo(videoBriefSavePath).fileName()));
+            }
+            videoBriefDownloadPending = false;
+            videoBriefSavePath.clear();
+            updateVideoBriefButtons();
+        });
     connect(backendClient, &BackendClient::mediaAgentFailed, this, [this](const QString &operation, const QString &message) {
         const bool importFailure = operation == QStringLiteral("import_media_source")
             || (operation == QStringLiteral("create_project") && videoProjectCreationPending);
@@ -4315,8 +4423,11 @@ void MainWindow::setupVideoWorkspace()
             || operation == QStringLiteral("edl_render_task_result");
         const bool renderDownloadFailure = operation == QStringLiteral("download_edl_render");
         const bool subtitleDownloadFailure = operation == QStringLiteral("download_edl_subtitle");
+        const bool briefFailure = operation == QStringLiteral("start_video_brief")
+            || operation == QStringLiteral("video_brief_task_result");
+        const bool briefDownloadFailure = operation == QStringLiteral("download_video_brief");
         if (!importFailure && !transcriptionFailure && !candidateFailure && !renderFailure && !renderDownloadFailure
-            && !subtitleDownloadFailure) {
+            && !subtitleDownloadFailure && !briefFailure && !briefDownloadFailure) {
             return;
         }
         if (importFailure) {
@@ -4362,6 +4473,35 @@ void MainWindow::setupVideoWorkspace()
             ui->videoStatusLabel->setText(QStringLiteral("保存 SRT 未完成：%1").arg(message.left(180)));
             return;
         }
+        if (briefDownloadFailure) {
+            if (!videoBriefDownloadPending) {
+                return;
+            }
+            videoBriefDownloadPending = false;
+            videoBriefSavePath.clear();
+            updateVideoBriefButtons();
+            ui->videoStatusLabel->setText(QStringLiteral("保存离线 HTML 未完成：%1").arg(message.left(180)));
+            return;
+        }
+        if (briefFailure) {
+            if (!videoBriefPending && !videoBriefRunning) {
+                return;
+            }
+            videoBriefPending = false;
+            videoBriefRunning = false;
+            videoBriefTaskId.clear();
+            ui->videoChooseButton->setEnabled(true);
+            ui->videoTranscribeButton->setEnabled(!videoSourceId.isEmpty());
+            ui->videoGoalEdit->setEnabled(true);
+            ui->videoBriefGoalEdit->setEnabled(true);
+            ui->videoDelegateButton->setEnabled(!videoSourceId.isEmpty());
+            updateVideoCandidateButton();
+            updateVideoEdlRenderButton();
+            updateVideoSubtitleButtons();
+            updateVideoBriefButtons();
+            ui->videoStatusLabel->setText(QStringLiteral("讲解网页未完成：%1").arg(message.left(180)));
+            return;
+        }
         if (renderFailure) {
             if (!videoEdlRenderPending && !videoEdlRenderRunning) {
                 return;
@@ -4391,20 +4531,33 @@ void MainWindow::setupVideoWorkspace()
     });
     updateVideoCandidateButton();
     updateVideoEdlRenderButton();
+    updateVideoBriefButtons();
     updateVideoPlaybackUi();
 }
 
 void MainWindow::openVideoWorkspace(const QString &goal, const QString &sourceId)
 {
     switchPage(8);
-    if (!goal.trimmed().isEmpty()) {
-        ui->videoGoalEdit->setPlainText(goal.trimmed());
+    const QString normalizedGoal = goal.simplified();
+    const bool isBriefGoal = normalizedGoal.contains(QStringLiteral("讲解"))
+        || normalizedGoal.contains(QStringLiteral("网页"))
+        || normalizedGoal.contains(QStringLiteral("总结"))
+        || normalizedGoal.contains(QStringLiteral("摘要"))
+        || normalizedGoal.contains(QStringLiteral("关键画面"));
+    if (!normalizedGoal.isEmpty()) {
+        if (isBriefGoal) {
+            ui->videoBriefGoalEdit->setPlainText(normalizedGoal);
+        } else {
+            ui->videoGoalEdit->setPlainText(normalizedGoal);
+        }
     }
     if (!sourceId.trimmed().isEmpty() && sourceId == videoSourceId
         && !videoTranscriptionPending && !videoTranscriptionRunning) {
-        ui->videoStatusLabel->setText(QStringLiteral("已从 AI 调度台带回当前视频与剪辑目标；请复核后再提交下一步。"));
+        ui->videoStatusLabel->setText(isBriefGoal
+            ? QStringLiteral("已从 AI 调度台带回当前视频与讲解目标；请复核后再生成网页。")
+            : QStringLiteral("已从 AI 调度台带回当前视频与剪辑目标；请复核后再提交下一步。"));
     }
-    ui->videoGoalEdit->setFocus();
+    (isBriefGoal ? ui->videoBriefGoalEdit : ui->videoGoalEdit)->setFocus();
 }
 
 void MainWindow::chooseVideoSourceFile()
@@ -4441,6 +4594,7 @@ void MainWindow::chooseVideoSourceFile()
     videoTranscriptionPending = false;
     videoTranscriptionRunning = false;
     resetVideoEdlCandidateUi();
+    resetVideoBriefUi();
     videoPlayer_->setSource(QUrl::fromLocalFile(videoLocalSourcePath));
     ui->videoSourceTitle->setText(videoSourceDisplayName);
     ui->videoSourceMeta->setText(
@@ -4484,7 +4638,8 @@ void MainWindow::startVideoTranscription()
 {
     if (videoProjectId.isEmpty() || videoSourceId.isEmpty() || videoTranscriptionPending || videoTranscriptionRunning
         || videoEdlCandidatePending || videoEdlCandidateRunning || videoEdlRenderPending || videoEdlRenderRunning
-        || videoEdlRenderDownloadPending || videoEdlSubtitleDownloadPending) {
+        || videoEdlRenderDownloadPending || videoEdlSubtitleDownloadPending || videoBriefPending || videoBriefRunning
+        || videoBriefDownloadPending) {
         return;
     }
     if (!backendManager || !backendManager->isReady()) {
@@ -4499,6 +4654,7 @@ void MainWindow::startVideoTranscription()
     videoTranscriptionTaskId.clear();
     videoCompletedTranscriptionTaskId.clear();
     resetVideoEdlCandidateUi();
+    resetVideoBriefUi();
     ui->videoChooseButton->setEnabled(false);
     ui->videoTranscribeButton->setEnabled(false);
     ui->videoDelegateButton->setEnabled(false);
@@ -4519,7 +4675,8 @@ void MainWindow::startVideoEdlCandidate()
     const QString goal = ui->videoGoalEdit->toPlainText().simplified();
     if (videoProjectId.isEmpty() || videoSourceId.isEmpty() || videoCompletedTranscriptionTaskId.isEmpty()
         || videoEdlCandidatePending || videoEdlCandidateRunning || videoEdlRenderPending || videoEdlRenderRunning
-        || videoEdlRenderDownloadPending || videoEdlSubtitleDownloadPending || goal.size() < 2) {
+        || videoEdlRenderDownloadPending || videoEdlSubtitleDownloadPending || videoBriefPending || videoBriefRunning
+        || videoBriefDownloadPending || goal.size() < 2) {
         return;
     }
     if (!backendManager || !backendManager->isReady()) {
@@ -4568,6 +4725,7 @@ void MainWindow::confirmVideoEdlRender()
     if (videoProjectId.isEmpty() || videoSourceId.isEmpty() || !videoEdlCandidateReadyForRender
         || videoEdlCandidateClips.isEmpty() || videoEdlRenderPending || videoEdlRenderRunning
         || videoEdlRenderCompleted || videoEdlRenderDownloadPending || videoEdlSubtitleDownloadPending
+        || videoBriefPending || videoBriefRunning || videoBriefDownloadPending
         || ui->videoGoalEdit->toPlainText().simplified() != videoEdlCandidateGoal) {
         return;
     }
@@ -4680,6 +4838,83 @@ void MainWindow::saveVideoEdlSubtitle(const QString &subtitleKind)
         subtitleKind);
 }
 
+void MainWindow::startVideoBrief()
+{
+    const QString goal = ui->videoBriefGoalEdit->toPlainText().simplified();
+    if (videoProjectId.isEmpty() || videoSourceId.isEmpty() || videoCompletedTranscriptionTaskId.isEmpty()
+        || videoBriefPending || videoBriefRunning || videoBriefDownloadPending || videoTranscriptionPending
+        || videoTranscriptionRunning || videoEdlRenderPending || videoEdlRenderRunning || goal.size() < 2) {
+        return;
+    }
+    if (!backendManager || !backendManager->isReady()) {
+        ui->videoStatusLabel->setText(QStringLiteral("本地服务正在启动，服务就绪后再生成讲解网页。"));
+        if (backendManager) {
+            backendManager->ensureStarted();
+        }
+        return;
+    }
+    const auto answer = QMessageBox::question(
+        this,
+        QStringLiteral("生成讲解网页"),
+        QStringLiteral("将基于已完成转写调用一次讲解规划模型，并从当前受控视频提取关键帧，生成新的单文件离线 HTML。\n\n原视频不会被修改。"),
+        QMessageBox::Cancel | QMessageBox::Ok,
+        QMessageBox::Cancel);
+    if (answer != QMessageBox::Ok) {
+        return;
+    }
+    videoBriefPending = true;
+    videoBriefRunning = false;
+    videoBriefCompleted = false;
+    videoBriefTaskId.clear();
+    ui->videoBriefEdit->clear();
+    ui->videoChooseButton->setEnabled(false);
+    ui->videoTranscribeButton->setEnabled(false);
+    ui->videoCandidateButton->setEnabled(false);
+    ui->videoGoalEdit->setEnabled(false);
+    ui->videoBriefButton->setEnabled(false);
+    ui->videoBriefGoalEdit->setEnabled(false);
+    ui->videoDelegateButton->setEnabled(false);
+    ui->videoStatusLabel->setText(QStringLiteral("正在提交讲解计划；模型不会生成网页代码。"));
+    updateVideoEdlRenderButton();
+    updateVideoSubtitleButtons();
+    updateVideoBriefButtons();
+    backendClient->startMediaVideoBrief(videoProjectId, videoCompletedTranscriptionTaskId, goal);
+}
+
+void MainWindow::requestVideoBriefResult()
+{
+    if (!videoBriefRunning || videoBriefTaskId.isEmpty()) {
+        return;
+    }
+    backendClient->requestMediaVideoBriefResult(videoBriefTaskId);
+}
+
+void MainWindow::saveVideoBrief()
+{
+    if (!videoBriefCompleted || videoBriefTaskId.isEmpty() || videoProjectId.isEmpty() || videoBriefDownloadPending) {
+        return;
+    }
+    QString filename = QFileInfo(videoSourceDisplayName).completeBaseName().trimmed();
+    if (filename.isEmpty()) {
+        filename = QStringLiteral("视频讲解");
+    }
+    const QString path = QFileDialog::getSaveFileName(
+        this,
+        QStringLiteral("保存离线讲解网页"),
+        QStringLiteral("%1_讲解网页.html").arg(filename.left(80)),
+        QStringLiteral("HTML 网页 (*.html)"));
+    if (path.isEmpty()) {
+        return;
+    }
+    videoBriefSavePath = path.endsWith(QStringLiteral(".html"), Qt::CaseInsensitive)
+        ? path
+        : QStringLiteral("%1.html").arg(path);
+    videoBriefDownloadPending = true;
+    ui->videoStatusLabel->setText(QStringLiteral("正在保存已验证的离线 HTML…"));
+    updateVideoBriefButtons();
+    backendClient->requestMediaVideoBriefDownload(videoProjectId, videoBriefTaskId);
+}
+
 void MainWindow::delegateVideoSourceToCommander()
 {
     if (videoSourceId.isEmpty()) {
@@ -4772,6 +5007,29 @@ QString MainWindow::formatVideoEdlRender(const MediaEdlRenderTaskResult &result)
         .arg(QLocale().formattedDataSize(result.render.sizeBytes));
 }
 
+QString MainWindow::formatVideoBrief(const MediaVideoBriefTaskResult &result) const
+{
+    const auto formatTime = [](qint64 milliseconds) {
+        const qint64 seconds = qMax<qint64>(0, milliseconds) / 1000;
+        return QStringLiteral("%1:%2")
+            .arg(seconds / 60, 2, 10, QLatin1Char('0'))
+            .arg(seconds % 60, 2, 10, QLatin1Char('0'));
+    };
+    QStringList lines;
+    lines.append(QStringLiteral("%1").arg(result.title));
+    lines.append(QStringLiteral("离线 HTML · Reveal %1 · %2")
+                     .arg(result.revealVersion, QLocale().formattedDataSize(result.sizeBytes)));
+    for (qsizetype index = 0; index < result.chapters.size(); ++index) {
+        const MediaVideoBriefChapterInfo &chapter = result.chapters.at(index);
+        lines.append(QStringLiteral("第 %1 章  [%2 - %3]\n%4\n关键帧：%5")
+                         .arg(index + 1)
+                         .arg(formatTime(chapter.beginMs), formatTime(chapter.endMs), chapter.title,
+                              formatTime(chapter.keyframeTimestampMs)));
+    }
+    lines.append(QStringLiteral("每章文字和关键帧均可追溯到已验证转写的来源时间码。"));
+    return lines.join(QStringLiteral("\n\n"));
+}
+
 void MainWindow::resetVideoEdlCandidateUi()
 {
     videoEdlCandidateTaskId.clear();
@@ -4800,6 +5058,18 @@ void MainWindow::resetVideoEdlRenderUi()
     updateVideoEdlRenderButton();
 }
 
+void MainWindow::resetVideoBriefUi()
+{
+    videoBriefTaskId.clear();
+    videoBriefPending = false;
+    videoBriefRunning = false;
+    videoBriefCompleted = false;
+    videoBriefDownloadPending = false;
+    videoBriefSavePath.clear();
+    ui->videoBriefEdit->clear();
+    updateVideoBriefButtons();
+}
+
 void MainWindow::updateVideoCandidateButton()
 {
     const bool goalReady = ui->videoGoalEdit->toPlainText().simplified().size() >= 2;
@@ -4812,7 +5082,8 @@ void MainWindow::updateVideoCandidateButton()
         : QStringLiteral("使用已完成转写和当前剪辑目标生成待确认片段；不会渲染或修改视频。"));
     ui->videoCandidateButton->setEnabled(!videoCompletedTranscriptionTaskId.isEmpty()
         && !videoEdlCandidatePending && !videoEdlCandidateRunning && !videoEdlRenderPending
-        && !videoEdlRenderRunning && !videoEdlRenderDownloadPending && !videoEdlSubtitleDownloadPending && goalReady);
+        && !videoEdlRenderRunning && !videoEdlRenderDownloadPending && !videoEdlSubtitleDownloadPending
+        && !videoBriefPending && !videoBriefRunning && !videoBriefDownloadPending && goalReady);
 }
 
 void MainWindow::updateVideoSubtitleButtons()
@@ -4822,6 +5093,25 @@ void MainWindow::updateVideoSubtitleButtons()
         && !videoEdlRenderPending && !videoEdlRenderRunning && !videoEdlSubtitleDownloadPending;
     ui->videoFullSrtButton->setEnabled(enabled);
     ui->videoCutSrtButton->setEnabled(enabled);
+}
+
+void MainWindow::updateVideoBriefButtons()
+{
+    const bool goalReady = ui->videoBriefGoalEdit->toPlainText().simplified().size() >= 2;
+    const bool conflictingTask = videoTranscriptionPending || videoTranscriptionRunning
+        || videoEdlCandidatePending || videoEdlCandidateRunning
+        || videoEdlRenderPending || videoEdlRenderRunning || videoEdlRenderDownloadPending
+        || videoEdlSubtitleDownloadPending;
+    ui->videoBriefButton->setText(videoBriefPending || videoBriefRunning
+        ? QStringLiteral("正在生成讲解网页...")
+        : QStringLiteral("生成讲解网页"));
+    ui->videoBriefButton->setToolTip(videoBriefPending || videoBriefRunning
+        ? QStringLiteral("正在基于受控转写和源视频生成离线动态讲解。")
+        : QStringLiteral("生成带章节、关键帧、逐项出现和来源时间码的单文件离线 HTML。"));
+    ui->videoBriefButton->setEnabled(!videoCompletedTranscriptionTaskId.isEmpty()
+        && goalReady && !videoBriefPending && !videoBriefRunning && !videoBriefDownloadPending && !conflictingTask);
+    ui->videoBriefSaveButton->setEnabled(videoBriefCompleted && !videoBriefDownloadPending
+        && !videoBriefTaskId.isEmpty());
 }
 
 void MainWindow::updateVideoEdlRenderButton()

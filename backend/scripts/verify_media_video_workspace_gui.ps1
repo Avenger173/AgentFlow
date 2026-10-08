@@ -120,6 +120,12 @@ try {
     $candidateButton = Wait-Element -Description "generate candidate button" -Find {
         Find-ByIdSuffixOrName -Root $mainWindow -Suffix ".videoCandidateButton" -Name "生成剪辑候选"
     }
+    $briefGoalEdit = Wait-Element -Description "video brief goal editor" -Find {
+        Find-ByIdSuffixOrName -Root $mainWindow -Suffix ".videoBriefGoalEdit" -Name "讲解目标输入"
+    }
+    $briefButton = Wait-Element -Description "generate video brief button" -Find {
+        Find-ByIdSuffixOrName -Root $mainWindow -Suffix ".videoBriefButton" -Name "生成离线讲解网页"
+    }
     $fullSrtButton = Wait-Element -Description "full SRT button" -Find {
         Find-ByIdSuffixOrName -Root $mainWindow -Suffix ".videoFullSrtButton" -Name "保存完整 SRT"
     }
@@ -135,11 +141,12 @@ try {
     $transcribeButton = Wait-Element -Description "submit transcription button" -Find {
         Find-ByIdSuffixOrName -Root $mainWindow -Suffix ".videoTranscribeButton" -Name "提交转写"
     }
-    if (!$chooseButton.Current.IsEnabled -or !$goalEdit.Current.IsEnabled) {
-        throw "Video workspace must allow material selection and goal entry."
+    if (!$chooseButton.Current.IsEnabled -or !$goalEdit.Current.IsEnabled -or !$briefGoalEdit.Current.IsEnabled) {
+        throw "Video workspace must allow material selection and both goal inputs."
     }
     if ($transcribeButton.Current.IsEnabled -or $candidateButton.Current.IsEnabled -or $fullSrtButton.Current.IsEnabled `
-        -or $cutSrtButton.Current.IsEnabled -or $renderButton.Current.IsEnabled -or $delegateButton.Current.IsEnabled) {
+        -or $cutSrtButton.Current.IsEnabled -or $renderButton.Current.IsEnabled -or $briefButton.Current.IsEnabled `
+        -or $delegateButton.Current.IsEnabled) {
         throw "Video actions must stay disabled before selecting and transcribing a local file."
     }
     Save-Screenshot -Window $mainWindow -Path (Join-Path $evidenceDir "video-workspace-open.png")

@@ -205,15 +205,21 @@ private:
     void requestVideoEdlRenderResult();
     void saveVideoEdlRender();
     void saveVideoEdlSubtitle(const QString &subtitleKind);
+    void startVideoBrief();
+    void requestVideoBriefResult();
+    void saveVideoBrief();
     void delegateVideoSourceToCommander();
     QString formatVideoTranscript(const MediaTranscriptionTaskResult &result) const;
     QString formatVideoEdlCandidate(const MediaEdlCandidateTaskResult &result) const;
     QString formatVideoEdlRender(const MediaEdlRenderTaskResult &result) const;
+    QString formatVideoBrief(const MediaVideoBriefTaskResult &result) const;
     void resetVideoEdlCandidateUi();
     void resetVideoEdlRenderUi();
+    void resetVideoBriefUi();
     void updateVideoCandidateButton();
     void updateVideoEdlRenderButton();
     void updateVideoSubtitleButtons();
+    void updateVideoBriefButtons();
     void updateVideoPlaybackUi(qint64 positionMs = -1);
     void importDataDatasetFromFile();
     void refreshDataDatasets();
@@ -924,6 +930,12 @@ private:
     bool videoEdlRenderCompleted = false;
     bool videoEdlRenderDownloadPending = false;
     QString videoEdlRenderSavePath;
+    QString videoBriefTaskId;
+    bool videoBriefPending = false;
+    bool videoBriefRunning = false;
+    bool videoBriefCompleted = false;
+    bool videoBriefDownloadPending = false;
+    QString videoBriefSavePath;
     QString currentDispatchKnowledgeAnswerChildTaskId;
     // 暂存请求同时冻结本轮显式路由偏好，避免后端启动期间客户编辑输入后改变已排队任务。
     QJsonArray pendingDispatchAgentHints;

@@ -81,7 +81,8 @@ MEDIA_IMAGE_EDIT_ROUTE_KEYWORDS = (
 )
 MEDIA_VIDEO_EDIT_ROUTE_KEYWORDS = (
     "视频剪辑", "剪视频", "剪出视频", "视频片段", "片段剪辑", "从视频中", "从视频里", "这段视频",
-    "保留视频", "保留介绍", "保留讲解",
+    "保留视频", "保留介绍", "保留讲解", "视频讲解", "讲解网页", "动态讲解", "视频总结", "视频摘要",
+    "关键画面", "视频做成网页",
 )
 KNOWLEDGE_ROUTE_KEYWORDS = (
     "知识库", "资料库", "根据资料", "查资料", "问资料", "引用来源",
@@ -425,7 +426,7 @@ def create_commander_plan(
 
     if media_video_edit_requested:
         if not media_source_refs:
-            clarifying_questions.append("视频剪辑需要先在音视频工坊导入并选择一段视频素材；总指挥不会读取本机路径或自行上传文件。")
+            clarifying_questions.append("视频剪辑或讲解网页需要先在音视频工坊导入并选择一段视频素材；总指挥不会读取本机路径或自行上传文件。")
         elif len(media_source_refs) != 1:
             clarifying_questions.append("短视频剪辑首版一次只能使用一段已选择的视频素材，请保留最相关的一段后重试。")
         else:
@@ -435,10 +436,10 @@ def create_commander_plan(
                 step_id=specialist_step_id,
                 agent_id="media_agent",
                 action="open_video_workspace",
-                title="打开短视频剪辑工作区并带入目标",
+                title="打开音视频工作区并带入目标",
                 depends_on=["step_1"],
                 step_input={"task_goal": message, "source_id": media_source_refs[0]},
-                reason="客户已显式选择一段受控视频素材；先在工作区复核素材与目标，再决定是否提交转写和候选片段生成。",
+                reason="客户已显式选择一段受控视频素材；先在工作区复核素材与目标，再决定是否提交转写、剪辑或讲解网页生成。",
                 agents=available_agent_list,
                 materials=material_bindings,
                 timeout_ms=30_000,
@@ -1802,7 +1803,7 @@ def _success_criteria_for_step(agent_id: str, action: str) -> list[str]:
     if agent_id == "media_agent" and action == "open_media_workspace":
         return ["图片工作区已打开", "修图指令已预填", "未读取图片、未调用 Provider"]
     if agent_id == "media_agent" and action == "open_video_workspace":
-        return ["短视频剪辑工作区已打开", "已绑定一段受控视频与剪辑目标", "尚未提交转写或渲染"]
+        return ["音视频工作区已打开", "已绑定一段受控视频与任务目标", "尚未提交转写、渲染或讲解网页生成"]
     if agent_id == COMMANDER_AGENT_ID:
         return ["给出可理解的直接答复或澄清问题"]
     if agent_id == "document_agent" and action == "read_text":
@@ -2124,7 +2125,7 @@ def _build_plan_summary(steps: list[WorkflowStep]) -> str:
             + " 可在未来组合 Runtime 中并行处理，随后再汇总；当前仅供审阅，不会提前执行。"
         )
     if any(step.action == "open_video_workspace" for step in steps):
-        suffix = "短视频剪辑工作区会带入一段受控素材和目标；转写、候选片段与渲染仍需在工作区显式提交。"
+        suffix = "音视频工作区会带入一段受控素材和目标；转写、候选片段、渲染或讲解网页仍需在工作区显式提交。"
     elif any(step.action == "open_media_workspace" for step in steps):
         suffix = "图片工作区会带入修图指令；请选择图片当前版本后再主动提交，当前不会调用模型。"
     else:

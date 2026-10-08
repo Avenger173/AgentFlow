@@ -236,13 +236,13 @@ NODE_CONTRACTS: dict[tuple[str, str], NodeContract] = {
         tool_name="ui.video_workspace.open",
         node_type="ui",
         input_schema={
-            "task_goal": "customer short-video goal, maximum 1200 characters",
+            "task_goal": "customer video editing or traceable brief goal, maximum 1200 characters",
             "source_id": "explicitly selected controlled media source id",
         },
         output_schema={"next_action": "open_video_workspace", "message": "string"},
         state_writes=("routing.video_workspace",),
         failure_codes=("media_source_not_selected", "video_workspace_unavailable"),
-        evaluation_signals=("guided_handoff_presented", "source_bound", "no_provider_call"),
+        evaluation_signals=("guided_handoff_presented", "source_bound", "no_provider_call", "no_html_delivery"),
     ),
     ("knowledge_agent", "answer_question"): NodeContract(
         agent_id="knowledge_agent",

@@ -725,6 +725,52 @@ MediaEdlRenderTaskResult readMediaEdlRenderTaskResult(const QJsonObject &payload
     return result;
 }
 
+MediaVideoBriefTaskResult readMediaVideoBriefTaskResult(const QJsonObject &payload)
+{
+    MediaVideoBriefTaskResult result;
+    result.taskId = payload.value(QStringLiteral("task_id")).toString();
+    result.status = payload.value(QStringLiteral("status")).toString();
+    result.summary = payload.value(QStringLiteral("summary")).toString();
+    result.message = payload.value(QStringLiteral("message")).toString();
+    result.failureReason = payload.value(QStringLiteral("failure_reason")).toString();
+    result.artifactId = payload.value(QStringLiteral("artifact_id")).toString();
+    result.clarificationQuestion = payload.value(QStringLiteral("clarification_question")).toString();
+
+    const QJsonObject plan = payload.value(QStringLiteral("plan")).toObject();
+    if (plan.isEmpty()) {
+        return result;
+    }
+    result.sourceId = plan.value(QStringLiteral("source_id")).toString();
+    result.transcriptionTaskId = plan.value(QStringLiteral("transcription_task_id")).toString();
+    result.goal = plan.value(QStringLiteral("goal")).toString();
+    result.title = plan.value(QStringLiteral("title")).toString();
+    const QJsonArray chapters = plan.value(QStringLiteral("chapters")).toArray();
+    result.chapters.reserve(chapters.size());
+    for (const QJsonValue &value : chapters) {
+        if (!value.isObject()) {
+            continue;
+        }
+        const QJsonObject chapterPayload = value.toObject();
+        MediaVideoBriefChapterInfo chapter;
+        chapter.title = chapterPayload.value(QStringLiteral("title")).toString();
+        chapter.beginMs = static_cast<qint64>(chapterPayload.value(QStringLiteral("begin_ms")).toDouble());
+        chapter.endMs = static_cast<qint64>(chapterPayload.value(QStringLiteral("end_ms")).toDouble());
+        chapter.keyframeTimestampMs = static_cast<qint64>(
+            chapterPayload.value(QStringLiteral("keyframe_timestamp_ms")).toDouble());
+        if (!chapter.title.trimmed().isEmpty() && chapter.endMs > chapter.beginMs) {
+            result.chapters.append(chapter);
+        }
+    }
+    const QJsonObject delivery = payload.value(QStringLiteral("delivery")).toObject();
+    result.sha256 = delivery.value(QStringLiteral("sha256")).toString();
+    result.sizeBytes = static_cast<qint64>(delivery.value(QStringLiteral("size_bytes")).toDouble());
+    result.revealVersion = delivery.value(QStringLiteral("reveal_version")).toString();
+    result.hasDelivery = !result.sourceId.isEmpty() && !result.transcriptionTaskId.isEmpty()
+        && !result.title.isEmpty() && !result.artifactId.isEmpty() && !result.sha256.isEmpty()
+        && result.sizeBytes > 0 && !result.revealVersion.isEmpty() && !result.chapters.isEmpty();
+    return result;
+}
+
 MediaImageRevisionInfo readMediaImageRevisionInfo(const QJsonObject &payload)
 {
     MediaImageRevisionInfo revision;
@@ -3200,6 +3246,55 @@ void BackendClient::requestMediaEdlSubtitleDownload(
     });
 }
 
+void BackendClient::startMediaVideoBrief(
+    const QString &projectId,
+    const QString &transcriptionTaskId,
+    const QString &goal)
+{
+    if (projectId.trimmed().isEmpty() || transcriptionTaskId.trimmed().isEmpty() || goal.trimmed().size() < 2) {
+        emit mediaAgentFailed(QStringLiteral("start_video_brief"), QStringLiteral("生成讲解网页缺少已完成转写或讲解目标。"));
+        return;
+    }
+    const QJsonObject payload{
+        {QStringLiteral("transcription_task_id"), transcriptionTaskId.trimmed()},
+        {QStringLiteral("goal"), goal.trimmed()},
+    };
+    QNetworkReply *reply = networkManager_.post(
+        createRequest(buildMediaAgentVideoBriefStartUrl(projectId.trimmed()), 10000),
+        QJsonDocument(payload).toJson(QJsonDocument::Compact));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        handleMediaVideoBriefStartReply(reply);
+    });
+}
+
+void BackendClient::requestMediaVideoBriefResult(const QString &taskId)
+{
+    if (taskId.trimmed().isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("video_brief_task_result"), QStringLiteral("讲解网页任务 ID 为空。"));
+        return;
+    }
+    QNetworkReply *reply = networkManager_.get(
+        createRequest(buildMediaAgentVideoBriefResultUrl(taskId.trimmed()), 10000));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        handleMediaVideoBriefResultReply(reply);
+    });
+}
+
+void BackendClient::requestMediaVideoBriefDownload(const QString &projectId, const QString &taskId)
+{
+    if (projectId.trimmed().isEmpty() || taskId.trimmed().isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("download_video_brief"), QStringLiteral("保存讲解网页缺少项目或任务。"));
+        return;
+    }
+    QNetworkReply *reply = networkManager_.get(
+        createRequest(buildMediaAgentVideoBriefDownloadUrl(projectId.trimmed(), taskId.trimmed()), 30000));
+    reply->setProperty("media_video_brief_project_id", projectId.trimmed());
+    reply->setProperty("media_video_brief_task_id", taskId.trimmed());
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        handleMediaVideoBriefDownloadReply(reply);
+    });
+}
+
 void BackendClient::requestMediaAssetRevisions(const QString &projectId, const QString &assetId)
 {
     if (projectId.trimmed().isEmpty() || assetId.trimmed().isEmpty()) {
@@ -5403,6 +5498,31 @@ QUrl BackendClient::buildMediaAgentEdlSubtitleDownloadUrl(
     return url;
 }
 
+QUrl BackendClient::buildMediaAgentVideoBriefStartUrl(const QString &projectId) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/agents/media_agent/projects/%1/video-briefs/start")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(projectId))));
+    return url;
+}
+
+QUrl BackendClient::buildMediaAgentVideoBriefResultUrl(const QString &taskId) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/agents/media_agent/video-briefs/%1/result")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(taskId))));
+    return url;
+}
+
+QUrl BackendClient::buildMediaAgentVideoBriefDownloadUrl(const QString &projectId, const QString &taskId) const
+{
+    QUrl url(baseUrl_);
+    url.setPath(QStringLiteral("/api/agents/media_agent/projects/%1/video-briefs/%2/download")
+                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(projectId)),
+                         QString::fromUtf8(QUrl::toPercentEncoding(taskId))));
+    return url;
+}
+
 QUrl BackendClient::buildMediaAgentAssetRevisionsUrl(
     const QString &projectId,
     const QString &assetId) const
@@ -7034,6 +7154,84 @@ void BackendClient::handleMediaEdlSubtitleDownloadReply(QNetworkReply *reply)
         return;
     }
     emit mediaEdlSubtitleDownloaded(projectId, candidateTaskId, subtitleKind, content);
+}
+
+void BackendClient::handleMediaVideoBriefStartReply(QNetworkReply *reply)
+{
+    if (reply->error() != QNetworkReply::NoError) {
+        const QString message = replyErrorMessage(reply);
+        reply->deleteLater();
+        emit mediaAgentFailed(QStringLiteral("start_video_brief"), message);
+        return;
+    }
+    const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+    reply->deleteLater();
+    const QJsonObject payload = document.object();
+    const QString taskId = payload.value(QStringLiteral("task_id")).toString().trimmed();
+    if (!document.isObject() || taskId.isEmpty()
+        || payload.value(QStringLiteral("status")).toString() != QStringLiteral("queued")) {
+        emit mediaAgentFailed(QStringLiteral("start_video_brief"), QStringLiteral("讲解网页任务未返回有效受理状态。"));
+        return;
+    }
+    emit mediaVideoBriefTaskStarted(taskId);
+}
+
+void BackendClient::handleMediaVideoBriefResultReply(QNetworkReply *reply)
+{
+    if (reply->error() != QNetworkReply::NoError) {
+        const QString message = replyErrorMessage(reply);
+        reply->deleteLater();
+        emit mediaAgentFailed(QStringLiteral("video_brief_task_result"), message);
+        return;
+    }
+    const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+    reply->deleteLater();
+    if (!document.isObject()) {
+        emit mediaAgentFailed(QStringLiteral("video_brief_task_result"), QStringLiteral("讲解网页结果响应格式无效。"));
+        return;
+    }
+    const MediaVideoBriefTaskResult result = readMediaVideoBriefTaskResult(document.object());
+    if (result.taskId.isEmpty() || result.status.isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("video_brief_task_result"), QStringLiteral("讲解网页结果缺少任务状态。"));
+        return;
+    }
+    if (result.status == QStringLiteral("queued") || result.status == QStringLiteral("pending")
+        || result.status == QStringLiteral("running")) {
+        emit mediaVideoBriefTaskStillRunning(result.taskId, result.status, result.summary);
+        return;
+    }
+    if (result.status == QStringLiteral("cancelled")) {
+        emit mediaVideoBriefTaskCancelled(
+            result.taskId,
+            result.message.isEmpty() ? QStringLiteral("讲解网页任务已取消，未生成 HTML。") : result.message);
+        return;
+    }
+    if (result.status == QStringLiteral("completed") && (result.hasDelivery || !result.clarificationQuestion.isEmpty())) {
+        emit mediaVideoBriefTaskCompleted(result);
+        return;
+    }
+    emit mediaAgentFailed(
+        QStringLiteral("video_brief_task_result"),
+        result.message.isEmpty() ? QStringLiteral("讲解网页未完成，请在任务历史中查看原因。") : result.message);
+}
+
+void BackendClient::handleMediaVideoBriefDownloadReply(QNetworkReply *reply)
+{
+    const QString projectId = reply->property("media_video_brief_project_id").toString();
+    const QString taskId = reply->property("media_video_brief_task_id").toString();
+    if (reply->error() != QNetworkReply::NoError) {
+        const QString message = replyErrorMessage(reply);
+        reply->deleteLater();
+        emit mediaAgentFailed(QStringLiteral("download_video_brief"), message);
+        return;
+    }
+    const QByteArray content = reply->readAll();
+    reply->deleteLater();
+    if (content.isEmpty()) {
+        emit mediaAgentFailed(QStringLiteral("download_video_brief"), QStringLiteral("已验证讲解网页的下载内容为空。"));
+        return;
+    }
+    emit mediaVideoBriefDownloaded(projectId, taskId, content);
 }
 
 void BackendClient::handleMediaImageRevisionTaskStartReply(QNetworkReply *reply)

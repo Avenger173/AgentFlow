@@ -112,6 +112,24 @@ def main() -> None:
             ]
             assert followup_plan["workspace_scope"]["external_services"] == []
 
+            brief = client.post(
+                "/api/chat",
+                json={
+                    "message": "@多媒体助手 把这段视频整理成有章节、关键画面和动效的讲解网页。",
+                    "agent_hints": [{"agent_id": "media_agent", "source": "mention"}],
+                    "materials": [material],
+                },
+            )
+            assert brief.status_code == 200, brief.text
+            brief_plan = brief.json()["workflow_plan"]
+            assert brief_plan["intent"] == "media_video_edit"
+            assert brief_plan["next_action"] == "open_video_workspace"
+            brief_steps = _specialist_steps(brief_plan)
+            assert [(step["agent"], step["action"]) for step in brief_steps] == [
+                ("media_agent", "open_video_workspace")
+            ]
+            assert "讲解网页" in brief_steps[0]["expected_output"]
+
             missing_source = client.post(
                 "/api/chat",
                 json={"message": "@多媒体助手 请从这段视频剪出介绍产品功能的片段。"},
@@ -121,6 +139,15 @@ def main() -> None:
             assert missing_plan["next_action"] == "ask_clarifying_questions"
             assert not _specialist_steps(missing_plan)
             assert any("导入并选择一段视频素材" in item for item in missing_plan["clarifying_questions"])
+
+            missing_brief = client.post(
+                "/api/chat",
+                json={"message": "@多媒体助手 把视频整理成动态讲解网页。"},
+            )
+            assert missing_brief.status_code == 200, missing_brief.text
+            missing_brief_plan = missing_brief.json()["workflow_plan"]
+            assert missing_brief_plan["next_action"] == "ask_clarifying_questions"
+            assert not _specialist_steps(missing_brief_plan)
 
             presentation = client.post(
                 "/api/chat",

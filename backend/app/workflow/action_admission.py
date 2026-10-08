@@ -136,9 +136,9 @@ ACTION_ADMISSIONS: dict[tuple[str, str], AgentActionAdmission] = {
         execution_mode="guided_handoff",
         requires_runtime_ready=False,
         material_kind="media_source",
-        expected_output="已带入一段受控视频素材和剪辑目标的短视频工作区；尚未提交转写、候选片段或渲染。",
-        verification_scope="只传递已选 source_id 与客户目标；不读取本机路径、不发送模型请求，也不创建 MP4 交付物。",
-        recovery_hint="在音视频工坊复核素材和目标后，主动提交转写；候选片段必须确认后才会渲染。",
+        expected_output="已带入一段受控视频素材和任务目标的音视频工作区；尚未提交转写、候选片段、渲染或讲解网页生成。",
+        verification_scope="只传递已选 source_id 与客户目标；不读取本机路径、不发送模型请求，也不创建 MP4 或 HTML 交付物。",
+        recovery_hint="在音视频工坊复核素材和目标后，主动提交转写；剪辑候选必须确认后才会渲染，讲解网页也必须单独明确生成。",
     ),
     ("knowledge_agent", "answer_question"): AgentActionAdmission(
         agent_id="knowledge_agent",

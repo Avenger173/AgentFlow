@@ -592,6 +592,37 @@ struct MediaEdlRenderTaskResult
 
 Q_DECLARE_METATYPE(MediaEdlRenderTaskResult)
 
+// 动态讲解网页只展示后端回读过的计划摘要；HTML 正文、关键帧字节和本机输出路径不会进入 Qt 状态。
+struct MediaVideoBriefChapterInfo
+{
+    QString title;
+    qint64 beginMs = 0;
+    qint64 endMs = 0;
+    qint64 keyframeTimestampMs = 0;
+};
+
+struct MediaVideoBriefTaskResult
+{
+    QString taskId;
+    QString status;
+    QString summary;
+    QString message;
+    QString failureReason;
+    QString sourceId;
+    QString transcriptionTaskId;
+    QString goal;
+    QString title;
+    QString artifactId;
+    QString sha256;
+    qint64 sizeBytes = 0;
+    QString revealVersion;
+    QList<MediaVideoBriefChapterInfo> chapters;
+    QString clarificationQuestion;
+    bool hasDelivery = false;
+};
+
+Q_DECLARE_METATYPE(MediaVideoBriefTaskResult)
+
 struct MediaAssetRevisionListResult
 {
     MediaImageAssetInfo asset;
@@ -1539,6 +1570,12 @@ public:
         const QString &projectId,
         const QString &candidateTaskId,
         const QString &subtitleKind);
+    void startMediaVideoBrief(
+        const QString &projectId,
+        const QString &transcriptionTaskId,
+        const QString &goal);
+    void requestMediaVideoBriefResult(const QString &taskId);
+    void requestMediaVideoBriefDownload(const QString &projectId, const QString &taskId);
     void requestMediaAssetRevisions(const QString &projectId, const QString &assetId);
     void requestMediaImageLayerStack(
         const QString &projectId,
@@ -1951,6 +1988,11 @@ signals:
         const QString &candidateTaskId,
         const QString &subtitleKind,
         const QByteArray &content);
+    void mediaVideoBriefTaskStarted(const QString &taskId);
+    void mediaVideoBriefTaskStillRunning(const QString &taskId, const QString &status, const QString &summary);
+    void mediaVideoBriefTaskCompleted(const MediaVideoBriefTaskResult &result);
+    void mediaVideoBriefTaskCancelled(const QString &taskId, const QString &message);
+    void mediaVideoBriefDownloaded(const QString &projectId, const QString &taskId, const QByteArray &content);
     void mediaAssetRevisionsReceived(const MediaAssetRevisionListResult &result);
     void mediaImageLayerStackReceived(const MediaImageLayerStackResult &result);
     void mediaImageRevisionCreated(const MediaImageRevisionInfo &revision);
@@ -2068,6 +2110,9 @@ private:
         const QString &projectId,
         const QString &candidateTaskId,
         const QString &subtitleKind) const;
+    QUrl buildMediaAgentVideoBriefStartUrl(const QString &projectId) const;
+    QUrl buildMediaAgentVideoBriefResultUrl(const QString &taskId) const;
+    QUrl buildMediaAgentVideoBriefDownloadUrl(const QString &projectId, const QString &taskId) const;
     QUrl buildMediaAgentAssetRevisionsUrl(const QString &projectId, const QString &assetId) const;
     QUrl buildMediaAgentRevisionLayerStackUrl(
         const QString &projectId,
@@ -2194,6 +2239,9 @@ private:
     void handleMediaEdlRenderResultReply(QNetworkReply *reply);
     void handleMediaEdlRenderDownloadReply(QNetworkReply *reply);
     void handleMediaEdlSubtitleDownloadReply(QNetworkReply *reply);
+    void handleMediaVideoBriefStartReply(QNetworkReply *reply);
+    void handleMediaVideoBriefResultReply(QNetworkReply *reply);
+    void handleMediaVideoBriefDownloadReply(QNetworkReply *reply);
     void handleMediaImageRevisionTaskStartReply(QNetworkReply *reply);
     void handleMediaImageRevisionTaskResultReply(QNetworkReply *reply);
     void handleMediaImageAiEditTaskStartReply(QNetworkReply *reply);

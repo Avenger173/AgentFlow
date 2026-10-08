@@ -22,6 +22,8 @@ from typing import Any
 from uuid import uuid4
 import wave
 
+from PIL import Image, UnidentifiedImageError
+
 from app.core.config import settings
 from app.schemas.media_source import (
     MediaAudioStreamInfo,
@@ -43,6 +45,7 @@ MAX_TRANSCRIPTION_CHUNKS = 8
 MAX_TRANSCRIPTION_TOTAL_AUDIO_BYTES = MAX_TRANSCRIPTION_AUDIO_BYTES * MAX_TRANSCRIPTION_CHUNKS
 MAX_EDL_RENDER_BYTES = 256 * 1024 * 1024
 EDL_RENDER_DURATION_TOLERANCE_MS = 500
+MAX_VIDEO_KEYFRAME_BYTES = 12 * 1024 * 1024
 _SOURCE_ID_PATTERN = re.compile(r"^ms_[0-9a-f]{16}$")
 _DERIVED_AUDIO_ID_PATTERN = re.compile(r"^mda_[0-9a-f]{16}$")
 _SAFE_SCOPE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
@@ -87,6 +90,17 @@ class MediaTranscriptionAudioChunk:
     begin_ms: int
     end_ms: int
     audio_bytes: bytes
+
+
+@dataclass(frozen=True)
+class MediaVideoKeyframeRenderInfo:
+    """服务端从受控视频读出的单张 JPEG 关键帧元数据。"""
+
+    timestamp_ms: int
+    sha256: str
+    size_bytes: int
+    width: int
+    height: int
 
 
 @dataclass(frozen=True)
@@ -511,6 +525,114 @@ def verify_media_edl_render(
             ffprobe_executable=ffprobe_executable,
             command_runner=command_runner,
         )
+
+
+def extract_media_video_keyframe(
+    *,
+    source_id: str,
+    expected_project_scope: str,
+    timestamp_ms: int,
+    output_path: Path,
+    root_dir: Path | None = None,
+    ffprobe_executable: str | Path | None = None,
+    ffmpeg_executable: str | Path | None = None,
+    command_runner: MediaCommandRunner | None = None,
+) -> MediaVideoKeyframeRenderInfo:
+    """从受控视频提取一帧 JPEG，时间点只能由上层已验证计划提供。
+
+    这个函数不接收滤镜、尺寸、输入路径或编码器选项。它只为讲解 HTML 的受控图片资源提供
+    单帧提取与回读，不复用为任意截图接口。
+    """
+
+    if timestamp_ms < 0:
+        raise MediaSourcePreparationError("关键帧时间不能为负数。")
+    final_path = output_path.resolve()
+    if final_path.suffix.lower() not in {".jpg", ".jpeg"}:
+        raise MediaSourcePreparationError("关键帧交付只能使用 JPEG 格式。")
+    temporary_path = final_path.with_name(f".{final_path.stem}.{uuid4().hex}.tmp.jpg")
+    with _source_write_lock(source_id):
+        source_dir, manifest = _load_source_manifest(source_id, root_dir=root_dir)
+        _require_project_scope(manifest, expected_project_scope)
+        source_path = _verified_source_path(source_dir, manifest)
+        probe = _load_or_probe_locked(
+            source_id=source_id,
+            source_dir=source_dir,
+            manifest=manifest,
+            ffprobe_executable=ffprobe_executable,
+            command_runner=command_runner,
+        )
+        if not probe.video_streams:
+            raise MediaSourcePreparationError("当前受控素材不含视频轨，无法提取讲解关键帧。")
+        if probe.duration_seconds is None:
+            raise MediaSourcePreparationError("FFprobe 未返回可用时长，无法提取讲解关键帧。")
+        duration_ms = int(round(probe.duration_seconds * 1_000))
+        if timestamp_ms > duration_ms:
+            raise MediaSourcePreparationError("关键帧时间超出已探测的视频时长。")
+        executable = _resolve_media_tool(
+            "ffmpeg",
+            explicit=ffmpeg_executable,
+            allow_fixture=command_runner is not None,
+        )
+        temporary_path.parent.mkdir(parents=True, exist_ok=True)
+        command = (
+            executable,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(source_path),
+            "-ss",
+            f"{timestamp_ms / 1_000:.3f}",
+            "-map",
+            f"0:{probe.video_streams[0].stream_index}",
+            "-frames:v",
+            "1",
+            "-vf",
+            "scale=1280:-2:force_original_aspect_ratio=decrease",
+            "-q:v",
+            "2",
+            "-an",
+            "-y",
+            str(temporary_path),
+        )
+        try:
+            result = (command_runner or _run_media_command)(command, 45.0)
+            if result.returncode != 0:
+                raise MediaToolExecutionError("FFmpeg 无法提取讲解关键帧。")
+            info = _verify_media_video_keyframe(path=temporary_path, timestamp_ms=timestamp_ms)
+            os.replace(temporary_path, final_path)
+            return info
+        except Exception:
+            temporary_path.unlink(missing_ok=True)
+            final_path.unlink(missing_ok=True)
+            raise
+
+
+def _verify_media_video_keyframe(*, path: Path, timestamp_ms: int) -> MediaVideoKeyframeRenderInfo:
+    if not path.is_file():
+        raise MediaToolExecutionError("FFmpeg 未生成可回读的讲解关键帧。")
+    size_bytes = path.stat().st_size
+    if size_bytes < 1 or size_bytes > MAX_VIDEO_KEYFRAME_BYTES:
+        raise MediaSourcePreparationError("讲解关键帧大小不在允许范围内。")
+    try:
+        with Image.open(path) as image:
+            if image.format != "JPEG":
+                raise MediaToolExecutionError("讲解关键帧不是 JPEG 格式。")
+            image.verify()
+        with Image.open(path) as image:
+            image.load()
+            width, height = image.size
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise MediaToolExecutionError("讲解关键帧无法通过图片回读校验。") from exc
+    if width < 1 or height < 1 or width * height > 40_000_000:
+        raise MediaToolExecutionError("讲解关键帧尺寸无效。")
+    return MediaVideoKeyframeRenderInfo(
+        timestamp_ms=timestamp_ms,
+        sha256=_sha256_file(path),
+        size_bytes=size_bytes,
+        width=width,
+        height=height,
+    )
 
 
 def _load_or_probe_locked(

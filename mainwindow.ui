@@ -2700,11 +2700,11 @@ QPushButton#navGroupButton:hover {
 <property name="bottomMargin"><number>0</number></property>
 <item><widget class="QLabel" name="videoTitle">
 <property name="objectName"><string>heroTitle</string></property>
-<property name="text"><string>短视频剪辑</string></property>
+<property name="text"><string>短视频剪辑与讲解</string></property>
 </widget></item>
 <item><widget class="QLabel" name="videoSub">
 <property name="objectName"><string>subText</string></property>
-<property name="text"><string>先受控导入一段视频，再把素材与剪辑目标交给 AI 调度台。</string></property>
+<property name="text"><string>受控导入、转写、剪辑，或生成带来源时间码的离线动态讲解。</string></property>
 </widget></item>
 </layout></item>
 <item><spacer name="videoHeroFill">
@@ -2776,6 +2776,16 @@ QPushButton#navGroupButton:hover {
 <property name="readOnly"><bool>true</bool></property>
 <property name="placeholderText"><string>完成转写并填写剪辑目标后，待确认的片段范围和理由会显示在这里。</string></property>
 </widget></item>
+<item><widget class="QLabel" name="videoBriefHeader">
+<property name="objectName"><string>sectionTitle</string></property>
+<property name="text"><string>离线讲解交付</string></property>
+</widget></item>
+<item><widget class="QPlainTextEdit" name="videoBriefEdit">
+<property name="minimumSize"><size><width>0</width><height>92</height></size></property>
+<property name="accessibleName"><string>视频讲解交付结果</string></property>
+<property name="readOnly"><bool>true</bool></property>
+<property name="placeholderText"><string>生成后会显示章节、关键帧时间和离线 HTML 的验证结果。</string></property>
+</widget></item>
 </layout>
 </widget></item>
 <item><widget class="QFrame" name="videoSourcePanel">
@@ -2830,6 +2840,31 @@ QPushButton#navGroupButton:hover {
 <property name="enabled"><bool>false</bool></property>
 <property name="text"><string>生成剪辑候选</string></property>
 <property name="toolTip"><string>使用已完成转写和当前剪辑目标生成待确认片段；不会渲染或修改视频。</string></property>
+</widget></item>
+<item><widget class="QLabel" name="videoBriefGoalHeader">
+<property name="objectName"><string>sectionTitle</string></property>
+<property name="text"><string>讲解目标</string></property>
+</widget></item>
+<item><widget class="QPlainTextEdit" name="videoBriefGoalEdit">
+<property name="minimumSize"><size><width>0</width><height>82</height></size></property>
+<property name="accessibleName"><string>讲解目标输入</string></property>
+<property name="placeholderText"><string>例如：整理成面向客户的三章产品讲解网页，突出流程和交付结果。</string></property>
+</widget></item>
+<item><widget class="QPushButton" name="videoBriefButton">
+<property name="objectName"><string>secondaryButton</string></property>
+<property name="minimumSize"><size><width>0</width><height>40</height></size></property>
+<property name="enabled"><bool>false</bool></property>
+<property name="accessibleName"><string>生成离线讲解网页</string></property>
+<property name="text"><string>生成讲解网页</string></property>
+<property name="toolTip"><string>基于已完成转写生成受限章节计划、源视频关键帧和单文件离线 HTML。</string></property>
+</widget></item>
+<item><widget class="QPushButton" name="videoBriefSaveButton">
+<property name="objectName"><string>ghostButton</string></property>
+<property name="minimumSize"><size><width>0</width><height>36</height></size></property>
+<property name="enabled"><bool>false</bool></property>
+<property name="accessibleName"><string>保存离线讲解网页</string></property>
+<property name="text"><string>保存离线 HTML</string></property>
+<property name="toolTip"><string>将已验证的单文件动态讲解网页另存为本地副本。</string></property>
 </widget></item>
 <item><widget class="QPushButton" name="videoFullSrtButton">
 <property name="objectName"><string>ghostButton</string></property>
